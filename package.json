@@ -1,0 +1,27 @@
+{
+  "name": "commuter-cave",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "description": "A survival-and-invention game prototype: procedural worlds, field notes, process network, crafting model, real geography.",
+  "scripts": {
+    "build": "node tools/timed.mjs build -- \"node build.mjs\"",
+    "world": "node src/cli.js generate --seed pig-rock --preset temperate-woodland --out out",
+    "world:stats": "node tools/timed.mjs world:stats -- \"node src/cli.js stats --n 300\"",
+    "walk": "node src/cli.js walk --seed pig-rock --preset temperate-woodland",
+    "network": "node src/cli.js network --seed pig-rock --preset temperate-woodland --out out",
+    "craft": "node src/cli.js craft --seed pig-rock --preset temperate-woodland",
+    "landscapes": "node tools/timed.mjs landscapes -- \"node tools/dump-landscapes.mjs\" \"python3 tools/render-landscapes.py\"",
+    "test:smoke": "node tools/timed.mjs test:smoke -- \"node build.mjs\" \"node tests/ui/smoke.cjs\"",
+    "test:player": "node tools/timed.mjs test:player -- \"node build.mjs\" \"node tests/ui/scripted-player.cjs pig-rock temperate-woodland\"",
+    "test:ui": "node tools/timed.mjs test:ui -- \"node build.mjs\" \"node tests/ui/here-actions.cjs\" \"node tests/ui/focus-search.cjs\" \"node tests/ui/plans.cjs\" \"node tests/ui/drill-diagnosis.cjs\" \"node tests/ui/scan-report.cjs m\" \"node tests/ui/poke-around.cjs pig-rock\" \"node tests/ui/mental-map.cjs c\" \"node tests/ui/replay.cjs pig-rock\" \"node tests/ui/water-milestone.cjs\" \"node tests/ui/quick.cjs\"",
+    "test:sim": "node tools/timed.mjs test:sim -- \"node tests/sim/anchors.mjs\" \"node tests/sim/fire-across-worlds.mjs\" \"node tests/sim/geo-spawn.mjs\" \"node tests/sim/outlook.mjs\" \"node tests/sim/smell.mjs\" \"node tests/sim/walk-traps.mjs\" \"node tests/sim/food-prep.mjs\"",
+    "test": "node tools/timed.mjs test -- \"npm run --silent test:sim\" \"npm run --silent test:ui\"",
+    "test:quick": "node tools/timed.mjs test:quick -- \"node build.mjs\" \"QUICK=1 node tests/sim/anchors.mjs\" \"QUICK=1 node tests/sim/fire-across-worlds.mjs\" \"QUICK=1 node tests/sim/geo-spawn.mjs\" \"QUICK=1 node tests/sim/outlook.mjs\" \"QUICK=1 node tests/sim/smell.mjs\" \"QUICK=1 node tests/sim/walk-traps.mjs\" \"QUICK=1 node tests/sim/food-prep.mjs\" \"node tests/ui/quick.cjs\"",
+    "test:soak": "node tools/timed.mjs test:soak -- \"node build.mjs\" \"node tests/ui/smoke.cjs\" \"node tests/ui/scripted-player.cjs pig-rock temperate-woodland\""
+  },
+  "devDependencies": {
+    "esbuild": "0.20.2",
+    "jsdom": "24.0.0"
+  }
+}

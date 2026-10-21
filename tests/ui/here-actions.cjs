@@ -1,0 +1,30 @@
+const { JSDOM } = require('jsdom');
+const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
+const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
+const w = dom.window, d = w.document, errors = [];
+w.addEventListener('error', e => errors.push(e.message));
+const click = sel => { const b = [...d.querySelectorAll(sel)].find(x => !x.disabled); if (b) b.click(); return b; };
+setTimeout(() => {
+  d.querySelector('#seed').value = 'pig-rock'; d.querySelector('#preset').value = 'temperate-woodland';
+  d.querySelector('#check').click();
+  setTimeout(() => {
+    d.querySelector('#begin').click();
+    click('[data-here="survey"]');
+    click('[data-here="survey"]');
+    click('[data-here="collect"]');
+    const parts = [...d.querySelectorAll('[data-pk="part"]')].map(b => b.textContent);
+    const species = [...d.querySelectorAll('[data-pk="species"]')].map(b => b.textContent);
+    console.log('COLLECT by part:', parts.join(' | '));
+    console.log('COLLECT by species:', species.join(' | '));
+    click('[data-pk="part"]');
+    console.log('  first part ->', [...d.querySelectorAll('.picker [data-gather]')].map(b => b.textContent).join(' | '));
+    click('[data-pk="back"]'); click('[data-pk="species"]');
+    console.log('  first species ->', [...d.querySelectorAll('.picker [data-gather]')].map(b => b.textContent).join(' | '));
+    click('.picker [data-gather]');
+    click('[data-pk="close"]');
+    click('[data-here="inspect"]'); click('[data-inspect]');
+    click('[data-here="inspect"]'); const st = [...d.querySelectorAll('[data-inspect]')].find(b => /stone|quartz|whet|trap/i.test(b.textContent)); if (st) st.click();
+    console.log('\nJOURNAL:\n' + [...d.querySelectorAll('.entry')].map(e => e.textContent.replace(/^(\d\d:\d\d)/, '[$1] ')).join('\n\n'));
+    console.log('\nerrors:', errors.length ? errors : 'none');
+  }, 400);
+}, 50);

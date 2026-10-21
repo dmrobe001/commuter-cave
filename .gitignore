@@ -1,0 +1,4 @@
+node_modules/
+# generator/analysis output (npm run world, network, landscapes)
+out/
+.DS_Store

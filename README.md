@@ -1,0 +1,235 @@
+# Connecticut Commuter in Cro-Magnon's Cave
+
+*Formerly "Hands and Knowledge". Game records (the replay JSON) still carry `"game": "hands-and-knowledge"` as their format identifier, so records saved before the rename keep loading.*
+
+A prototype survival-and-invention game. You wake with nothing but your hands and modern knowledge of how things work, in a procedurally generated prehistoric landscape whose plants, animals, stones and water you must learn by noticing, testing and trying. Hidden properties stay hidden; the character perceives them through noisy observation, field tests and outcomes.
+
+This bundle contains the game source, the headless world generator and analysis tools, and the automated tests used during development.
+
+## Setup
+
+Requires Node 18 or later. Python 3 with Pillow is only needed for the landscape renders.
+
+    npm install          # esbuild (bundler) and jsdom (headless browser for UI tests)
+    npm run build        # writes dist/commuter-cave.html, a single self-contained page
+
+Open `dist/commuter-cave.html` in any modern browser to play. Nothing else is needed: all code is inlined, and fonts load from Google Fonts with system fallbacks.
+
+## For language models working on this project
+
+Tests come in three tiers (see *Run times* below). **While iterating, run `npm run test:quick` (about 20 s).** Run the full `npm test` (about 1 min) once, after the last change and before reporting. Run `npm run test:soak` (several minutes) only when asked, or when a change reaches across the whole game flow (save/replay, the action set, travel, the start screen). Don't rerun a tier that passed unless code changed since. Prefer one combined change and one test run over several partial ones when a request has several parts.
+
+Every build, simulation batch and test run reports its own run time. **In each response, report the totals for every build, simulation batch and test run you performed in that turn**, for example: "Build 0.6 s · test:sim 20.3 s · test:ui 1 min 29 s · test:smoke 4 min 36 s; all passed." Name any batch you chose not to run, and any step that failed. Use the npm scripts, which time themselves, or wrap ad-hoc commands in `tools/timed.mjs` so their time is reported the same way. Times depend on the machine; the point is to see what each change costs and to notice when something gets slow.
+
+## Usage patterns
+
+### 1. The game
+
+`npm run build`, then open the page. Every module in `src/` is pure ES modules with no Node dependencies, so the same code runs in the browser and headless. `src/game.js` is the entry point; `build.mjs` bundles it with esbuild and inlines the result into `src/shell.html`.
+
+### 2. Headless generation and simulation (`src/cli.js`)
+
+    node src/cli.js generate --seed pig-rock --preset temperate-woodland --out out
+        # out/world-pig-rock/: world.json (everything), report.md (game-master view),
+        # long.csv (tidy source table), minerals.csv / plants.csv / animals.csv (wide views)
+    node src/cli.js stats --n 300 [--preset ...]
+        # starter-need coverage, toxicity, lookalikes, trait correlations, name diversity,
+        # process reachability, biome mix, across many seeds
+    node src/cli.js patch --seed pig-rock --entity P3 --n 6
+        # lazy, deterministic patch samples of one archetype's varying traits
+    node src/cli.js walk --seed pig-rock [--skill 0.9] [--n 12]
+        # a scripted walk through microhabitats, printing field notes (pre-geography notes engine)
+    node src/cli.js network --seed pig-rock --out out
+        # out/world-pig-rock/network.md: process table, hubs and depth, reachability, goal trees
+    node src/cli.js goal --seed pig-rock --goal fire
+        # one goal tree with this world's candidate materials, and the character's thoughts
+    node src/cli.js craft --seed pig-rock
+        # bare hands to fire, narrated, for novice and expert characters with best and worst wood
+
+Presets: `temperate-woodland`, `warm-savanna`, `cool-forest`, `dry-scrub`. Omit for a random climate.
+
+In code:
+
+    import { generateWorld, samplePatch } from './src/generator.js';
+    import { generateLandscape } from './src/landscape.js';
+    const world = generateWorld('pig-rock', { preset: 'temperate-woodland' });
+    const L = generateLandscape(world);
+
+Same seed and same code version always produce the same world. Every subsystem draws from a named random substream, so changing one part doesn't reshuffle the others.
+
+### 3. Printouts and renders
+
+- `report.md` and the CSVs from `generate` (game-master view of a world).
+- `network.md` from `network` (the process network applied to a world).
+- `npm run landscapes`: `tools/dump-landscapes.mjs` writes `out/lands.json` for four worlds, then `tools/render-landscapes.py` draws `out/landscape-<seed>.png` (shaded relief, vegetation, streams, lakes, hills, waterfalls, springs, spawn, 1 km scale bar). The player never sees these; they are for judging the generator.
+
+## Code structure, file by file (`src/`)
+
+### Foundations
+
+**`rng.js`** — `makeRng(seed)` returns a seeded generator (mulberry32 over an FNV-1a hash) with `uniform`, `int`, `normal`, `logNormal`, `chance`, `pick`, `weighted`, `shuffle`, and `fork(label)`, which makes an independent named substream. Also `clamp` and `round`.
+
+### World generation (species, stone, water)
+
+**`environment.js`** — Level 1 of the generative graph. `generateEnvironment` samples latent drivers (temperature, precipitation, seasonality, bedrock, relief) and derives water balance, fire frequency, tree cover, biome name, lean season, and a catalogue of microhabitats with frequencies. `STONES` and `BEDROCKS` tables decide which stones exist; `generateStones` makes deposits (local bedrock, plus exotic cobbles carried in by streams) with hidden fracture, flaw, hardness and spall properties, visible cues, field-test results, deliberate-test results, uses, patch-varying traits and resemblance names. `generateClay` and `generateWater` make clay and water sources with hidden plasticity and pathogen load. `PRESETS` holds the named climates.
+
+**`life.js`** — Levels 2 and 3. Plants: `plantArchetype` samples latent traits conditioned on the environment (growth pace, defense chemistry and strength, fibre, wood density, resin, bark, fruit, storage organs), using tables that encode apparency theory, the growth–defense trade-off and optimal defense theory (`DEFENSE_WEIGHTS`, `FRUIT_WEIGHTS`, `POTENCY`, `ALLOC`, `COOK`, `LEACH`). `plantParts` derives parts with collection tools, seasons, food safety (raw, cooked, leached, as ranges when defense varies by patch), nutrition and uses. `plantCues`, `plantFieldTests` and `plantDeliberate` derive what can be seen, tested quickly and tested deliberately. `makeLookalike` creates one deadly mimic of a safe herb. Fungi, mosses and lichens (`fungusArchetype`, `buildFungus`) share the plant interface: two to four mushrooms (gilled, with most harmless, some upsetting and about one in eight deadly with delayed symptoms and a mild taste, sometimes showing a ring and cup; brackets on dead wood that may be tinder fungus; puffballs), one or two mosses (cushion or bog) and one or two lichens (beard lichen, fine tinder; leafy ground lichen, famine food after leaching). About 40% of gilled mushrooms are cryptic, living under logs and in the litter. Animals: `ANIMALS` templates (invertebrates, small vertebrates, large animals, songbirds, soaring birds; invertebrates now include earthworms, woodlice, crickets and, in warm climates, termites, plus flying insects (flies nearly always, mosquitoes and gnats near water, bees and wasps where warm enough); a rare musk animal (skunk-like) has a smell; grubs, beetles, snails, worms, woodlice, crickets and crayfish are cryptic, found only by poking around; grubs and ants are nearly always present, often a second ant, plus four to six other kinds), `SIGN_PROFILE` (tracks with allometric length, calls from a small grammar via `makeCall`, scat, damage, dens, hair, speed, group size), `animalArchetype`, `buildAnimal` (density by Damuth-style scaling, catchability, food safety, field and deliberate tests). `pickVarying` chooses each archetype's patch-varying traits from `PLANT_VARYING` and `ANIMAL_VARYING`. `starterCheck` reports early-game needs and where to meet them.
+
+**`variation.js`** — Patch-level variation. Each varying trait is a latent normal driven by shared site factors (moisture, fertility, exposure), a species-specific lineage factor, and noise, then transformed (logistic or exponential). `makeVarying` builds a trait from a catalogue spec with an integration level and lineage share (which set correlation strength). `siteFactors` and `sampleVarying` compute a patch's values as a pure function of seed, site and entity, so nothing is stored and discovery order never matters. `summarize` runs Monte Carlo over an archetype's habitats for means, spreads, correlations and per-microhabitat means.
+
+**`names.js`** — Resemblance naming. `TABLE` maps visible-trait keys to familiar names (plum, cherry, peach for stonefruit; oak for acorn trees; and so on); `makeNamer` draws without replacement within a world; only when a name would collide does it gain a word for how this one looks (fruit colour, bark, tall or short, leaf texture, colour or size for animals: "red peach", "tall grass", "big ant"). Most animal kinds have one familiar name, and when a world has two species of one kind (two ants) both get their look ("red ant", "black ant"). In the journal the resemblance is the naming (`namingSentences` in notes.js): "peach-looking", "birch-like", "reminds me of a raspberry" mean the thing goes by that name from then on; hyphenated forms are used only for one-word names, and no comparison is made when the plain description already names it ("a red ant"). A made-up name (a collision word, an ordinal, or a descriptive name such as ironstone) is announced, not compared: "Some rusty, heavy blocks. I'll call it ironstone." Several new kinds of one sort found together are bundled: "A couple of different kinds of ant. I'll call them red ant and black ant." A new kind of something named here or at the previous place is "another", compared with the earlier one (bigger, smaller, its colour, its fruit, its leaves), and the same goes for landmarks ("another hill; this one is wooded. I'll call this one the wooded hill"; "lies further north" when the tag is a direction). A lookalike deliberately shares its model's name.
+
+**`generator.js`** — Entry point for world generation. `generateWorld(seed, opts)` runs environment, stones, clay, water, plants and animals and attaches the starter check. `samplePatch(world, entityId, siteKey, microId)` gives one patch's varying traits.
+
+### Geography
+
+**`landscape.js`** — A 10 km square on a 128 × 128 grid (about 78 m cells). Elevation from layered value noise, short ridged relief scaled by ruggedness, a regional tilt, and escarpment steps. Priority-flood depression filling, with only large, deep basins kept as lakes. Steepest-descent routing and flow accumulation give streams (brook, stream, river) at a catchment threshold set by the water balance. Topographic wetness index, vegetation density, features (hills by prominence, escarpments, waterfalls and cascades, spring heads, lakes; a run of adjacent steep channel cells is one feature at its steepest cell, and only a single-cell drop over 20 m counts as falls), and a microhabitat for every cell. `microShares` summarizes cover.
+
+**`geo.js`** — Perceiving and moving through the landscape. `sightline` (line of sight over terrain, canopy attenuation by Beer–Lambert), `landmarks` (visual features and sound sources, with rough audible ranges), `lookoutScore` / `isLookout` / `lookoutEye` (open high ground; on forested hills the character climbs a tree), `hear` (the acoustic panorama: received intensity (R/d)² summed into 10° azimuth bins, separately for water noise and bird calls, blurred by about 15° so sources closer than about 30° fuse, peaks above threshold become percepts named after their dominant source; water within 120 m raises the threshold for everything else by 6 dB), `perceive` (sight plus `hear`, with vegetation, time of day and an optional boost for deliberate scanning), `loudWords` (sounds are reported by loudness, not distance), `suspicionFrom` (a noisy bearing and distance estimate), `waterKeyAt` / `waterKeyOf` (which body of water a cell or landmark belongs to: lakes, stream-and-river systems, and brooks), `lineHours` (the character's guess at walking time along a straight line, from the land along it), `stepHours` (Tobler's hiking function slowed by vegetation), `walk` (steps toward a believed target with accumulating heading error, smaller when walking between known landmarks; each step is scored half by heading and half by walking distance to the aim over dry ground (`goalField`, Dijkstra in a window around the trip, the whole map if needed), with a penalty for cells already trodden, so the walker works round lakes instead of shuttling in a bay; an aim on a lake ends at its shore, re-sensing, lake avoidance and water stops), `followWater` (downstream, or up the largest feeder, including from a lake shore), and `chooseSpawn` (the survivability criterion: a lookout findable from the spawn, from which water is visible; falls back to spawning within a kilometre of water).
+
+**`mentalmap.js`** — The character's map as a graph. `delaunayEdges` (Bowyer–Watson triangulation of believed positions), `meshEdges` (keeps the triangulation's local links, always keeps minimum-spanning-tree edges so the map stays in one piece, and drops other edges longer than twice the median), `streamLine` (a stream's believed course: its known points ordered along their principal axis), `suspectedCrossings` (where an edge cuts that line), `shortestFrom` / `shortestPath` (Dijkstra over walking times; all routes from one node at once), `timeWords` / `awayWords` (walking times in words: plain when walked, "~" when guessed, "?" when only heard), and `explainTrip` (when a walk takes over 35% or 15 minutes longer or shorter than expected, the likeliest reason: farther or closer than it looked, drifting off line, thick brush, climbing, water in the way, open ground, downhill).
+
+**`food.js`** — Food as chemistry. `COMPOUNDS` (tannin, cyanogen, lectin, oxalate, alkaloid, latex, saponin, stinging hairs, resin, aromatic, sulfur, lichen acids, mushroom toxins, amatoxin, shellfish biotoxin, parasites): how much thorough leaching removes, how much cooking destroys (wet heat only for lectins and oxalate needles, which roasting barely touches), how much escapes once crushed, potency, effect and taste or smell. `PART_SPECS`: for each kind of food part (nut, seed, grain, pod, storage organ, root, fruit, leaf, stem, flower, inner bark, small creatures, fatty grubs, shellfish, mushroom, lichen, honey) ranges for water, starch, sugar, fat, protein and fibre, the share of each absorbable raw, half an hour's yield, and extra compounds as chance-and-dose entries (rare properties are low chances). `sampleComposition` draws a part's make-up once per species; the plant's own defence becomes a compound at the strength of the old single toxin number. `expose` applies any exposure (`cut`, `crush`, `grind`, `heat` roast or boil, `water` still or running at a temperature, `dry`) to any make-up, under conditions from the gear and setting (`crushPower` from the pounding stone's hardness and weight, `rough` from the grinding stone's grit, `heatPower` from the fire or the number of hot stones); leaching roughly doubles per 10 °C; cutting makes smaller pieces without breaking cells, so it speeds leaching and cooking but frees little locked fat; crushing frees fat and protein and speeds leaching; heat gelatinises starch and kills parasites; volatile poisons escape once crushed and then dried, heated or soaked. `nutrients` digests: 4 kcal/g for starch, sugar and protein and 9 for fat, times what is absorbable, less tannin binding; digestion costs about a quarter of protein's energy, 7% of carbohydrate's, 2% of fat's, plus fibre. `tasteWords`, `smellWords`, `textureWords` are what the senses report from the current state, and `describeState` is the exact view. Numbers are first drafts to tune against `tests/sim/food-prep.mjs`.
+
+**`smell.js`** — Smell. `windFor` gives each day's wind (a prevailing direction per world with a daily swing, and a strength). `smellSources` lists what can be smelled at a distance: carcasses of the large animals (deaths over four-day spells, density × 100 km² × days ÷ an eight-year lifespan, plus a little; each lies about four days and leaves bones), marshy lakes (about half; rotten-egg mud), a sulfur spring on volcanic ground, and the dens of the rare musk animal. `smellAt` decides what reaches the nose: full range for a source straight upwind, about a tenth downwind, scaled by wind strength, and caught three times in four. A smell gives the wind's direction and almost no distance, so smelled things go on the map as "?".
+
+**`outlook.js`** — The start screen's indicative blurb: water in x hours (median of nine quick trial openings using the game's own perception and walking: scan, walk toward the strongest water cue, else climb to the lookout, else strike out), food in x hours (a back-of-envelope over the microhabitats within 1.5 km of the spawn: chance that a bare-handed, safe-raw food giving at least 250 net kcal per half hour, by its make-up, is at a site and is the one a beginner tries, at 1.75 h per attempt), fire in x days (the closed-form `estimateFire`). Plausible outcomes, not averages.
+
+### Knowledge, notes and planning
+
+**`notes.js`** — Field notes. An association ("so that's the wren") is always written after the sighting it rests on, and a link to something new brings its sighting into the note. `observeSite` decides what is present and noticed (never cryptic things; vertebrates through channels: sighting, tracks, calls, scat, damage, dens, hair), judges salience against the character's memory (running statistics of their own noisy observations), attributes animal signs (known maker, ambiguous, or unresolved sign later linked), chooses a note length (longer when several unknown things appear), and realizes text from template pools with a recency penalty. Newness commentary is held back until two consecutive visits with nothing new. `newMemory` creates the save-game memory.
+
+**`process.js`** — The early-game process network: `MATERIALS` (raw material classes with properties), `ITEMS`, `ITEM_TRAITS` (what matters about each intermediate item), and `PROCESSES` (about 50 recipes with inputs requested by property ranges, tools with wear, durations, waiting time, attention, body load, energy, skill and base success). `materialsOf(world)` turns a world's parts into material records; `matches` / `candidatesFor` match slots; `reachable` is a forward-closure solvability check; `networkStats` gives hubs and depth; `expandGoal` builds an AND–OR goal tree; `thought` and `lookHint` render the character's one-step reasoning.
+
+**`network-report.js`** — Renders the network document: process table, hub and depth table, reachability for a world, goal trees with candidates, and the character's thought walk.
+
+### Crafting model
+
+**`craft.js`** — Quality propagation, prototyped on the fire chain. `PROPERTIES` (registry with scale and how each property can be observed), `ROLES` (suitability curves over properties, with tolerance widened by skill), the generic `attempt` (latent performance score from log suitabilities, skill, effort and noise; success threshold; workmanship from the margin; learning proportional to p(1 − p)), effective skill reduced by fatigue, hand damage and focus, Archard-style edge wear, retouching that spends mass, moisture drying toward climate equilibrium, socket seating, and processes: `knapFlakes`, `searchNaturalEdge`, `splinterBone`, `notchHearth` (with an effort choice), `refineNotch`, `carveSpindle`, `makeTinder`, `handDrill` (calibrated to four anchor cases), `lightFire`. `fireQuest` runs a whole bare-hands-to-fire scenario with an edge policy; `estimateFire` is the closed-form timeline estimate used on the start screen, with one efficiency factor fitted against simulations.
+
+### Output
+
+**`report.js`** — Markdown game-master report: overview, starter check, microhabitats, water, minerals, plants and plant parts, animals, and patch variation with correlations.
+
+**`tables.js`** — `toLong` (one tidy table as the source of truth), `pivotWide` (wide per-category views), `toCSV`.
+
+**`cli.js`** — The headless commands listed above.
+
+### The game
+
+**`game.js`** — The playable game, built on everything above. Sections, in file order:
+
+- *helpers and setup:* typographic punctuation, state, `checkWorld` (world, landscape, spawn, estimates for the start screen), `newGame`.
+- *sites:* positions on the landscape grid, microhabitat from the cell, reuse of nearby sites.
+- *distant cues and suspected landmarks:* `sense` turns perceptions into suspects, with data association (merging repeated observations; "still there" means noted before this look, reported at the fused estimate's bearing) and a grouped report: water heard, water seen, landmarks, still there, calls. Modes for lookouts, scanning and focused search.
+- *names for places and landmarks:* `uniqueName` names like species: the first hill is "the hill"; a second gets a visual word (`looksOf`: tall, low, bald, wooded or rocky hills; long cliffs; big or little lakes; a known tree standing at a place), else something noticed recently (only for places within a kilometre), else its direction from its namesake, else "other", "third". `waterName` names each body of water once, so every crossing of a stream shares the name; a second place on the same water is "upstream" or "downstream" of the first.
+- *the unexplored:* `hexLattice` lays a background hexagonal lattice of points about 1 km apart; `frontierPoints` ignores those within about 750 m of a visited place and keeps the unexplored points next to explored ones, named by 16-point direction from the nearest place ("the unknown north-northeast"). They are travel targets on the map; Explore is gone.
+- *the mental map:* `mentalMap` builds the graph: nodes are visited places (true positions), unreached suspected landmarks (believed positions; "?" when only heard once) and the frontier points; edges from `meshEdges`, timed by what was actually walked (averaged over trips) or else guessed with `lineHours`, and marked with streams crossed on that leg or suspected from known stream points. The Map tab draws it (drag to pan, pinch or scroll to zoom, a Fit button to reset; north up; filled dots for places, rings for landmarks, small unlabelled dotted rings for unexplored ground, blue marks for streams; walking times written along each edge). A tap on a marker starts a hike straight there; a route is chosen by tapping the places to pass through in turn. Markers are keyboard-operable and carry their name and walking time as a label.
+- *travel:* `arrive` (the walk's own line first, then what it found; `waterFound` marks the first water however it is met: arriving at it, crossing it, or spotting it within about 200 m, and only that first sighting gets "Water!"; a reached landmark lends its name to the place, noticing water within about 200 m, focused or normal arrival notes), `travelTo` (a straight journey to a landmark or known place: crossings named, landmarks passed within about 900 m added to the map, the time remembered on the edge, a note when it took much longer or shorter than expected, and, when it doesn't get there, a note with the revised direction and walking time, re-heard or re-seen if possible; being at the edge of a lake or stream counts as reaching it), `followTheWater`, `waterHere`, `waterSource`.
+- *time, needs, body:* `pass` advances time (thirst, hunger reserves of about ten days, drying, delayed sickness, day rollover), `collapse`, `sleep` (quality from shelter, banked fire, cold), `restOptions` / `restFor` (rest for an hour, two hours, until dusk, or until morning; short rests recover fatigue, sore hands and focus in proportion to the hours), `bodyWords` (state shown only as words).
+- *items:* the pack, impressions from glance properties plus tests, food memory keyed by perceived identity.
+- *gathering:* `gatherOptions` lists what can be collected from noticed things, by part and species. Roots and tubers need a digging stick, except by hand in soft ground at the water's edge.
+- *looking for something in particular:* the Look action takes a useful category (spindle wood, hearth-board wood, stone for edges, naturally sharp stone, tinder, fibre, food, bones, game sign), any thing already known by name, or something in the distance (water, high ground). `lookAt` runs the matching action: a focused survey for visible things, a focused poke for cryptic ones (stronger than a general poke), a focused scan for the distance. It runs in full where I stand (half an hour) and on arrival, and `lookAlong` glances at each patch passed on the way (about every 500 m), making a place of any patch where something turns up. Travel is 25% slower while looking. The button reads "Looking for … (✕)" until pressed again.
+- *smell:* `associateSmell` turns a smell into a suspect placed upwind at a very rough distance (a marsh smell is the lake it comes from); arrival and scans report "On the wind from the west: …". `localSmells` adds a "smells:" line to a survey (resin, onion, mint, ripe fruit, mushroomy earth, bees, droppings by the flies, a predator's marking, stagnant water). Reaching a smelled carcass finds bones. The wind is shown under How I feel.
+- *insects:* flies, mosquitoes and gnats (no food; biters near water spoil sleep unless a banked fire smokes them off), wasps, and bees. A hive is found by poking around in woodland or deadfall, or by looking for bees; its honeycomb is about 900 kcal for half an hour's raid. Raiding any stinging insect without a fire here means stings (sore hands, a little sickness).
+- *food:* a food item carries its make-up and mass. Pound (a stone), Grind (two stones; seeds, nuts, dried roots), Roast in the coals (quick, which may char, or slow), Leach in the stream (2, 8 or 16 hours; needs running water), Soak in still water, and Dry (sun or fire) each apply an exposure, change the weight with the water, clear old test results, and add to the name ("nuts to eat, pine (pounded, leached 8 h)"). Smell, staged taste and bite-and-chew read the current state, so tasting between leaching sessions shows the bitterness going. Eating roasts first if a fire is here, eats only what the gut holds (about 1.5 kg, clearing over half a day), and digests: harm sets the old outcome bands; parasites can bring a fever later; energy is net of digestion, so a food can cost more than it gives; protein beyond about 35% of the last day's energy is wasted and sickening (rabbit starvation), and the Body tab says when I crave fat or starch. Pound uses the pounding stone's hardness and weight; Grind the grittiest stone carried; Chop needs an edge; Leach and Soak use the water's temperature (springs at the mean annual temperature, streams a little colder, still water warmer). A toggle under How I feel shows the exact properties of everything carried.
+- *germs:* every item carries a germ load (0–1), set at gathering by what it is (soil on dug roots and creatures' guts high, fruit and nuts low), and so do the hands. Whatever is handled together mixes toward a common level (`touch`): gathering, every preparation, eating, and slowly, carrying things together. Moist food breeds germs over time, faster in warmth; drying stops it, and spoiled food smells off. Roasting, stone-boiling, fire-hardening and scorching a tool in the flames kill them; washing an item or my hands in the water helps but leaves the water's own germs behind. Eating germs risks a sour gut later, from the food and, less, from my hands. Lye comes later.
+- *cooking basins:* a rock hollow (outcrops, stream beds, scree, banks; found or not) or a clay-lined pit (clay banks), made where there is water and fixed to that place. Stone-boiling heats the stones carried in the fire and drops them in: three or more bring it to a boil, fewer only simmer, and stones crack according to their spall risk.
+- *poking around:* `pokeAround` turns stones and logs, peels bark and prods the litter for half an hour. It is the only way to find cryptic things (grubs, beetles, worms, woodlice, crickets, snails, crayfish, litter mushrooms), and it also turns up the visible small creatures. Each candidate is found with probability 1 − exp(−reach × abundance / 25) (/10 for mushrooms), where reach is 1 bare-handed or 1 + 1.5 × hardness with a digging stick; poking blunts a soft stick faster than a hard one.
+- *digging stick:* made from a green shoot or dead wood with an edge (½ h) or by grinding on rough stone (1 h). Hardness ≈ wood density × (0.75 + 0.25 × finish), less if green. Fire-hardening (needs a fire; quick or careful) adds 18% or 30% of the remaining headroom, less on later passes, and hurrying chars the tip a third of the time. A thumbnail test reads hardness in words.
+- *survey and focused search:* `presentAt` (shared abundance logic), `survey` (counts sorted by abundance, short descriptions for unnamed things, animal sign), `FOCI` (what each search focus matches by visible features, best-bet ranking, makeshift fallbacks, nearest suitable place), `focusedSearch`, `breakthroughs`.
+- *inspect and assess:* close description; the character's educated guess at uses, risks and informative tests (costs focus).
+- *picker:* the collect, inspect, assess, search and explore pickers.
+- *tests and crafting:* `testsFor`, `RECIPES`, `pickSlot` (defaults use only visible properties), `craft`, `drill` with `drillTrouble` (names the largest penalty in the performance model), `ember`.
+- *bones:* `boneFinds` draws bones per vertebrate as a Poisson count with mean ∝ density × body mass × visibility of the ground. The reasoning: finds ∝ density ÷ lifespan × persistence × visibility, with lifespan ~ mass^0.25, visibility ~ mass^(1/3) and persistence taken as ~ mass^1 (small carcasses are scavenged in days, large long bones weather for years), so the exponents sum to about one and bone supply tracks standing biomass. Birds' hollow bones and anything under 3 kg give fine bones (needles, awls); larger animals give big long bones (handles, splinters). Bones turn up incidentally in a survey (about a third of the rate), deliberately with Search or an Explore focus, and once noticed can be collected.
+- *actions, eating, plans:* `hereActions` (Survey, Look, Poke, Scan, Make, Inspect, Collect, Drink, each with a subtitle; then, where they apply, Look out, Follow the water, Feed the fire, Build a debris hut, Rest). Inspect also assesses. `doHere`, `eat`, the goal tree rooted at any item or process with focus costs.
+- *the game record:* every player action is the data of what was tapped (or the value chosen), applied by `act` and appended to `S.record` with the day and time. "Copy game record" under How I feel gives `{ game, version, build, seed, preset, actions }`; pasting it under "Replay a game record" on the start screen rebuilds the world and replays every action, reproducing the game exactly on the same build (a different build is flagged). This is the back-end log for bug reports.
+- *rendering and events:* incremental journal rendering (a five-line scrolling log at the bottom of the screen; after each action the first entry it wrote is scrolled to the top of the log), panels, mobile tabs (Actions, Carry, Plans, Body), click and change handlers, start screen.
+- A debug hook, `window.__hk`, exposes state for automated tests only.
+
+**`shell.html`** — The page: design tokens for light and dark mode (cave-pigment palette), Newsreader for the journal and Archivo for controls, the log strip at the bottom of the screen, a rule that the hidden attribute always hides (the start screen used to stay visible behind the game), a New world button under How I feel that returns to the start screen, the three-column desktop layout (body and plans, actions, carrying) and the mobile tab bar, and a placeholder where the bundle is inlined.
+
+## Tests and analyses
+
+### Run times
+
+`tools/timed.mjs` runs a batch of commands in order, prints a `⏱` line with the time after each, and ends with a summary of every step and the batch total; it stops at the first failure and exits non-zero. Each batch is appended to `out/timings.jsonl` (date, label, steps, total, pass/fail) for comparison across changes.
+
+    node tools/timed.mjs <label> -- "<command>" ["<command>" ...]
+
+The npm scripts use it. Where the time goes, so it can be kept down: jsdom page loads and redraws dominate the UI tests (a redraw now skips any panel whose markup hasn't changed, which roughly halved them); each world check costs about a second (landscape, spawn search, the outlook's trial walks, which replays and test starts skip); `__hk.start(seed)` starts a game directly for tests.
+
+| Script | What runs | Typical total (development sandbox) |
+|---|---|---|
+| `npm run build` | the bundle | under 1 s |
+| `npm run test:quick` | build; the six simulations with `QUICK=1` (smaller batches); `tests/ui/quick.cjs` | about 20 s |
+| `npm test` | test:sim, then test:ui | about 1 min 10 s |
+| `npm run test:sim` | the six standing simulations, full batches | about 20 s |
+| `npm run test:ui` | build, then the standing UI tests | about 50 s |
+| `npm run test:soak` | build, smoke, scripted player | several minutes |
+| `npm run test:smoke` | build, then 100 random clicks in each of four worlds (`SMOKE_STEPS` for more) | about 50 s |
+| `npm run test:player` | build, then the scripted player on pig-rock | a few minutes |
+| `npm run world:stats`, `npm run landscapes` | world statistics; landscape dumps and renders | varies |
+
+
+### UI tests (`tests/ui/`, run against `dist/` in jsdom)
+
+| File | What it checks |
+|---|---|
+| `smoke.cjs` | A random agent clicks weighted-random enabled buttons for hundreds of steps in four worlds, catching runtime errors and reporting milestones. |
+| `scripted-player.cjs` | A rule-based player (method below). Answers "can a sensible player get fire, and how fast?" |
+| `geo-opening.cjs <seed>` | Plays an opening: head for high ground, look out, travel toward water, drink. Prints the journal. |
+| `focus-search.cjs` | Looking for spindle wood here and along two trips, then for water, then for a cryptic creature; distance scanning. |
+| `plans.cjs` | Goal trees rooted at items and processes, focused hearth-wood searches, explore targets. |
+| `drill-diagnosis.cjs` | Controlled drill setup (crooked and straight spindles, ideal board); checks which spindle is used and the diagnosis. |
+| `here-actions.cjs` | Survey, collect by part and by species, inspect, assess. |
+| `poke-around.cjs [seed]` | Survey then poke around bare-handed, make a digging stick, poke again, fire-harden it; prints what each turns up. |
+| `mental-map.cjs [seed]` | Scan, hike to two landmarks, come home by tapping an earlier place then home; prints the journal, the map markers, how many time labels are rotated, mesh counts and every edge. |
+| `quick.cjs` | One page, several worlds: every action once, Look on and off, hikes to a landmark and to unexplored ground, rotated edge times, the water milestone, a 20-action replay. The inner-loop check (about 10 s). |
+| `water-milestone.cjs` | Regression: reaching a heard stream's bank (or crossing a stream) is finding water. |
+| `replay.cjs [seed] [steps]` | Plays random actions (40 by default), compares the logs themselves rather than their rendering, copies the game record, replays it in a fresh page, and checks the journals and state are identical. |
+| `scan-report.cjs <seed>` | Start-screen blurb, the waking journal and two scans in a row: the grouped report and "still there". |
+
+### Headless simulations (`tests/sim/`)
+
+| File | What it checks |
+|---|---|
+| `anchors.mjs` | Hand-drill calibration against the four anchor cases. |
+| `craft-distributions.mjs` | Days-to-fire distributions from 200 `fireQuest` runs per scenario. |
+| `fire-across-worlds.mjs` | Simulation versus closed-form estimate across ten worlds, with timing. |
+| `estimator-fit.mjs` | Fits the estimator's efficiency factor across 40 fresh worlds. |
+| `careful-notching.mjs` | Quick versus careful notching with touch-ups in three worlds. |
+| `fire-bottlenecks.mjs` | Which missing material blocks fire in fireless worlds. |
+| `notes-settle-then-explore.mjs` | Field notes after settling in familiar ground, then entering new terrain. |
+| `tree-diversity.mjs` | How many distinct tree types appear for one climate and geology. |
+| `geo-spawn.mjs` | Survivable-spawn rate, perception at the spawn, the walk to the lookout and its view. |
+| `smell.mjs` | Smell sources per world, the wind, and what reaches the nose at the spawn over a week. |
+| `walk-traps.mjs` | Walks that use up their time without arriving, on about 2,000 random trips across 8 worlds; want 0 (the old greedy walker trapped about 1.2%). |
+| `food-prep.mjs` | For each food part in six worlds (two with `QUICK=1`), net kcal per half hour's batch raw and after each standard preparation, harm, and kcal per hour including preparation time; medians by kind of food. The tuning table for food.js. |
+| `outlook.mjs` | Start-screen outlook across 30 worlds with the water trial times; checks no source is heard twice in one scan. |
+
+## The simulated player method
+
+Automated play was the main way of finding problems that unit-level checks miss. Three tiers were used:
+
+1. **Random agent (`smoke.cjs`).** Clicks any enabled button, weighted toward a priority list, occasionally changing select boxes. It finds crashes, dead ends and impossible states (for example the clock reading 30:29, or recursion errors), not balance problems.
+
+2. **Rule-based player (`scripted-player.cjs`).** Plays like a sensible beginner. Its key constraint is that **it sees only what a human sees**: journal text, body words, item names and impressions, and button labels. It acts only by clicking buttons and changing selects. It never reads hidden state to decide anything. Each step follows a priority list: rest until morning at night; when thirsty, drink, return to known water, follow water cues, look out, or head for a hill; when very hungry, eat food not remembered as sickening, or gather calorie-dense food; rest the hands with light work; otherwise pursue the fire plan (gather and test-break stones, knap with the best core and a different hammer, or else collect or search for a big bone and smash it; gather and thumbnail-test dead wood, notch the lightest carefully; trim or carve spindles; make tinder; keep spare wood; snap-test spindles, choose a dry straight one, touch up a ragged notch, drill). A stall detector stops it when nothing changes.
+
+   Because it sees only the UI, every failure is either a game problem or a strategy problem, and telling the two apart is the point. During development it exposed real game bugs (food and tinder sharing one button label, slot defaults that leaked hidden quality, a notch quality that could reach zero, the journal re-rendering on every click) as well as many bugs in its own logic.
+
+3. **Hidden-state inspection, for diagnosis only.** When the player stalls, the debug hook (`window.__hk`) is read *after* the run to compute the true suitability of the items being used. That is how the zero-notch bug and the crooked-spindle default were found. Decisions never use it.
+
+A rule-based player is a weak player. It notches whatever dead wood is nearest rather than seeking better wood, so it is slower than a thoughtful human and sometimes fails where a person would succeed. Its results are a lower bound on what good play achieves.
+
+## Known limitations
+
+- **The closed-form fire estimate predates the geography.** It picks materials from species lists, not from what is near the spawn, so the start screen's fire day can be optimistic for a particular spawn. Rewiring it to sample around the spawn on the landscape is the fix.
+- **Microhabitat shares from the landscape differ from the environment's frequency estimates** used to place species, so some species may be rarer or commoner on the ground than their tables imply.
+- **The outlook's food estimate is generous.** It ignores season, detection during a survey and the time taken to judge a food safe; tuning it against the scripted player is the fix. The panorama's constants (blur width, masking, the falls/cascade threshold and ranges) are judgment, not measurement.
+- **Moss and fine bones have no use yet.** Both can be gathered and carried; bedding, dressings, needles and awls are not craftable.
+- **Animals have no positions.** Calls heard during a scan get a random direction and are not explore targets.
+- **Only the fire chain is craftable in the game.** Cordage, containers, cooking and shelter beyond the debris hut exist in the process network and the planning tree but not as game actions.
+- **No saving.** Seeds reproduce worlds, but a game in progress is lost when the page closes.
+- **Sight and sound ranges, density tables and most constants are hand-tuned placeholders.** The structure follows published ideas (cited in comments); the numbers are not empirical fits.
+- **`src/GENERATOR-NOTES.md`** is the generator README from earlier development. Some command examples there (for example `walk`) describe the pre-geography notes engine.

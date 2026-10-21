@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Connecticut Commuter in Cro-Magnon's Cave</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #E5E8E1; --surface: #F1F3EE; --ink: #1D231F; --muted: #59625B; --rule: #C3C9BF;
+  --ochre: #8A5E0E; --ochre-wash: #EADBB4; --moss: #4B5A37; --blood: #8A2C22; --blood-wash: #F3DCD6; --water: #2F6E8E;
+  --serif: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --sans: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161917; --surface: #1E2320; --ink: #E2E0D5; --muted: #9AA197; --rule: #333A34;
+    --ochre: #D9A947; --ochre-wash: #3A3120; --moss: #9CB079; --blood: #E58676; --blood-wash: #3A211D; --water: #7FB6D1;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161917; --surface: #1E2320; --ink: #E2E0D5; --muted: #9AA197; --rule: #333A34;
+  --ochre: #D9A947; --ochre-wash: #3A3120; --moss: #9CB079; --blood: #E58676; --blood-wash: #3A211D; --water: #7FB6D1;
+  color-scheme: dark;
+}
+*, *::before, *::after { box-sizing: inherit; }
+html { height: 100%; scroll-padding-top: env(safe-area-inset-top, 0px); }
+body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 var(--sans); }
+button, select, input { font: inherit; color: inherit; }
+button {
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: .45rem .7rem;
+  cursor: pointer; text-align: left; line-height: 1.25;
+}
+button:hover:not(:disabled) { border-color: var(--ochre); }
+button:disabled { opacity: .45; cursor: default; }
+button small { display: block; color: var(--muted); font-size: .78rem; }
+button.ghost { background: transparent; border-color: transparent; color: var(--ochre); padding: .25rem .35rem; }
+button.ghost:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--ochre); outline-offset: 2px; }
+select { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: .3rem .4rem; max-width: 100%; }
+h2 { font: 600 .95rem/1.2 var(--sans); margin: 0 0 .6rem; color: var(--muted); }
+h4 { font: 600 .85rem/1.3 var(--sans); margin: 1rem 0 .4rem; color: var(--muted); }
+.hint { color: var(--muted); font-size: .85rem; margin: .3rem 0; }
+.row { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .5rem; }
+
+/* start screen */
+[hidden] { display: none !important; } /* author display rules must not un-hide the start screen or the game */
+#start { min-height: 100%; display: grid; place-items: center; padding: 1.5rem; }
+.start-card { max-width: 34rem; }
+.start-card h1 { font: 500 clamp(2.4rem, 7vw, 3.6rem)/1 var(--serif); margin: 0 0 .5rem; letter-spacing: -.01em; }
+.start-card .lede { font: 400 1.15rem/1.5 var(--serif); margin: 0 0 1.5rem; max-width: 30rem; }
+.start-card label { display: inline-flex; flex-direction: column; gap: .2rem; margin-right: .75rem; font-size: .85rem; color: var(--muted); }
+.start-card input { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: .35rem .5rem; width: 8rem; }
+#profile { margin-top: 1.25rem; border-left: 3px solid var(--ochre); padding: .2rem 0 .2rem 1rem; font: 400 1.02rem/1.55 var(--serif); }
+#profile p { margin: .35rem 0; }
+#begin { background: var(--ochre); color: var(--surface); border-color: var(--ochre); font-weight: 600; }
+
+/* app layout */
+#app { height: 100%; display: grid; grid-template-rows: auto 1fr auto; box-sizing: border-box; }
+header.bar { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; padding: .6rem 1rem; border-bottom: 1px solid var(--rule); background: var(--bg); }
+#when { font: 500 1.05rem/1.2 var(--serif); }
+#where .place { font-weight: 600; cursor: text; border-bottom: 1px dashed var(--rule); }
+#where input { background: var(--surface); border: 1px solid var(--ochre); border-radius: 4px; padding: .1rem .3rem; }
+#world-line { color: var(--muted); font-size: .85rem; margin-left: auto; }
+.fire { color: var(--ochre); font-weight: 600; font-size: .85rem; }
+.tag { color: var(--moss); font-size: .85rem; }
+main.cols { display: grid; grid-template-columns: minmax(15rem, 1fr) minmax(0, 1.5fr) minmax(17rem, 1.15fr); min-height: 0; }
+.col { overflow-y: auto; padding: 1rem; min-height: 0; }
+.col + .col { border-left: 1px solid var(--rule); }
+section + section { margin-top: 1.5rem; }
+
+/* the journal: a short scrolling log, about five lines tall. The bottom padding lets the first entry
+   of the latest action scroll to the top even when it is near the end. */
+#journal-wrap { --log-h: calc(5 * 1.62 * 1.08rem); height: var(--log-h); box-sizing: content-box; overflow-y: auto; padding: .6rem clamp(1rem, 3vw, 2.5rem); background: var(--surface); border-top: 1px solid var(--rule); scroll-padding-top: .6rem; }
+#journal { max-width: 46rem; margin: 0 auto; padding-bottom: calc(var(--log-h) - 1.75rem); font: 400 1.08rem/1.62 var(--serif); }
+#journal .day { font: 500 1.25rem/1.62 var(--serif); margin: .6rem 0 .3rem; border-bottom: 1px solid var(--rule); }
+#journal .day:first-child { margin-top: .2rem; }
+.entry { margin: 0 0 .5rem; }
+.entry time { display: inline-block; width: 3.4rem; color: var(--muted); font: 400 .78rem var(--sans); }
+.entry.thought { font-style: italic; color: var(--moss); }
+.entry.warn { color: var(--blood); }
+.entry.milestone { font: 500 1.25rem/1.3 var(--serif); color: var(--ochre); margin: 1rem 0; }
+.entry.note { }
+.entry.survey { white-space: pre-line; font-variant-numeric: tabular-nums; padding-left: .8rem; border-left: 2px solid var(--ochre-wash); }
+.picker { margin-top: 1rem; padding: .8rem; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); }
+.picker-head { display: flex; align-items: center; gap: .4rem; }
+.picker-head h4 { margin: 0; flex: 1; color: var(--ink); }
+
+.words { list-style: none; padding: 0; margin: 0; font: 400 1.02rem/1.5 var(--serif); }
+.words li { padding: .15rem 0; }
+.goal-pick { display: flex; gap: .5rem; align-items: center; font-size: .9rem; }
+.plan, .plan ul { list-style: none; margin: 0; padding-left: 0; }
+.plan ul { padding-left: .9rem; border-left: 1px solid var(--rule); margin: .3rem 0 .3rem .2rem; }
+.plan-node { margin: .35rem 0; }
+.plan-node.process > .plan-label { font-style: italic; }
+.plan-node.material > .plan-label { color: var(--moss); }
+.think { font-size: .78rem; padding: .15rem .45rem; margin-left: .25rem; color: var(--ochre); }
+
+.actions, .gather { display: grid; grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr)); gap: .4rem; }
+.places { list-style: none; padding: 0; margin: 0; }
+.places li { padding: .15rem 0; }
+.recipe { padding: .7rem 0; border-top: 1px solid var(--rule); }
+.recipe:first-child { border-top: 0; padding-top: 0; }
+.recipe h4 { margin: 0 0 .1rem; color: var(--ink); }
+.recipe label { display: flex; flex-direction: column; gap: .15rem; font-size: .82rem; color: var(--muted); margin: .4rem 0; }
+.items { list-style: none; padding: 0; margin: 0; }
+.item { padding: .55rem 0; border-top: 1px solid var(--rule); }
+.item:first-child { border-top: 0; }
+.item-head { display: flex; align-items: center; gap: .4rem; }
+.item-name { font-weight: 500; flex: 1; }
+.imp { margin: .15rem 0 0; color: var(--muted); font: italic 400 .95rem/1.4 var(--serif); }
+.tests { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .35rem; }
+.test { font-size: .78rem; padding: .2rem .45rem; }
+
+.mapsvg { width: 100%; height: auto; max-height: 26rem; aspect-ratio: 1; display: block; font-family: var(--sans); touch-action: none; cursor: grab; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+.mapsvg:active { cursor: grabbing; }
+.mapsvg .node.frontier circle { fill: none; stroke: var(--muted); stroke-dasharray: .15 .15; }
+.mapsvg .node.frontier text { fill: var(--muted); font-style: italic; }
+.map-tools { display: flex; gap: .4rem; align-items: center; margin: .3rem 0; }
+button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 600; }
+.mapsvg .edge { stroke: var(--muted); stroke-linecap: round; }
+.mapsvg .edge.guess { stroke-dasharray: .5 .4; }
+.mapsvg .edge.unknown { stroke-dasharray: .15 .5; opacity: .7; }
+.mapsvg .edge.route { stroke: var(--ochre); }
+.mapsvg .etime { fill: var(--muted); }
+.mapsvg .xing { fill: var(--water); }
+.mapsvg .xing:not(.walked) { fill: none; stroke: var(--water); stroke-width: .12; }
+.mapsvg .node { cursor: pointer; }
+.mapsvg .node circle { fill: var(--surface); stroke: var(--ochre); }
+.mapsvg .node.site circle { fill: var(--ink); stroke: var(--ink); }
+.mapsvg .node.unknown circle { stroke-dasharray: .2 .2; }
+.mapsvg .node.here circle { fill: var(--ochre); stroke: var(--ochre); }
+.mapsvg .node.sel text { font-weight: 600; fill: var(--ochre); }
+.mapsvg .node text { fill: var(--ink); paint-order: stroke; stroke: var(--bg); stroke-width: .25; }
+.map-list li { padding: .45rem 0; border-top: 1px solid var(--rule); }
+.map-list li.sel { background: var(--ochre-wash); }
+.map-list .place-head { display: flex; gap: .4rem; align-items: baseline; flex-wrap: wrap; }
+.map-list .row { margin-top: .25rem; flex-wrap: wrap; }
+details.record textarea, details.replay textarea { width: 100%; box-sizing: border-box; font: .75rem/1.4 ui-monospace, monospace; }
+details.replay { margin-top: 1rem; }
+ul.exact { margin: .3rem 0 0; padding-left: 1rem; font: .78rem/1.45 ui-monospace, monospace; color: var(--muted); }
+label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; font-size: .9rem; }
+.tabs { display: none; }
+
+@media (max-width: 860px) {
+  #app { padding-bottom: calc(3.1rem + env(safe-area-inset-bottom, 0px)); } /* room for the tab bar under the log */
+  main.cols { display: block; overflow: hidden; }
+  .col { display: none; height: 100%; border: 0 !important; padding-bottom: 1rem; box-sizing: border-box; }
+  .col.active { display: block; }
+  .col > section { display: none; }
+  .col > section.active { display: block; }
+  section + section { margin-top: 0; }
+  #world-line { display: none; }
+  .tabs {
+    display: grid; grid-template-columns: repeat(5, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+    background: var(--bg); border-top: 1px solid var(--rule); padding: .3rem .3rem calc(.3rem + env(safe-area-inset-bottom, 0px));
+  }
+  .tabs button { text-align: center; font-size: .78rem; padding: .5rem .2rem; border: 0; background: transparent; color: var(--muted); }
+  .tabs button[aria-pressed="true"] { color: var(--ochre); font-weight: 600; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+<div id="start">
+  <div class="start-card">
+    <h1>Connecticut Commuter in Cro-Magnon's Cave</h1>
+    <p class="lede">You wake with nothing but your hands and everything you know about how fire, tools and shelter work. Nobody has ever shown you how to actually make them.</p>
+    <label>World seed <input id="seed" autocomplete="off" spellcheck="false"></label>
+    <label>Region <select id="preset">
+      <option value="">Anywhere</option><option value="temperate-woodland">Temperate woodland</option>
+      <option value="warm-savanna">Warm savanna</option><option value="cool-forest">Cool forest</option><option value="dry-scrub">Dry scrub</option>
+    </select></label>
+    <div class="row"><button id="check">Read this world</button></div>
+    <div id="profile" aria-live="polite"></div>
+    <details class="replay"><summary>Replay a game record</summary>
+      <p class="hint">Paste a record copied from the Body tab. The same world and the same choices give exactly the same game.</p>
+      <textarea id="replay-text" rows="4" spellcheck="false"></textarea>
+      <div class="row"><button id="replay">Replay</button></div><p class="hint" id="replay-msg" aria-live="polite"></p>
+    </details>
+  </div>
+</div>
+<div id="app" hidden>
+  <header class="bar"><span id="when"></span><span id="where"></span><span id="world-line"></span></header>
+  <main class="cols">
+    <div class="col" data-panel="body plans">
+      <section data-panel="body"><h2>How I feel</h2><div id="body"></div></section>
+      <section data-panel="plans"><h2>Plans</h2><div id="plans"></div></section>
+    </div>
+    <div class="col" data-panel="actions"><section data-panel="actions"><h2>Actions</h2><div id="here"></div></section></div>
+    <div class="col" data-panel="map carry"><section data-panel="map"><h2>Map</h2><div id="map"></div></section><section data-panel="carry"><h2>Carrying</h2><div id="pack"></div></section></div>
+  </main>
+  <div id="journal-wrap"><div id="journal" aria-live="polite"></div></div>
+  <nav class="tabs" aria-label="Panels">
+    <button data-tab="actions">Actions</button><button data-tab="map">Map</button><button data-tab="carry">Carry</button><button data-tab="plans">Plans</button><button data-tab="body">Body</button>
+  </nav>
+</div>
+<script>
+/*BUNDLE*/
+</script>
+</body>
+</html>
