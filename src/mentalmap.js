@@ -1,65 +1,70 @@
 // mentalmap.js — the character's map: places and landmarks as a graph, distances as walking time.
 //
-// Nodes are visited sites (known positions) and suspected landmarks (believed positions). Edges come
-// from a Delaunay triangulation of the believed positions, so each node links to its neighbours;
-// long edges are pruned unless the graph needs them to stay connected (minimum spanning tree edges
-// are always kept). An edge's time is what was actually walked, if it was, or else a guess from how
-// the land looks along it. Streams are marked on the edges they are believed to cross: crossings
-// actually walked, plus where an edge cuts the line through a stream's known points.
+// The links come from experience, not from geometry. Three kinds:
+//   trails     legs actually walked, between the places they passed (game.js splits a walk at every
+//              known place it comes close to), timed as walked
+//   shortcuts  guessed links between visited places
+// Both follow one rule (a greedy spanner): a link goes down only where the map's best route between
+// its two places is more than `detour` times the link's own time. Routes are compared in guessed
+// times throughout, so a trail that happened to be slow going doesn't earn a shortcut beside it
+// over the same ground. Trails are considered first, then shortcuts, quickest first within each; a link that would cross one already down waits until the
+// end and goes down only if its places are still not joined.
+//   sightings  each landmark not yet reached hangs off the place it was best seen from; each stretch
+//              of unexplored ground off the nearest visited place; failing that (the link would
+//              cross the map), off the nearest place it can reach without crossing
+// Streams are marked on the links they are believed to cross: crossings actually walked, plus where a
+// link cuts the line through a stream's known points.
 // Pure functions; game.js supplies the state.
 
-// ------------------------------------------------------------ triangulation (Bowyer–Watson)
+// ------------------------------------------------------------ trails and shortcuts
 
-export function delaunayEdges(pts) {
-  const n = pts.length;
-  if (n < 2) return [];
-  if (n === 2) return [[0, 1]];
-  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
-  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-  const d = Math.max(maxX - minX, maxY - minY, 1) * 20, cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-  // tiny deterministic jitter breaks exact collinearity and co-circularity
-  const P = [...pts.map((p, i) => ({ x: p.x + 1e-6 * Math.sin(i * 12.9898), y: p.y + 1e-6 * Math.cos(i * 78.233) })),
-    { x: cx - d, y: cy - d }, { x: cx + d, y: cy - d }, { x: cx, y: cy + d }];
-  const circ = (a, b, c) => {
-    const A = P[a], B = P[b], C = P[c];
-    const D = 2 * (A.x * (B.y - C.y) + B.x * (C.y - A.y) + C.x * (A.y - B.y));
-    if (Math.abs(D) < 1e-12) return { x: 0, y: 0, r2: Infinity };
-    const a2 = A.x * A.x + A.y * A.y, b2 = B.x * B.x + B.y * B.y, c2 = C.x * C.x + C.y * C.y;
-    const ux = (a2 * (B.y - C.y) + b2 * (C.y - A.y) + c2 * (A.y - B.y)) / D;
-    const uy = (a2 * (C.x - B.x) + b2 * (A.x - C.x) + c2 * (B.x - A.x)) / D;
-    return { x: ux, y: uy, r2: (A.x - ux) ** 2 + (A.y - uy) ** 2 };
-  };
-  let tris = [{ v: [n, n + 1, n + 2], c: circ(n, n + 1, n + 2) }];
-  for (let i = 0; i < n; i++) {
-    const p = P[i];
-    const bad = tris.filter(t => (p.x - t.c.x) ** 2 + (p.y - t.c.y) ** 2 < t.c.r2);
-    const edges = new Map();
-    for (const t of bad) for (const [a, b] of [[t.v[0], t.v[1]], [t.v[1], t.v[2]], [t.v[2], t.v[0]]]) {
-      const k = a < b ? `${a},${b}` : `${b},${a}`;
-      edges.set(k, edges.has(k) ? null : [a, b]);
-    }
-    tris = tris.filter(t => !bad.includes(t));
-    for (const e of edges.values()) if (e) tris.push({ v: [e[0], e[1], i], c: circ(e[0], e[1], i) });
-  }
-  const out = new Map();
-  for (const t of tris) for (const [a, b] of [[t.v[0], t.v[1]], [t.v[1], t.v[2]], [t.v[2], t.v[0]]]) {
-    if (a >= n || b >= n) continue;
-    out.set(a < b ? `${a},${b}` : `${b},${a}`, a < b ? [a, b] : [b, a]);
-  }
-  return [...out.values()];
+// Do segments p1-p2 and q1-q2 cross at a point inside both? (Touching at an end doesn't count.)
+function properCross(p1, p2, q1, q2) {
+  const o = (a, b, c) => Math.sign((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+  return o(p1, p2, q1) * o(p1, p2, q2) < 0 && o(q1, q2, p1) * o(q1, q2, p2) < 0;
 }
 
-// Keep the triangulation's local links; drop long ones unless needed to keep the map in one piece.
-export function meshEdges(pts, { longFactor = 2 } = {}) {
-  const len = ([a, b]) => Math.hypot(pts[a].x - pts[b].x, pts[a].y - pts[b].y);
-  let E = delaunayEdges(pts);
-  if (!E.length && pts.length > 1) E = pts.slice(1).map((_, i) => [i, i + 1]);
-  const sorted = [...E].sort((a, b) => len(a) - len(b));
-  const parent = pts.map((_, i) => i), find = i => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-  const mst = new Set();
-  for (const e of sorted) { const a = find(e[0]), b = find(e[1]); if (a !== b) { parent[a] = b; mst.add(e); } }
-  const median = sorted.length ? len(sorted[Math.floor(sorted.length / 2)]) : 0;
-  return E.filter(e => mst.has(e) || len(e) <= longFactor * median);
+// Quickest time from `from` to `to` over adjacency lists, giving up (Infinity) beyond `limit`.
+function boundedTime(adj, from, to, limit) {
+  const dist = new Map([[from, 0]]), heap = [[0, from]];
+  const push = x => { heap.push(x); let i = heap.length - 1; while (i > 0) { const j = (i - 1) >> 1; if (heap[j][0] <= heap[i][0]) break; [heap[i], heap[j]] = [heap[j], heap[i]]; i = j; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[i], heap[m]] = [heap[m], heap[i]]; i = m; } } return top; };
+  while (heap.length) {
+    const [d, u] = pop();
+    if (u === to) return d;
+    if (d > limit) return Infinity;
+    if (d > dist.get(u)) continue;
+    for (const [v, w] of adj[u]) if (d + w < (dist.get(v) ?? Infinity)) { dist.set(v, d + w); push([d + w, v]); }
+  }
+  return Infinity;
+}
+
+// pts: visited places {x, y}; trails: [{ a, b, hours }] walked legs between them; guess(a, b): the guessed walking time along the straight line. Returns [{ a, b, hours, walked }].
+export function trailGraph(pts, trails, guess, { detour = 1.5 } = {}) {
+  const n = pts.length, adj = Array.from({ length: n }, () => []), have = new Set(), out = [];
+  const key = (a, b) => (a < b ? `${a},${b}` : `${b},${a}`);
+  const add = (a, b, hours, walked) => { const g = guess(a, b); have.add(key(a, b)); adj[a].push([b, g]); adj[b].push([a, g]); out.push({ a, b, hours, walked }); };
+  const crosses = (a, b) => out.some(e => e.a !== a && e.a !== b && e.b !== a && e.b !== b && properCross(pts[a], pts[b], pts[e.a], pts[e.b]));
+  const joined = (a, b) => Number.isFinite(boundedTime(adj, a, b, Infinity));
+  const held = [];
+  const consider = (a, b, h, walked) => {
+    const g = guess(a, b);
+    if (a === b || have.has(key(a, b)) || boundedTime(adj, a, b, detour * g) <= detour * g) return;
+    if (crosses(a, b)) held.push([a, b, h, walked]); else add(a, b, h, walked);
+  };
+  for (const e of [...trails].sort((p, q) => guess(p.a, p.b) - guess(q.a, q.b))) consider(e.a, e.b, e.hours, true);
+  const pairs = [];
+  for (let a = 0; a < n; a++) for (let b = a + 1; b < n; b++) pairs.push([a, b, guess(a, b)]);
+  for (const [a, b, g] of pairs.sort((p, q) => p[2] - q[2])) consider(a, b, g, false);
+  for (const [a, b, h, w] of held) if (!have.has(key(a, b)) && !joined(a, b)) add(a, b, h, w);
+  return out;
+}
+
+// Which of `candidates` (points, in order of preference) can be linked to p without crossing any of
+// `segments` ([[P, Q], ...])? The first that can, or else the first.
+export function firstClear(p, candidates, segments) {
+  const ok = c => !segments.some(([P, Q]) => P !== c && Q !== c && properCross(c, p, P, Q));
+  return candidates.find(ok) ?? candidates[0];
 }
 
 // ------------------------------------------------------------ streams on edges

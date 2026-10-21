@@ -9,8 +9,8 @@ import { generateLandscape, N as GN, CELL } from './landscape.js';
 import { outlook } from './outlook.js';
 import { windFor, smellSources, smellAt } from './smell.js';
 import { cloneChem, expose, nutrients, harm, tasteWords, smellWords, textureWords, describeState, COMPOUNDS, PREP } from './food.js';
-import { chooseSpawn, perceive, suspicionFrom, walk, followWater, isLookout, bearingWord, bearing, distM, CUE_WORDS, loudWords, waterKeyAt, waterKeyOf, lineHours as rawLineHours } from './geo.js';
-import { meshEdges, streamLine, suspectedCrossings, timeWords, awayWords, explainTrip } from './mentalmap.js';
+import { chooseSpawn, perceive, suspicionFrom, walk, followWater, stepHours, isLookout, bearingWord, bearing, distM, CUE_WORDS, loudWords, waterKeyAt, waterKeyOf, lineHours as rawLineHours } from './geo.js';
+import { trailGraph, firstClear, streamLine, suspectedCrossings, timeWords, awayWords, explainTrip } from './mentalmap.js';
 import { materialsOf, expandGoal, thought, ITEMS, lookHint, PROCESSES } from './process.js';
 import { newCharacter, rest, dry, ROLES, knapFlakes, notchHearth, refineNotch, carveSpindle, makeTinder, handDrill, lightFire, searchNaturalEdge, splinterBone, estimateFire } from './craft.js';
 
@@ -148,31 +148,54 @@ const placeNameFor = (u, x, y) => (u.group === 'water' && u.kind !== 'river trac
 
 // ------------------------------------------------------------ the mental map
 //
-// Nodes: every place I've been (true positions) and every landmark I suspect but haven't reached
-// (believed positions; "?" for things only heard once). Edges from mentalmap.js's mesh, timed by what
-// I actually walked, or else guessed from the look of the land; streams marked where I crossed them
-// or where an edge cuts the line through a stream's known points.
+// Nodes: every place I've been (true positions), every landmark I suspect but haven't reached
+// (believed positions; "?" for things only heard once), and a few stretches of unexplored ground.
+// Links between places are the trails I've walked plus guessed shortcuts where the trails make too
+// long a detour (mentalmap.js's trailGraph); each landmark hangs off the place I saw it best from,
+// each stretch of unexplored ground off the nearest place I've been. Streams are marked where I
+// crossed them or where a link cuts the line through a stream's known points.
+const DETOUR = 1.5; // a guessed shortcut goes on the map when the map's route is longer than this times the direct guess
+function placeLinks() { // trails and shortcuts between visited places; only changes when I walk somewhere
+  const memo = `${S.sites.length}/${JSON.stringify(S.walked)}`;
+  if (S.linkMemo?.key === memo) return S.linkMemo.edges;
+  const ix = new Map(S.sites.map((t, i) => [t.key, i]));
+  const trails = Object.entries(S.walked).map(([k, w]) => { const [a, b] = k.split('|').map(x => ix.get(x)); return { a, b, hours: w.hours }; }).filter(e => e.a !== undefined && e.b !== undefined);
+  const edges = trailGraph(S.sites, trails, (a, b) => lineHours(S.L, S.sites[a], S.sites[b]), { detour: DETOUR });
+  S.linkMemo = { key: memo, edges };
+  return edges;
+}
+const byDistance = p => [...S.sites].sort((s, t) => Math.hypot(s.x - p.x, s.y - p.y) - Math.hypot(t.x - p.x, t.y - p.y));
 function mentalMap() {
-  const nodes = [];
+  const nodes = [], links = placeLinks().map(e => ({ ...e }));
   S.sites.forEach((t, i) => nodes.push({ key: t.key, name: t.name, x: t.x, y: t.y, site: i, certainty: 'known' }));
+  const segs = links.map(e => [S.sites[e.a], S.sites[e.b]]);
+  const hang = (v, prefer, kind) => { // link v to the preferred place, or the nearest one that doesn't cross the map
+    const t = firstClear(v, [...new Set([...prefer, ...byDistance(v)])], segs);
+    links.push({ a: S.sites.indexOf(t), b: nodes.length, kind }); segs.push([t, v]); nodes.push(v);
+  };
   for (const u of S.suspects) {
     if (u.reached) continue;
-    nodes.push({ key: u.id, name: u.label, x: u.est.x, y: u.est.y, sus: u.id, water: u.group === 'water', certainty: (u.channel === 'sound' && u.obs < 2) || u.channel === 'smell' ? 'unknown' : 'guess' });
+    hang({ key: u.id, name: u.label, x: u.est.x, y: u.est.y, sus: u.id, water: u.group === 'water', certainty: (u.channel === 'sound' && u.obs < 2) || u.channel === 'smell' ? 'unknown' : 'guess' }, byDistance(u.seenAt ?? u.est).slice(0, 1), 'sighting');
   }
-  for (const f of frontierPoints()) nodes.push({ ...f, frontier: true, certainty: 'guess' });
+  for (const f of frontierPoints()) { // a landmark already marks the way, so no stub beside it
+    if (nodes.some(v => v.sus && Math.hypot(v.x - f.x, v.y - f.y) < HEX_D / 3)) continue;
+    hang({ ...f, frontier: true, certainty: 'guess' }, [], 'stub');
+  }
   const streams = Object.entries(S.waterPts).filter(([, p]) => p.length >= 2).map(([key, p]) => ({ key, name: S.waterNames[key], line: streamLine(p) }));
-  const edges = meshEdges(nodes).map(([a, b]) => {
-    const A = nodes[a], B = nodes[b], w = S.walked[edgeKey(A.key, B.key)];
+  const edges = links.map(({ a, b, hours, walked, kind }) => {
+    const A = nodes[a], B = nodes[b], w = walked ? S.walked[edgeKey(A.key, B.key)] : null;
+    kind ??= walked ? 'trail' : 'shortcut';
     const certainty = w ? 'known' : [A.certainty, B.certainty].includes('unknown') ? 'unknown' : 'guess';
     const sc = suspectedCrossings(A, B, streams);
     const walkedX = (w?.crossings ?? []).map(k => ({ key: k, name: S.waterNames[k], walked: true, at: sc.find(c => c.key === k)?.at ?? { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 } }));
-    return { a, b, hours: w ? w.hours : lineHours(S.L, A, B), certainty, crossings: [...walkedX, ...sc.filter(c => !walkedX.some(x => x.key === c.key))] };
+    return { a, b, hours: hours ?? lineHours(S.L, A, B), certainty, kind, stub: kind === 'stub', crossings: [...walkedX, ...sc.filter(c => !walkedX.some(x => x.key === c.key))] };
   });
   return { nodes, edges, streams };
 }
 // The unexplored: a background hexagonal lattice of points about 1 km apart. Points near places I've
 // been count as explored and are ignored; the unexplored points next to explored ones ring the known
-// area, and go on the map as places to strike out for.
+// area. Of that ring, one point per eighth of the compass (seen from the middle of where I've been),
+// the one nearest a place I've been, goes on the map as a direction to strike out in.
 const HEX_D = 13; // cells (~1 km)
 const WIND16 = ['north', 'north-northeast', 'northeast', 'east-northeast', 'east', 'east-southeast', 'southeast', 'south-southeast', 'south', 'south-southwest', 'southwest', 'west-southwest', 'west', 'west-northwest', 'northwest', 'north-northwest'];
 function hexLattice() {
@@ -190,9 +213,15 @@ function frontierPoints() {
   const pts = hexLattice();
   const explored = p => S.sites.some(t => Math.hypot(t.x - p.x, t.y - p.y) < 0.75 * HEX_D);
   const ex = new Set(pts.filter(explored).map(p => p.i));
-  const out = [], used = new Set();
+  const cx = S.sites.reduce((s, t) => s + t.x, 0) / S.sites.length, cy = S.sites.reduce((s, t) => s + t.y, 0) / S.sites.length;
+  const pick = new Map(); // sector -> [point, distance to the nearest place I've been]
   for (const p of pts) {
     if (ex.has(p.i) || !pts.some(q => ex.has(q.i) && Math.hypot(q.x - p.x, q.y - p.y) < 1.15 * HEX_D)) continue;
+    const sector = Math.round(bearing({ x: cx, y: cy }, p) / 45) % 8, d = Math.min(...S.sites.map(t => Math.hypot(t.x - p.x, t.y - p.y)));
+    if (!pick.has(sector) || d < pick.get(sector)[1]) pick.set(sector, [p, d]);
+  }
+  const out = [], used = new Set();
+  for (const [p] of [...pick.values()].sort((a, b) => a[0].i - b[0].i)) {
     const near = S.sites.reduce((a, b) => (Math.hypot(b.x - p.x, b.y - p.y) < Math.hypot(a.x - p.x, a.y - p.y) ? b : a));
     let name = `the unknown ${WIND16[Math.round(bearing(near, p) / 22.5) % 16]}`;
     for (let k = 2; used.has(name); k++) name = `${name.replace(/ \d+$/, '')} ${k}`;
@@ -202,8 +231,10 @@ function frontierPoints() {
   return out;
 }
 
-// What I expect a trip to take: the mapped edge if there is one, else a guess along the line.
+// What I expect a trip to take: the time I walked it in (drawn on the map or not), else the mapped
+// link if there is one, else a guess along the line.
 function mapHours(from, key, target) {
+  if (S.walked[edgeKey(from.key, key)]) return S.walked[edgeKey(from.key, key)].hours;
   const M = mentalMap();
   const a = M.nodes.findIndex(v => v.key === from.key), b = M.nodes.findIndex(v => v.key === key);
   const e = M.edges.find(x => (x.a === a && x.b === b) || (x.a === b && x.b === a));
@@ -239,16 +270,20 @@ const SMELL_NOUN = { carcass: 'dead thing', sulfur: 'sulfur smell', musk: 'musky
 function associateSmell(c, from) {
   const wkey = c.source.waterKey;
   let sus = S.suspects.find(u => u.trueKey === (wkey ?? c.key));
-  if (sus) { sus.obs++; return { sus, isNew: false }; }
+  if (sus) { sus.obs++; noteSeenFrom(sus, from); return { sus, isNew: false }; }
   const w = windNow(), dir = (w.from + S.rng.normal(0, 25)) * Math.PI / 180, dist = c.trueDist * Math.exp(S.rng.normal(0, 0.6)) / CELL;
   const est = { x: clamp(Math.round(from.x + Math.sin(dir) * dist), 0, GN - 1), y: clamp(Math.round(from.y - Math.cos(dir) * dist), 0, GN - 1) };
   S.lastTag = null;
   const label = wkey ? waterName(wkey, 'lake', est) : uniqueName(SMELL_NOUN[c.kind] ?? 'smell', est, []);
-  sus = { id: `u${S.suspects.length + 1}`, kind: wkey ? 'lake' : c.kind, group: wkey ? 'water' : 'smell', trueKey: wkey ?? c.key, truePos: { x: c.x, y: c.y }, est, channel: 'smell', obs: 1, label, reached: false, source: c.source };
+  sus = { id: `u${S.suspects.length + 1}`, kind: wkey ? 'lake' : c.kind, group: wkey ? 'water' : 'smell', trueKey: wkey ?? c.key, truePos: { x: c.x, y: c.y }, est, seenAt: { x: from.x, y: from.y }, channel: 'smell', obs: 1, label, reached: false, source: c.source };
   S.suspects.push(sus);
   return { sus, isNew: true };
 }
 
+// A landmark goes on the map hanging off where I've had the closest look at it.
+function noteSeenFrom(sus, from) {
+  if (!sus.seenAt || Math.hypot(from.x - sus.est.x, from.y - sus.est.y) < Math.hypot(sus.seenAt.x - sus.est.x, sus.seenAt.y - sus.est.y)) sus.seenAt = { x: from.x, y: from.y };
+}
 // Data association: is this cue one I already suspect? If not, a new named suspect.
 function associate(c, from) {
   const g = suspicionFrom(c, from, S.rng);
@@ -258,6 +293,7 @@ function associate(c, from) {
     const w = c.channel === 'sight' ? 0.6 : 0.3; // sightings sharpen the estimate more than sounds
     sus.est = { x: Math.round(sus.est.x * (1 - w) + g.est.x * w), y: Math.round(sus.est.y * (1 - w) + g.est.y * w) };
     sus.obs++;
+    noteSeenFrom(sus, from);
     return { sus, isNew: false, g };
   }
   const named = isWaterKind(c.kind) && c.kind !== 'river trace';
@@ -273,7 +309,7 @@ function associate(c, from) {
   }
   if (!known) ((S.landNamed ??= {})[noun] ??= []).push({ site: site()?.key, label });
   if (named && c.channel === 'sight') notePoint(waterKeyOf(c.key), g.est);
-  sus = { id: `u${S.suspects.length + 1}`, kind: c.kind, group: kindGroup, trueKey: c.key, truePos: { x: c.x, y: c.y }, est: g.est, channel: c.channel, obs: 1, label, reached: false, another };
+  sus = { id: `u${S.suspects.length + 1}`, kind: c.kind, group: kindGroup, trueKey: c.key, truePos: { x: c.x, y: c.y }, est: g.est, seenAt: { x: from.x, y: from.y }, channel: c.channel, obs: 1, label, reached: false, another };
   S.suspects.push(sus);
   return { sus, isNew: true, g };
 }
@@ -410,6 +446,29 @@ function rememberLeg(fromKey, toKey, hours, keys) {
   const k = edgeKey(fromKey, toKey), old = S.walked[k];
   S.walked[k] = { hours: old ? 0.5 * (old.hours + hours) : hours, crossings: [...new Set([...(old?.crossings ?? []), ...keys])] };
 }
+// A walk is remembered as legs between the places it passed: a place I already knew that the path
+// comes within PASS_R cells (about 150 m) of splits the walk there, so trails run through the places
+// they really go by. Each leg's share of the time is its share of the walk's estimated time.
+const PASS_R = 2;
+function rememberTrip(from, path, hours, crossings, knownBefore) {
+  const end = site(), stops = [{ i: 0, s: from }];
+  for (const t of S.sites.slice(0, knownBefore)) {
+    if (t === from || t === end) continue;
+    let bi = -1, bd = Infinity;
+    for (let i = 1; i < path.length - 1; i++) { const d = Math.hypot(path[i].x - t.x, path[i].y - t.y); if (d < bd) { bd = d; bi = i; } }
+    if (bd <= PASS_R) stops.push({ i: bi, s: t });
+  }
+  stops.sort((a, b) => a.i - b.i);
+  stops.push({ i: path.length - 1, s: end });
+  const est = stops.slice(1).map((b, k) => { let h = 0; for (let i = stops[k].i + 1; i <= b.i; i++) h += stepHours(S.L, path[i - 1], path[i]); return h; });
+  const total = est.reduce((x, y) => x + y, 0);
+  const at = crossings.map(c => ({ i: path.findIndex(p => p.x === c.x && p.y === c.y), key: waterKeyAt(S.L, c.x, c.y) })).filter(c => c.key);
+  stops.slice(1).forEach((b, k) => {
+    const a = stops[k];
+    const keys = [...new Set(at.filter(c => c.i > a.i && c.i <= b.i).map(c => c.key))];
+    rememberLeg(a.s.key, b.s.key, Math.max(0.02, total ? hours * est[k] / total : hours / est.length), keys);
+  });
+}
 
 // Where a target really is, where I think it is, and what to call it.
 function targetInfo(target) {
@@ -452,6 +511,7 @@ function travelTo(target, label) {
   const resense = sus ? p => { if (++n % 6) return null; const c = perceive(S.L, p, { time: timeOfDay() }).find(k => k.key === sus.trueKey); return c ? suspicionFrom(c, p, S.rng).est : null; } : null;
   const predicted = mapHours(from, sus ? sus.id : dest ? dest.key : target.frontier, target);
   const trip = walk(S.L, from, target, { rng: S.rng, maxHours: 3, resense, stopAtWater: thirsty, driftSd: dest ? 1.5 : 2.5 });
+  const knownBefore = S.sites.length;
   const hours = trip.hours * (S.looking ? 1.25 : 1); // looking as I go slows me down
   if (S.looking) S.ch.focus = clamp(S.ch.focus - 0.05);
   pass(hours, 300);
@@ -462,7 +522,7 @@ function travelTo(target, label) {
   const text = `${S.looking ? 'Walked, watching for ' + S.looking.label + ',' : 'Pushed'} ${label} for ${dur}, through ${where}${names.length ? `; crossed ${names.join(' and ')}` : ''}.${stoppedAtWater ? ' Parched, I stopped at the water.' : ''}${hours >= 2.9 && !stoppedAtWater ? ' Stopped to get my bearings.' : ''}`;
   const reached = atTarget(trip.end, targetInfo(target));
   arrive(trip.end.x, trip.end.y, text, () => { notePassing(trip.path); lookAlong(trip.path); });
-  rememberLeg(from.key, site().key, hours, keys);
+  rememberTrip(from, trip.path, hours, trip.crossings, knownBefore);
   if (!reached) missedTarget(target, from);
   else if (predicted) {
     const why = explainTrip(S.L, trip.path, predicted, hours, { believedDist: distM(from, target), trueDist: distM(from, truePos), idx: cellOf, CELL });
@@ -478,8 +538,9 @@ function followTheWater(dir) {
   if (!trip.hours) return log(`Can’t do that from here: ${trip.stopped}.`, 'warn');
   pass(trip.hours, 260);
   const dur = trip.hours < 1 ? `${Math.round(trip.hours * 60)} minutes` : `${trip.hours.toFixed(1).replace(/\.0$/, '')} hours`;
-  const endsInLake = trip.path.some(p => S.L.lake[cellOf(p.x, p.y)]);
+  const endsInLake = trip.path.some(p => S.L.lake[cellOf(p.x, p.y)]), knownBefore = S.sites.length;
   arrive(trip.end.x, trip.end.y, `Followed the water ${dir === 'down' ? 'downstream' : 'upstream'} for ${dur}${endsInLake ? ', past the edge of a lake' : ''}${trip.stopped ? `; ${trip.stopped}` : ''}.`);
+  rememberTrip(from, trip.path, trip.hours, [], knownBefore);
 }
 
 function waterHere(s) {
@@ -1258,7 +1319,7 @@ function pointNear(s, F, lines) {
   if (best) {
     const dir = bearingWord(bearing(s, best));
     let u = S.suspects.find(v => v.kind === 'patch' && Math.hypot(v.truePos.x - best.x, v.truePos.y - best.y) < 3);
-    if (!u) S.suspects.push(u = { id: `u${S.suspects.length + 1}`, kind: 'patch', group: 'patch', trueKey: `patch-${best.x}-${best.y}`, truePos: { x: best.x, y: best.y }, est: { x: best.x, y: best.y }, channel: 'sight', obs: 1, label: uniqueName(SITE_NOUN[microAt(best.x, best.y)] ?? 'patch', best, []), reached: false });
+    if (!u) S.suspects.push(u = { id: `u${S.suspects.length + 1}`, kind: 'patch', group: 'patch', trueKey: `patch-${best.x}-${best.y}`, truePos: { x: best.x, y: best.y }, est: { x: best.x, y: best.y }, seenAt: { x: s.x, y: s.y }, channel: 'sight', obs: 1, label: uniqueName(SITE_NOUN[microAt(best.x, best.y)] ?? 'patch', best, []), reached: false });
     lines.push(`nothing here, but ${F.nearLabel} ${timeWords(lineHours(S.L, s, best))} ${dir} (${u.label})`);
   } else lines.push(`nothing here, and no ${F.nearLabel} anywhere close`);
 }
@@ -1528,7 +1589,7 @@ function mapHTML() {
     const A = M.nodes[e.a], B = M.nodes[e.b], mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, len = Math.hypot(A.x - B.x, A.y - B.y);
     let ang = Math.atan2(B.y - A.y, B.x - A.x) * 180 / Math.PI;
     if (ang > 90) ang -= 180; if (ang < -90) ang += 180; // keep the time label upright, along the line
-    return `<line class="edge ${e.certainty}" x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke-width="${fs * 0.12}"><title>${esc(typo(`${cap(A.name)} – ${B.name}: ${timeWords(e.hours, e.certainty)}${e.crossings.length ? `, crossing ${e.crossings.map(c => c.name).join(' and ')}` : ''}`))}</title></line>`
+    return `<line class="edge ${e.certainty}${e.stub ? ' stub' : ''}" data-link="${e.kind}" data-a="${e.a}" data-b="${e.b}" x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke-width="${fs * 0.12}"><title>${esc(typo(`${cap(A.name)} – ${B.name}: ${timeWords(e.hours, e.certainty)}${e.crossings.length ? `, crossing ${e.crossings.map(c => c.name).join(' and ')}` : ''}`))}</title></line>`
       + (len > span / 9 ? `<text class="etime" x="${mx}" y="${my}" dy="${-fs * 0.3}" font-size="${fs * 0.7}" text-anchor="middle" transform="rotate(${ang.toFixed(1)} ${mx} ${my})">${esc(timeWords(e.hours, e.certainty))}</text>` : '')
       + e.crossings.map(c => `<circle class="xing${c.walked ? ' walked' : ''}" cx="${c.at.x}" cy="${c.at.y}" r="${fs * 0.32}"><title>${esc(typo(`${c.walked ? 'Crossed' : 'Probably crosses'} ${c.name}`))}</title></circle>`).join('');
   }).join('');
@@ -1843,7 +1904,7 @@ if (typeof document !== 'undefined') {
 // Everything that happens follows from the world seed and the player's choices, so a record of the
 // seed and each choice reproduces a game exactly. Each action is the data of what was tapped (or
 // the value chosen); `act` applies one, and replaying a record runs them in order on a fresh game.
-const BUILD = 'hk-2026-10-21d'; // game logic version: a record replays faithfully only on the build that made it
+const BUILD = 'hk-2026-10-21e'; // game logic version: a record replays faithfully only on the build that made it
 function record(d) {
   S.record ??= [];
   S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });

@@ -128,6 +128,7 @@ button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 6
 .mapsvg .edge { stroke: var(--muted); stroke-linecap: round; }
 .mapsvg .edge.guess { stroke-dasharray: .5 .4; }
 .mapsvg .edge.unknown { stroke-dasharray: .15 .5; opacity: .7; }
+.mapsvg .edge.stub { stroke-dasharray: .15 .3; opacity: .6; }
 .mapsvg .edge.route { stroke: var(--ochre); }
 .mapsvg .etime { fill: var(--muted); }
 .mapsvg .xing { fill: var(--water); }
@@ -3718,72 +3719,97 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   }
 
   // src/mentalmap.js
-  function delaunayEdges(pts) {
-    const n = pts.length;
-    if (n < 2)
-      return [];
-    if (n === 2)
-      return [[0, 1]];
-    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
-    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-    const d = Math.max(maxX - minX, maxY - minY, 1) * 20, cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-    const P = [
-      ...pts.map((p, i) => ({ x: p.x + 1e-6 * Math.sin(i * 12.9898), y: p.y + 1e-6 * Math.cos(i * 78.233) })),
-      { x: cx - d, y: cy - d },
-      { x: cx + d, y: cy - d },
-      { x: cx, y: cy + d }
-    ];
-    const circ = (a, b, c) => {
-      const A = P[a], B = P[b], C = P[c];
-      const D = 2 * (A.x * (B.y - C.y) + B.x * (C.y - A.y) + C.x * (A.y - B.y));
-      if (Math.abs(D) < 1e-12)
-        return { x: 0, y: 0, r2: Infinity };
-      const a2 = A.x * A.x + A.y * A.y, b2 = B.x * B.x + B.y * B.y, c2 = C.x * C.x + C.y * C.y;
-      const ux = (a2 * (B.y - C.y) + b2 * (C.y - A.y) + c2 * (A.y - B.y)) / D;
-      const uy = (a2 * (C.x - B.x) + b2 * (A.x - C.x) + c2 * (B.x - A.x)) / D;
-      return { x: ux, y: uy, r2: (A.x - ux) ** 2 + (A.y - uy) ** 2 };
-    };
-    let tris = [{ v: [n, n + 1, n + 2], c: circ(n, n + 1, n + 2) }];
-    for (let i = 0; i < n; i++) {
-      const p = P[i];
-      const bad = tris.filter((t) => (p.x - t.c.x) ** 2 + (p.y - t.c.y) ** 2 < t.c.r2);
-      const edges = /* @__PURE__ */ new Map();
-      for (const t of bad)
-        for (const [a, b] of [[t.v[0], t.v[1]], [t.v[1], t.v[2]], [t.v[2], t.v[0]]]) {
-          const k = a < b ? `${a},${b}` : `${b},${a}`;
-          edges.set(k, edges.has(k) ? null : [a, b]);
-        }
-      tris = tris.filter((t) => !bad.includes(t));
-      for (const e of edges.values())
-        if (e)
-          tris.push({ v: [e[0], e[1], i], c: circ(e[0], e[1], i) });
-    }
-    const out = /* @__PURE__ */ new Map();
-    for (const t of tris)
-      for (const [a, b] of [[t.v[0], t.v[1]], [t.v[1], t.v[2]], [t.v[2], t.v[0]]]) {
-        if (a >= n || b >= n)
-          continue;
-        out.set(a < b ? `${a},${b}` : `${b},${a}`, a < b ? [a, b] : [b, a]);
-      }
-    return [...out.values()];
+  function properCross(p1, p2, q1, q2) {
+    const o = (a, b, c) => Math.sign((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+    return o(p1, p2, q1) * o(p1, p2, q2) < 0 && o(q1, q2, p1) * o(q1, q2, p2) < 0;
   }
-  function meshEdges(pts, { longFactor = 2 } = {}) {
-    const len = ([a, b]) => Math.hypot(pts[a].x - pts[b].x, pts[a].y - pts[b].y);
-    let E = delaunayEdges(pts);
-    if (!E.length && pts.length > 1)
-      E = pts.slice(1).map((_, i) => [i, i + 1]);
-    const sorted = [...E].sort((a, b) => len(a) - len(b));
-    const parent = pts.map((_, i) => i), find = (i) => parent[i] === i ? i : parent[i] = find(parent[i]);
-    const mst = /* @__PURE__ */ new Set();
-    for (const e of sorted) {
-      const a = find(e[0]), b = find(e[1]);
-      if (a !== b) {
-        parent[a] = b;
-        mst.add(e);
+  function boundedTime(adj, from, to, limit) {
+    const dist = /* @__PURE__ */ new Map([[from, 0]]), heap = [[0, from]];
+    const push = (x) => {
+      heap.push(x);
+      let i = heap.length - 1;
+      while (i > 0) {
+        const j = i - 1 >> 1;
+        if (heap[j][0] <= heap[i][0])
+          break;
+        [heap[i], heap[j]] = [heap[j], heap[i]];
+        i = j;
       }
+    };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) {
+        heap[0] = last;
+        let i = 0;
+        for (; ; ) {
+          const l = 2 * i + 1, r = l + 1;
+          let m = i;
+          if (l < heap.length && heap[l][0] < heap[m][0])
+            m = l;
+          if (r < heap.length && heap[r][0] < heap[m][0])
+            m = r;
+          if (m === i)
+            break;
+          [heap[i], heap[m]] = [heap[m], heap[i]];
+          i = m;
+        }
+      }
+      return top;
+    };
+    while (heap.length) {
+      const [d, u] = pop();
+      if (u === to)
+        return d;
+      if (d > limit)
+        return Infinity;
+      if (d > dist.get(u))
+        continue;
+      for (const [v, w] of adj[u])
+        if (d + w < (dist.get(v) ?? Infinity)) {
+          dist.set(v, d + w);
+          push([d + w, v]);
+        }
     }
-    const median = sorted.length ? len(sorted[Math.floor(sorted.length / 2)]) : 0;
-    return E.filter((e) => mst.has(e) || len(e) <= longFactor * median);
+    return Infinity;
+  }
+  function trailGraph(pts, trails, guess, { detour = 1.5 } = {}) {
+    const n = pts.length, adj = Array.from({ length: n }, () => []), have = /* @__PURE__ */ new Set(), out = [];
+    const key = (a, b) => a < b ? `${a},${b}` : `${b},${a}`;
+    const add = (a, b, hours, walked) => {
+      const g = guess(a, b);
+      have.add(key(a, b));
+      adj[a].push([b, g]);
+      adj[b].push([a, g]);
+      out.push({ a, b, hours, walked });
+    };
+    const crosses = (a, b) => out.some((e) => e.a !== a && e.a !== b && e.b !== a && e.b !== b && properCross(pts[a], pts[b], pts[e.a], pts[e.b]));
+    const joined = (a, b) => Number.isFinite(boundedTime(adj, a, b, Infinity));
+    const held = [];
+    const consider = (a, b, h, walked) => {
+      const g = guess(a, b);
+      if (a === b || have.has(key(a, b)) || boundedTime(adj, a, b, detour * g) <= detour * g)
+        return;
+      if (crosses(a, b))
+        held.push([a, b, h, walked]);
+      else
+        add(a, b, h, walked);
+    };
+    for (const e of [...trails].sort((p, q) => guess(p.a, p.b) - guess(q.a, q.b)))
+      consider(e.a, e.b, e.hours, true);
+    const pairs = [];
+    for (let a = 0; a < n; a++)
+      for (let b = a + 1; b < n; b++)
+        pairs.push([a, b, guess(a, b)]);
+    for (const [a, b, g] of pairs.sort((p, q) => p[2] - q[2]))
+      consider(a, b, g, false);
+    for (const [a, b, h, w] of held)
+      if (!have.has(key(a, b)) && !joined(a, b))
+        add(a, b, h, w);
+    return out;
+  }
+  function firstClear(p, candidates, segments) {
+    const ok = (c) => !segments.some(([P, Q]) => P !== c && Q !== c && properCross(c, p, P, Q));
+    return candidates.find(ok) ?? candidates[0];
   }
   function segCross(p1, p2, q1, q2) {
     const d = (p2.x - p1.x) * (q2.y - q1.y) - (p2.y - p1.y) * (q2.x - q1.x);
@@ -5279,23 +5305,49 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     return S.sites.some((t) => t.name === `${wname}, ${tag}`) ? `${wname}, ${bearingWord(bearing(first, { x, y }))}` : `${wname}, ${tag}`;
   }
   var placeNameFor = (u, x, y) => u.group === "water" && u.kind !== "river trace" ? waterSiteName(u.label, x, y) : u.label;
+  var DETOUR = 1.5;
+  function placeLinks() {
+    const memo = `${S.sites.length}/${JSON.stringify(S.walked)}`;
+    if (S.linkMemo?.key === memo)
+      return S.linkMemo.edges;
+    const ix = new Map(S.sites.map((t, i) => [t.key, i]));
+    const trails = Object.entries(S.walked).map(([k, w]) => {
+      const [a, b] = k.split("|").map((x) => ix.get(x));
+      return { a, b, hours: w.hours };
+    }).filter((e) => e.a !== void 0 && e.b !== void 0);
+    const edges = trailGraph(S.sites, trails, (a, b) => lineHours2(S.L, S.sites[a], S.sites[b]), { detour: DETOUR });
+    S.linkMemo = { key: memo, edges };
+    return edges;
+  }
+  var byDistance = (p) => [...S.sites].sort((s, t) => Math.hypot(s.x - p.x, s.y - p.y) - Math.hypot(t.x - p.x, t.y - p.y));
   function mentalMap() {
-    const nodes = [];
+    const nodes = [], links = placeLinks().map((e) => ({ ...e }));
     S.sites.forEach((t, i) => nodes.push({ key: t.key, name: t.name, x: t.x, y: t.y, site: i, certainty: "known" }));
+    const segs = links.map((e) => [S.sites[e.a], S.sites[e.b]]);
+    const hang = (v, prefer, kind) => {
+      const t = firstClear(v, [.../* @__PURE__ */ new Set([...prefer, ...byDistance(v)])], segs);
+      links.push({ a: S.sites.indexOf(t), b: nodes.length, kind });
+      segs.push([t, v]);
+      nodes.push(v);
+    };
     for (const u of S.suspects) {
       if (u.reached)
         continue;
-      nodes.push({ key: u.id, name: u.label, x: u.est.x, y: u.est.y, sus: u.id, water: u.group === "water", certainty: u.channel === "sound" && u.obs < 2 || u.channel === "smell" ? "unknown" : "guess" });
+      hang({ key: u.id, name: u.label, x: u.est.x, y: u.est.y, sus: u.id, water: u.group === "water", certainty: u.channel === "sound" && u.obs < 2 || u.channel === "smell" ? "unknown" : "guess" }, byDistance(u.seenAt ?? u.est).slice(0, 1), "sighting");
     }
-    for (const f of frontierPoints())
-      nodes.push({ ...f, frontier: true, certainty: "guess" });
+    for (const f of frontierPoints()) {
+      if (nodes.some((v) => v.sus && Math.hypot(v.x - f.x, v.y - f.y) < HEX_D / 3))
+        continue;
+      hang({ ...f, frontier: true, certainty: "guess" }, [], "stub");
+    }
     const streams = Object.entries(S.waterPts).filter(([, p]) => p.length >= 2).map(([key, p]) => ({ key, name: S.waterNames[key], line: streamLine(p) }));
-    const edges = meshEdges(nodes).map(([a, b]) => {
-      const A = nodes[a], B = nodes[b], w = S.walked[edgeKey(A.key, B.key)];
+    const edges = links.map(({ a, b, hours, walked, kind }) => {
+      const A = nodes[a], B = nodes[b], w = walked ? S.walked[edgeKey(A.key, B.key)] : null;
+      kind ?? (kind = walked ? "trail" : "shortcut");
       const certainty = w ? "known" : [A.certainty, B.certainty].includes("unknown") ? "unknown" : "guess";
       const sc = suspectedCrossings(A, B, streams);
       const walkedX = (w?.crossings ?? []).map((k) => ({ key: k, name: S.waterNames[k], walked: true, at: sc.find((c) => c.key === k)?.at ?? { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 } }));
-      return { a, b, hours: w ? w.hours : lineHours2(S.L, A, B), certainty, crossings: [...walkedX, ...sc.filter((c) => !walkedX.some((x) => x.key === c.key))] };
+      return { a, b, hours: hours ?? lineHours2(S.L, A, B), certainty, kind, stub: kind === "stub", crossings: [...walkedX, ...sc.filter((c) => !walkedX.some((x) => x.key === c.key))] };
     });
     return { nodes, edges, streams };
   }
@@ -5318,10 +5370,17 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const pts = hexLattice();
     const explored = (p) => S.sites.some((t) => Math.hypot(t.x - p.x, t.y - p.y) < 0.75 * HEX_D);
     const ex = new Set(pts.filter(explored).map((p) => p.i));
-    const out = [], used = /* @__PURE__ */ new Set();
+    const cx = S.sites.reduce((s, t) => s + t.x, 0) / S.sites.length, cy = S.sites.reduce((s, t) => s + t.y, 0) / S.sites.length;
+    const pick2 = /* @__PURE__ */ new Map();
     for (const p of pts) {
       if (ex.has(p.i) || !pts.some((q) => ex.has(q.i) && Math.hypot(q.x - p.x, q.y - p.y) < 1.15 * HEX_D))
         continue;
+      const sector = Math.round(bearing({ x: cx, y: cy }, p) / 45) % 8, d = Math.min(...S.sites.map((t) => Math.hypot(t.x - p.x, t.y - p.y)));
+      if (!pick2.has(sector) || d < pick2.get(sector)[1])
+        pick2.set(sector, [p, d]);
+    }
+    const out = [], used = /* @__PURE__ */ new Set();
+    for (const [p] of [...pick2.values()].sort((a, b) => a[0].i - b[0].i)) {
       const near = S.sites.reduce((a, b) => Math.hypot(b.x - p.x, b.y - p.y) < Math.hypot(a.x - p.x, a.y - p.y) ? b : a);
       let name = `the unknown ${WIND16[Math.round(bearing(near, p) / 22.5) % 16]}`;
       for (let k = 2; used.has(name); k++)
@@ -5332,6 +5391,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     return out;
   }
   function mapHours(from, key, target) {
+    if (S.walked[edgeKey(from.key, key)])
+      return S.walked[edgeKey(from.key, key)].hours;
     const M2 = mentalMap();
     const a = M2.nodes.findIndex((v) => v.key === from.key), b = M2.nodes.findIndex((v) => v.key === key);
     const e = M2.edges.find((x) => x.a === a && x.b === b || x.a === b && x.b === a);
@@ -5365,15 +5426,20 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     let sus = S.suspects.find((u) => u.trueKey === (wkey ?? c.key));
     if (sus) {
       sus.obs++;
+      noteSeenFrom(sus, from);
       return { sus, isNew: false };
     }
     const w = windNow(), dir = (w.from + S.rng.normal(0, 25)) * Math.PI / 180, dist = c.trueDist * Math.exp(S.rng.normal(0, 0.6)) / CELL;
     const est = { x: clamp(Math.round(from.x + Math.sin(dir) * dist), 0, N - 1), y: clamp(Math.round(from.y - Math.cos(dir) * dist), 0, N - 1) };
     S.lastTag = null;
     const label = wkey ? waterName(wkey, "lake", est) : uniqueName(SMELL_NOUN[c.kind] ?? "smell", est, []);
-    sus = { id: `u${S.suspects.length + 1}`, kind: wkey ? "lake" : c.kind, group: wkey ? "water" : "smell", trueKey: wkey ?? c.key, truePos: { x: c.x, y: c.y }, est, channel: "smell", obs: 1, label, reached: false, source: c.source };
+    sus = { id: `u${S.suspects.length + 1}`, kind: wkey ? "lake" : c.kind, group: wkey ? "water" : "smell", trueKey: wkey ?? c.key, truePos: { x: c.x, y: c.y }, est, seenAt: { x: from.x, y: from.y }, channel: "smell", obs: 1, label, reached: false, source: c.source };
     S.suspects.push(sus);
     return { sus, isNew: true };
+  }
+  function noteSeenFrom(sus, from) {
+    if (!sus.seenAt || Math.hypot(from.x - sus.est.x, from.y - sus.est.y) < Math.hypot(sus.seenAt.x - sus.est.x, sus.seenAt.y - sus.est.y))
+      sus.seenAt = { x: from.x, y: from.y };
   }
   function associate(c, from) {
     var _a;
@@ -5384,6 +5450,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       const w = c.channel === "sight" ? 0.6 : 0.3;
       sus.est = { x: Math.round(sus.est.x * (1 - w) + g.est.x * w), y: Math.round(sus.est.y * (1 - w) + g.est.y * w) };
       sus.obs++;
+      noteSeenFrom(sus, from);
       return { sus, isNew: false, g };
     }
     const named = isWaterKind(c.kind) && c.kind !== "river trace";
@@ -5400,7 +5467,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       ((_a = S.landNamed ?? (S.landNamed = {}))[noun] ?? (_a[noun] = [])).push({ site: site()?.key, label });
     if (named && c.channel === "sight")
       notePoint(waterKeyOf(c.key), g.est);
-    sus = { id: `u${S.suspects.length + 1}`, kind: c.kind, group: kindGroup, trueKey: c.key, truePos: { x: c.x, y: c.y }, est: g.est, channel: c.channel, obs: 1, label, reached: false, another };
+    sus = { id: `u${S.suspects.length + 1}`, kind: c.kind, group: kindGroup, trueKey: c.key, truePos: { x: c.x, y: c.y }, est: g.est, seenAt: { x: from.x, y: from.y }, channel: c.channel, obs: 1, label, reached: false, another };
     S.suspects.push(sus);
     return { sus, isNew: true, g };
   }
@@ -5582,6 +5649,39 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const k = edgeKey(fromKey, toKey), old = S.walked[k];
     S.walked[k] = { hours: old ? 0.5 * (old.hours + hours) : hours, crossings: [.../* @__PURE__ */ new Set([...old?.crossings ?? [], ...keys])] };
   }
+  var PASS_R = 2;
+  function rememberTrip(from, path, hours, crossings, knownBefore) {
+    const end = site(), stops = [{ i: 0, s: from }];
+    for (const t of S.sites.slice(0, knownBefore)) {
+      if (t === from || t === end)
+        continue;
+      let bi = -1, bd = Infinity;
+      for (let i = 1; i < path.length - 1; i++) {
+        const d = Math.hypot(path[i].x - t.x, path[i].y - t.y);
+        if (d < bd) {
+          bd = d;
+          bi = i;
+        }
+      }
+      if (bd <= PASS_R)
+        stops.push({ i: bi, s: t });
+    }
+    stops.sort((a, b) => a.i - b.i);
+    stops.push({ i: path.length - 1, s: end });
+    const est = stops.slice(1).map((b, k) => {
+      let h = 0;
+      for (let i = stops[k].i + 1; i <= b.i; i++)
+        h += stepHours(S.L, path[i - 1], path[i]);
+      return h;
+    });
+    const total = est.reduce((x, y) => x + y, 0);
+    const at = crossings.map((c) => ({ i: path.findIndex((p) => p.x === c.x && p.y === c.y), key: waterKeyAt(S.L, c.x, c.y) })).filter((c) => c.key);
+    stops.slice(1).forEach((b, k) => {
+      const a = stops[k];
+      const keys = [...new Set(at.filter((c) => c.i > a.i && c.i <= b.i).map((c) => c.key))];
+      rememberLeg(a.s.key, b.s.key, Math.max(0.02, total ? hours * est[k] / total : hours / est.length), keys);
+    });
+  }
   function targetInfo(target) {
     const sus = S.suspects.find((u) => u.id === target.suspect);
     const dest = target.site !== void 0 ? S.sites[target.site] : null;
@@ -5640,6 +5740,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     } : null;
     const predicted = mapHours(from, sus ? sus.id : dest ? dest.key : target.frontier, target);
     const trip = walk(S.L, from, target, { rng: S.rng, maxHours: 3, resense, stopAtWater: thirsty, driftSd: dest ? 1.5 : 2.5 });
+    const knownBefore = S.sites.length;
     const hours = trip.hours * (S.looking ? 1.25 : 1);
     if (S.looking)
       S.ch.focus = clamp(S.ch.focus - 0.05);
@@ -5654,7 +5755,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       notePassing(trip.path);
       lookAlong(trip.path);
     });
-    rememberLeg(from.key, site().key, hours, keys);
+    rememberTrip(from, trip.path, hours, trip.crossings, knownBefore);
     if (!reached)
       missedTarget(target, from);
     else if (predicted) {
@@ -6747,7 +6848,7 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
       const dir = bearingWord(bearing(s, best));
       let u = S.suspects.find((v) => v.kind === "patch" && Math.hypot(v.truePos.x - best.x, v.truePos.y - best.y) < 3);
       if (!u)
-        S.suspects.push(u = { id: `u${S.suspects.length + 1}`, kind: "patch", group: "patch", trueKey: `patch-${best.x}-${best.y}`, truePos: { x: best.x, y: best.y }, est: { x: best.x, y: best.y }, channel: "sight", obs: 1, label: uniqueName(SITE_NOUN[microAt(best.x, best.y)] ?? "patch", best, []), reached: false });
+        S.suspects.push(u = { id: `u${S.suspects.length + 1}`, kind: "patch", group: "patch", trueKey: `patch-${best.x}-${best.y}`, truePos: { x: best.x, y: best.y }, est: { x: best.x, y: best.y }, seenAt: { x: s.x, y: s.y }, channel: "sight", obs: 1, label: uniqueName(SITE_NOUN[microAt(best.x, best.y)] ?? "patch", best, []), reached: false });
       lines.push(`nothing here, but ${F.nearLabel} ${timeWords(lineHours2(S.L, s, best))} ${dir} (${u.label})`);
     } else
       lines.push(`nothing here, and no ${F.nearLabel} anywhere close`);
@@ -7067,7 +7168,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         ang -= 180;
       if (ang < -90)
         ang += 180;
-      return `<line class="edge ${e.certainty}" x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke-width="${fs * 0.12}"><title>${esc(typo(`${cap3(A.name)} \u2013 ${B.name}: ${timeWords(e.hours, e.certainty)}${e.crossings.length ? `, crossing ${e.crossings.map((c) => c.name).join(" and ")}` : ""}`))}</title></line>` + (len > span / 9 ? `<text class="etime" x="${mx}" y="${my}" dy="${-fs * 0.3}" font-size="${fs * 0.7}" text-anchor="middle" transform="rotate(${ang.toFixed(1)} ${mx} ${my})">${esc(timeWords(e.hours, e.certainty))}</text>` : "") + e.crossings.map((c) => `<circle class="xing${c.walked ? " walked" : ""}" cx="${c.at.x}" cy="${c.at.y}" r="${fs * 0.32}"><title>${esc(typo(`${c.walked ? "Crossed" : "Probably crosses"} ${c.name}`))}</title></circle>`).join("");
+      return `<line class="edge ${e.certainty}${e.stub ? " stub" : ""}" data-link="${e.kind}" data-a="${e.a}" data-b="${e.b}" x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke-width="${fs * 0.12}"><title>${esc(typo(`${cap3(A.name)} \u2013 ${B.name}: ${timeWords(e.hours, e.certainty)}${e.crossings.length ? `, crossing ${e.crossings.map((c) => c.name).join(" and ")}` : ""}`))}</title></line>` + (len > span / 9 ? `<text class="etime" x="${mx}" y="${my}" dy="${-fs * 0.3}" font-size="${fs * 0.7}" text-anchor="middle" transform="rotate(${ang.toFixed(1)} ${mx} ${my})">${esc(timeWords(e.hours, e.certainty))}</text>` : "") + e.crossings.map((c) => `<circle class="xing${c.walked ? " walked" : ""}" cx="${c.at.x}" cy="${c.at.y}" r="${fs * 0.32}"><title>${esc(typo(`${c.walked ? "Crossed" : "Probably crosses"} ${c.name}`))}</title></circle>`).join("");
     }).join("");
     const Nd = M2.nodes.map((v, i) => {
       const e = M2.edges.find((x) => x.a === hi && x.b === i || x.b === hi && x.a === i);
@@ -7468,7 +7569,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       wheelTimer = setTimeout(render, 160);
     }, { passive: false });
   }
-  var BUILD = "hk-2026-10-21d";
+  var BUILD = "hk-2026-10-21e";
   function record(d) {
     S.record ?? (S.record = []);
     S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
