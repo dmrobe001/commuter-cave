@@ -15,10 +15,12 @@ function cross(p1, p2, q1, q2) { // proper crossing of two segments that share n
 function measure(d) {
   const svg = d.querySelector('.mapsvg');
   if (!svg) return null;
-  const nodes = [...svg.querySelectorAll('.node')].map(g => { const c = g.querySelector('circle'); return { x: +c.getAttribute('cx'), y: +c.getAttribute('cy'), site: g.classList.contains('site'), sus: g.classList.contains('sus') }; });
-  // nodes by position: markers, plus link ends at places drawn without a marker (by a stream)
-  const at = (x, y) => { let i = nodes.findIndex(v => Math.abs(v.x - x) < 1e-6 && Math.abs(v.y - y) < 1e-6); if (i < 0) { nodes.push({ x, y, site: false }); i = nodes.length - 1; } return i; };
-  const edges = [...svg.querySelectorAll('line.edge')].map(l => ({ a: at(+l.getAttribute('x1'), +l.getAttribute('y1')), b: at(+l.getAttribute('x2'), +l.getAttribute('y2')), kind: l.dataset.link }));
+  // nodes by their index in the map (data-i on markers, data-a/b on links); places drawn without a
+  // marker (by a stream or lake) are known only as link ends, at the link's coordinates
+  const byIndex = new Map([...svg.querySelectorAll('.node')].map(g => { const c = g.querySelector('circle'); return [+g.dataset.i, { x: +c.getAttribute('cx'), y: +c.getAttribute('cy'), site: g.classList.contains('site'), sus: g.classList.contains('sus') }]; }));
+  for (const l of svg.querySelectorAll('line.edge')) for (const [k, x, y] of [['a', 'x1', 'y1'], ['b', 'x2', 'y2']]) if (!byIndex.has(+l.dataset[k])) byIndex.set(+l.dataset[k], { x: +l.getAttribute(x), y: +l.getAttribute(y), site: false });
+  const keys = [...byIndex.keys()], nodes = keys.map(k => byIndex.get(k)), pos = new Map(keys.map((k, i) => [k, i]));
+  const edges = [...svg.querySelectorAll('line.edge')].map(l => ({ a: pos.get(+l.dataset.a), b: pos.get(+l.dataset.b), kind: l.dataset.link }));
   const kind = e => e.kind;
   let crossings = 0; const byKind = {};
   for (let i = 0; i < edges.length; i++) for (let j = i + 1; j < edges.length; j++) {

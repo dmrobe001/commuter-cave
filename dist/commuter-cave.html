@@ -136,6 +136,14 @@ button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 6
 .mapsvg .stream .flow { stroke: var(--water); stroke-linecap: round; stroke-dasharray: calc(.6 * var(--u)) calc(.35 * var(--u)); }
 .mapsvg .stream .flow.lone { stroke-dasharray: none; }
 .mapsvg .stream .flow.known { stroke-dasharray: none; }
+.mapsvg .feature { cursor: pointer; }
+.mapsvg .feature.lake { opacity: .55; } /* the whole lake faded at once, so overlapping cells don't darken */
+.mapsvg .feature.lake rect { fill: var(--water); }
+.mapsvg .feature.cliff .face, .mapsvg .feature.cliff .tick { stroke: var(--ink); fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
+.mapsvg .feature .hit { stroke: transparent; fill: none; pointer-events: stroke; }
+.mapsvg .flabel { fill: var(--muted); font-style: italic; paint-order: stroke; stroke: var(--bg); stroke-width: calc(.25 * var(--u)); pointer-events: none; }
+.mapsvg .flabel.lake { fill: var(--water); }
+.mapsvg .node.site.spring circle:not(.hit) { fill: var(--water); stroke: var(--water); }
 .mapsvg .follow { cursor: pointer; }
 .mapsvg .follow line:not(.hit), .mapsvg .follow path { stroke: var(--water); fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .mapsvg .follow .hit { stroke: transparent; pointer-events: stroke; }
@@ -5322,6 +5330,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     first.name = "where I woke";
     S.here = 0;
     look(first, 0.5);
+    markSeen(first.x, first.y, 20, { eye: 1.7 });
+    noteSeenFeatures();
     sense(first);
     log("I know how fire, tools and shelter work in principle. I have none of them. Water first, then fire.", "thought");
   }
@@ -5342,7 +5352,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   }
   var SITE_NOUN = { woodland: "wood", edge: "thicket", glade: "clearing", streambank: "stream bank", streambed: "gravel bar", pond: "marsh", outcrop: "rocks", scree: "scree", claybank: "clay bank", spring: "spring", deadfall: "deadfall" };
   var LANDMARK_NOUN = { hill: "hill", cliff: "cliff", lake: "lake", waterfowl: "lake", falls: "falls", cascade: "cascade", rapids: "river", river: "river", stream: "stream", brook: "brook", "river trace": "tree line" };
-  var namesInUse = () => /* @__PURE__ */ new Set([...S.sites.map((t) => t.name), ...S.suspects.map((u) => u.label), ...Object.values(S.waterNames)]);
+  var namesInUse = () => /* @__PURE__ */ new Set([...S.sites.map((t) => t.name), ...S.suspects.map((u) => u.label), ...Object.values(S.waterNames), ...Object.values(S.cliffNames ?? {})]);
   function looksOf(kind, x, y) {
     const c = cellOf(x, y), veg = S.L.veg[c], tags = [];
     if (kind === "hill") {
@@ -5413,11 +5423,11 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     if (b.size < a.size)
       return false;
     const way = bearing(a, b);
-    if (a.flow != null && angDiff(way, a.flow) > 75 || b.flow != null && angDiff(way, b.flow) > 75)
+    if (a.flow != null && angDiff(way, a.flow) > 85 || b.flow != null && angDiff(way, b.flow) > 85)
       return false;
     for (let i = 1; i < d; i++) {
       const t = i / d;
-      if (S.L.elev[cellOf(Math.round(a.x + (b.x - a.x) * t), Math.round(a.y + (b.y - a.y) * t))] > a.elev + (b.elev - a.elev) * t + 2)
+      if (S.L.elev[cellOf(Math.round(a.x + (b.x - a.x) * t), Math.round(a.y + (b.y - a.y) * t))] > a.elev + (b.elev - a.elev) * t + 5)
         return false;
     }
     return true;
@@ -5427,7 +5437,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     for (const st of S.streams) {
       for (const f of st.fixes) {
         const d = Math.hypot(f.x - fix.x, f.y - fix.y);
-        const sc = d <= 2.5 ? d : f.size === fix.size && (flowsTo(f, fix) || flowsTo(fix, f)) ? d + 3 : Infinity;
+        const sc = d <= 2.5 ? d : Math.abs(f.size - fix.size) <= 1 && (flowsTo(f, fix) || flowsTo(fix, f)) ? d + 3 : Infinity;
         if (sc < score) {
           score = sc;
           best = st;
@@ -5534,8 +5544,12 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       return "spring";
     return null;
   }
+  var lakeside = (t) => NB8.some(([dx, dy]) => {
+    const x = t.x + dx, y = t.y + dy;
+    return x >= 0 && y >= 0 && x < N && y < N && S.L.lake[cellOf(x, y)];
+  });
   function unmarked(t) {
-    if (!(S.L.chan[cellOf(t.x, t.y)] || ["streambank", "streambed"].includes(t.micro)))
+    if (!(S.L.chan[cellOf(t.x, t.y)] || ["streambank", "streambed"].includes(t.micro) || lakeside(t)))
       return false;
     return !(waterMark(t) || t.name === "where I woke" || t.hut || t.fireUntil > 0 || t.renamed || t === site());
   }
@@ -5556,7 +5570,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   var byDistance = (p) => [...S.sites].sort((s, t) => Math.hypot(s.x - p.x, s.y - p.y) - Math.hypot(t.x - p.x, t.y - p.y));
   function mentalMap() {
     const nodes = [], links = placeLinks().map((e) => ({ ...e }));
-    S.sites.forEach((t, i) => nodes.push({ key: t.key, name: t.name, x: t.x, y: t.y, site: i, certainty: "known", unmarked: unmarked(t) }));
+    S.sites.forEach((t, i) => nodes.push({ key: t.key, name: t.name, x: t.x, y: t.y, site: i, certainty: "known", unmarked: unmarked(t), spring: waterMark(t) === "spring" }));
     const segs = links.map((e) => [S.sites[e.a], S.sites[e.b]]);
     const hang = (v, prefer, kind) => {
       const t = firstClear(v, [.../* @__PURE__ */ new Set([...prefer, ...byDistance(v)])], segs);
@@ -5564,8 +5578,9 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       segs.push([t, v]);
       nodes.push(v);
     };
+    const shown = new Set([...seenPieces("lake"), ...seenPieces("cliff")].map((q) => q.key));
     for (const u of S.suspects) {
-      if (u.reached || u.lost)
+      if (u.reached || u.lost || shown.has(u.group === "water" ? waterKeyOf(u.trueKey) : u.trueKey))
         continue;
       hang({ key: u.id, name: u.label, x: u.est.x, y: u.est.y, sus: u.id, water: u.group === "water", certainty: u.channel === "sound" && u.obs < 2 || u.channel === "smell" ? "unknown" : "guess" }, byDistance(u.seenAt ?? u.est).slice(0, 1), "sighting");
     }
@@ -5695,6 +5710,10 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       sus.lost = false;
       sus.obs++;
       noteSeenFrom(sus, from);
+      if (c.channel === "sight" && (c.kind === "cliff" || c.kind === "lake")) {
+        revealFeature(c.key, from, senseEye);
+        noteSeenFeatures();
+      }
       return { sus, isNew: false, g };
     }
     const named = isWaterKind(c.kind) && c.kind !== "river trace";
@@ -5704,7 +5723,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const known = named && (heardSize ? !!knownStream : S.waterNames[waterKeyOf(c.key)]);
     S.lastTag = null;
     const heard = heardSize ? knownStream ?? newStream(heardSize, g.est) : null;
-    const label = heard ? heard.name : named ? waterName(waterKeyOf(c.key), c.kind, g.est) : uniqueName(LANDMARK_NOUN[c.kind] ?? c.kind, g.est, looksOf(c.kind, c.x, c.y));
+    const label = heard ? heard.name : named ? waterName(waterKeyOf(c.key), c.kind, g.est) : S.cliffNames?.[c.key] ?? uniqueName(LANDMARK_NOUN[c.kind] ?? c.kind, g.est, looksOf(c.kind, c.x, c.y));
     const noun = named ? label.split(" ").pop() : LANDMARK_NOUN[c.kind] ?? c.kind, recent = (S.mem.trail ?? []).slice(-2);
     let another = null;
     if (!known && S.lastTag && (S.landNamed?.[noun] ?? []).some((x) => recent.includes(x.site) && x.label !== label)) {
@@ -5717,9 +5736,15 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     S.suspects.push(sus);
     if (heard && !heard.fixes.length && !heard.sus)
       heard.sus = sus.id;
+    if (c.channel === "sight" && (c.kind === "cliff" || c.kind === "lake")) {
+      revealFeature(c.key, from, senseEye);
+      noteSeenFeatures();
+    }
     return { sus, isNew: true, g };
   }
+  var senseEye = 1.7;
   function sense(s, lookout = false, { scan = false, focus = null } = {}) {
+    senseEye = lookout ? lookoutEye(S.L, s) : 1.7;
     let all = perceive(S.L, s, { time: timeOfDay(), lookout, boost: scan ? 1.6 : focus === "water" ? 1.4 : 1 });
     if (focus)
       all = all.filter((c) => isWaterKind(c.kind) || focus === "lookout" && ["hill", "cliff"].includes(c.kind));
@@ -5782,6 +5807,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     markSeen(x, y, 20, { eye: 1.7 });
     if (S.L.chan[cellOf(x, y)])
       addFix({ x, y }, "stood", S.travelHint);
+    noteSeenFeatures();
     noteTrail(S.mem, s.key);
     S.here = S.sites.indexOf(s);
     if (how)
@@ -5945,8 +5971,8 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const sus = S.suspects.find((u) => u.id === target.suspect);
     const dest = target.site !== void 0 ? S.sites[target.site] : null;
     const fr = target.frontier ? frontierPoints().find((f) => f.key === target.frontier) : null;
-    const st = target.stream ? S.streams.find((x) => x.id === target.stream) : null;
-    return { sus, dest, fr, st, truePos: sus?.truePos ?? dest ?? fr ?? (st ? { x: target.x, y: target.y } : null), name: sus?.label ?? dest?.name ?? fr?.name ?? st?.name ?? "there" };
+    const st = target.stream ? S.streams.find((x) => x.id === target.stream) : null, area = target.lake || target.cliff;
+    return { sus, dest, fr, st, area, truePos: sus?.truePos ?? dest ?? fr ?? (st || area ? { x: target.x, y: target.y } : null), name: sus?.label ?? dest?.name ?? fr?.name ?? st?.name ?? target.label ?? "there" };
   }
   function onWater(p, want) {
     if (S.L.chan[cellOf(p.x, p.y)] && waterKeyAt(S.L, p.x, p.y) === want)
@@ -6085,7 +6111,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     }
     const thirsty = S.hyd < 0.55;
     let n = 0;
-    const { sus, dest, st, truePos } = targetInfo(target);
+    const { sus, dest, st, area, truePos } = targetInfo(target);
     const resense = sus ? (p, force) => {
       if (++n % 3 && !force)
         return null;
@@ -6093,8 +6119,8 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       return c ? suspicionFrom(c, p, S.rng).est : null;
     } : null;
     const want = sus?.group === "water" ? waterKeyOf(sus.trueKey) : null;
-    const arrived = sus ? (p) => want && /^(lake|river|brook)-/.test(want) ? onWater(p, want) : atTarget(p, { truePos, sus }) : st ? (p) => !!S.L.chan[cellOf(p.x, p.y)] && (Math.hypot(p.x - target.x, p.y - target.y) <= 3 || matchStream(makeFix(p)) === st) : null;
-    const predicted = mapHours(from, sus ? sus.id : dest ? dest.key : target.frontier ?? `stream:${target.stream}`, target);
+    const arrived = sus ? (p) => want && /^(lake|river|brook)-/.test(want) ? onWater(p, want) : atTarget(p, { truePos, sus }) : st ? (p) => !!S.L.chan[cellOf(p.x, p.y)] && (Math.hypot(p.x - target.x, p.y - target.y) <= 3 || matchStream(makeFix(p)) === st) : target.lake ? (p) => onWater(p, target.lake) : target.cliff ? (p) => Math.hypot(p.x - target.x, p.y - target.y) <= 2 : null;
+    const predicted = mapHours(from, sus ? sus.id : dest ? dest.key : target.frontier ?? `stream:${target.stream ?? area}`, target);
     const trip = walk(S.L, from, target, { rng: S.rng, maxHours: 3, resense, arrived, stopAtWater: thirsty, driftSd: dest ? 1.5 : 2.5 });
     const knownBefore = S.sites.length;
     const hours = trip.hours * (S.looking ? 1.25 : 1);
@@ -6110,7 +6136,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const crossed = names.filter((_, i) => before.has(keys[i]));
     const where = S.L.veg[cellOf(trip.end.x, trip.end.y)] > 0.55 ? "thick woodland" : S.L.veg[cellOf(trip.end.x, trip.end.y)] > 0.3 ? "scrubby woodland" : "open ground";
     const text = `${S.looking ? "Walked, watching for " + S.looking.label + "," : "Pushed"} ${label} for ${dur}, through ${where}${crossed.length ? `; crossed ${crossed.join(" and ")}` : ""}.${stoppedAtWater ? " Parched, I stopped at the water." : ""}${hours >= 2.9 && !stoppedAtWater ? " Stopped to get my bearings." : ""}`;
-    const reached = st ? arrived(trip.end) : atTarget(trip.end, targetInfo(target));
+    const reached = st || area ? arrived(trip.end) : atTarget(trip.end, targetInfo(target));
     arrive(trip.end.x, trip.end.y, text, () => {
       notePassing(trip.path);
       lookAlong(trip.path);
@@ -6121,8 +6147,11 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       if (i % 2 === 0)
         markSeen(p.x, p.y, 3);
     });
+    noteSeenFeatures();
     if (!reached && st)
       missedStream(target, st);
+    else if (!reached && area)
+      log(`Didn\u2019t reach ${target.label}. By my reckoning it\u2019s ${awayWords(lineHours2(S.L, site(), target), "guess")}, to the ${bearingWord(bearing(site(), target))}.`, "thought");
     else if (!reached)
       missedTarget(target, from);
     else if (predicted) {
@@ -7571,6 +7600,131 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     S.landMemo = { key, url: cv.toDataURL() };
     return S.landMemo.url;
   }
+  var SEEN = 128;
+  var isCliff = (c) => S.L.slope[c] > 0.35;
+  function cliffIndex() {
+    if (S.L._escOf)
+      return S.L._escOf;
+    const esc2 = new Int16Array(N * N).fill(-1), seen = new Uint8Array(N * N);
+    for (let c0 = 0; c0 < N * N; c0++) {
+      if (!isCliff(c0) || seen[c0])
+        continue;
+      const g = [c0];
+      seen[c0] = 1;
+      for (let k = 0; k < g.length; k++)
+        for (const [dx, dy] of NB8) {
+          const x = g[k] % N + dx, y = Math.floor(g[k] / N) + dy, n = cellOf(x, y);
+          if (x >= 0 && y >= 0 && x < N && y < N && !seen[n] && isCliff(n)) {
+            seen[n] = 1;
+            g.push(n);
+          }
+        }
+      const cx = g.reduce((a, c) => a + c % N, 0) / g.length, cy = g.reduce((a, c) => a + Math.floor(c / N), 0) / g.length;
+      const i = S.L.features.escarpments.findIndex((e) => e.cells === g.length && e.x === Math.round(cx) && e.y === Math.round(cy));
+      if (i >= 0)
+        for (const c of g)
+          esc2[c] = i;
+    }
+    return S.L._escOf = esc2;
+  }
+  function revealFeature(key, from, eye) {
+    const esc2 = cliffIndex(), cliff = key.startsWith("cliff-"), want = cliff ? +key.slice(6) : key;
+    S.seenLand ?? (S.seenLand = new Uint8Array(N * N));
+    let changed = false;
+    for (let c = 0; c < N * N; c++) {
+      if (cliff ? esc2[c] !== want : !(S.L.lake[c] && waterKeyAt(S.L, c % N, Math.floor(c / N)) === want))
+        continue;
+      if (S.seenLand[c] >= 255)
+        continue;
+      const q = { x: c % N, y: Math.floor(c / N) };
+      if (Math.hypot(q.x - from.x, q.y - from.y) * CELL > 4e3)
+        continue;
+      if (sightline(S.L, { x: Math.round(from.x), y: Math.round(from.y) }, q, eye, cliff ? 8 : 0.5) > 0.1) {
+        S.seenLand[c] = 255;
+        changed = true;
+      }
+    }
+    if (changed)
+      S.seenVer = (S.seenVer ?? 0) + 1;
+  }
+  function noteSeenFeatures() {
+    if ((S.namedVer ?? -1) === (S.seenVer ?? 0))
+      return;
+    S.namedVer = S.seenVer ?? 0;
+    const esc2 = cliffIndex();
+    S.cliffNames ?? (S.cliffNames = {});
+    for (let c = 0; c < N * N; c++) {
+      if ((S.seenLand?.[c] ?? 0) < SEEN)
+        continue;
+      const x = c % N, y = Math.floor(c / N);
+      if (S.L.lake[c]) {
+        const key = waterKeyAt(S.L, x, y);
+        if (!S.waterNames[key])
+          waterName(key, "lake", { x, y });
+      } else if (esc2[c] >= 0 && !S.cliffNames[`cliff-${esc2[c]}`]) {
+        const key = `cliff-${esc2[c]}`, u = S.suspects.find((v) => v.trueKey === key);
+        S.cliffNames[key] = u ? u.label : uniqueName("cliff", { x, y }, looksOf("cliff", x, y));
+      }
+    }
+  }
+  function seenPieces(kind) {
+    const memo = `${kind}/${S.seenVer ?? 0}`;
+    if (S.pieceMemo?.[kind]?.key === memo)
+      return S.pieceMemo[kind].pieces;
+    const esc2 = cliffIndex(), test = kind === "lake" ? (c) => S.L.lake[c] : (c) => esc2[c] >= 0, done = new Uint8Array(N * N), pieces = [];
+    for (let c0 = 0; c0 < N * N; c0++) {
+      if (done[c0] || !test(c0) || (S.seenLand?.[c0] ?? 0) < SEEN)
+        continue;
+      const g = [c0];
+      done[c0] = 1;
+      for (let k = 0; k < g.length; k++)
+        for (const [dx, dy] of NB8) {
+          const x = g[k] % N + dx, y = Math.floor(g[k] / N) + dy, n = cellOf(x, y);
+          if (x >= 0 && y >= 0 && x < N && y < N && !done[n] && test(n) && (S.seenLand[n] ?? 0) >= SEEN && (kind === "lake" || esc2[n] === esc2[c0])) {
+            done[n] = 1;
+            g.push(n);
+          }
+        }
+      if (kind === "cliff" && g.length < 3)
+        continue;
+      const cells = g.map((c) => ({ x: c % N, y: Math.floor(c / N) })), key = kind === "lake" ? waterKeyAt(S.L, cells[0].x, cells[0].y) : `cliff-${esc2[c0]}`;
+      pieces.push({ id: `${kind}:${cells[0].x}_${cells[0].y}`, kind, key, cells, name: (kind === "lake" ? S.waterNames[key] : S.cliffNames?.[key]) ?? `the ${kind}`, x: cells.reduce((a, q) => a + q.x, 0) / cells.length, y: cells.reduce((a, q) => a + q.y, 0) / cells.length });
+    }
+    (S.pieceMemo ?? (S.pieceMemo = {}))[kind] = { key: memo, pieces };
+    return pieces;
+  }
+  function cliffLine(piece) {
+    const { cells } = piece, mx = piece.x, my = piece.y;
+    let sxx = 0, syy = 0, sxy = 0;
+    for (const q of cells) {
+      sxx += (q.x - mx) ** 2;
+      syy += (q.y - my) ** 2;
+      sxy += (q.x - mx) * (q.y - my);
+    }
+    const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), ux = Math.cos(ang), uy = Math.sin(ang), along = (q) => (q.x - mx) * ux + (q.y - my) * uy;
+    const bins = /* @__PURE__ */ new Map();
+    for (const q of cells) {
+      const b = Math.round(along(q) / 2.5);
+      const a = bins.get(b) ?? { x: 0, y: 0, n: 0 };
+      a.x += q.x;
+      a.y += q.y;
+      a.n++;
+      bins.set(b, a);
+    }
+    const pts = [...bins.entries()].sort((a, b) => a[0] - b[0]).map(([, a]) => ({ x: a.x / a.n, y: a.y / a.n }));
+    if (pts.length === 1)
+      pts.unshift({ x: pts[0].x - ux, y: pts[0].y - uy }), pts.push({ x: pts[1].x + ux * 2, y: pts[1].y + uy * 2 });
+    const el = (x, y) => S.L.elev[cellOf(clamp(Math.round(x), 0, N - 1), clamp(Math.round(y), 0, N - 1))];
+    const down = el(mx - uy * 3, my + ux * 3) < el(mx + uy * 3, my - ux * 3) ? 1 : -1;
+    return { pts, nx: -uy * down, ny: ux * down };
+  }
+  function headForFeature(id) {
+    const kind = id.split(":")[0], piece = seenPieces(kind).find((q) => q.id === id), from = site();
+    if (!piece)
+      return;
+    const near = piece.cells.reduce((a, q) => Math.hypot(q.x - from.x, q.y - from.y) < Math.hypot(a.x - from.x, a.y - from.y) ? q : a);
+    travelTo({ x: near.x, y: near.y, [kind]: piece.key, label: piece.name }, `toward ${piece.name}`);
+  }
   var LAND_MODES = { seen: "Land: as I\u2019ve seen it", all: "Land: the whole map", off: "Land: none" };
   var MAP_PX = 15;
   function mapSide() {
@@ -7609,13 +7763,29 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, w = fs * 2.2;
       return [{ x0: mx - w / 2, y0: my - fs * 0.8, x1: mx + w / 2, y1: my + fs * 0.2 }];
     });
-    const spots = placeLabels(shown.map(({ i, text }) => ({ x: M2.nodes[i].x, y: M2.nodes[i].y, r: radius(i), w: textW(text), h: fs })), {
+    const lakes = seenPieces("lake"), cliffs = seenPieces("cliff").map((q) => ({ ...q, line: cliffLine(q) }));
+    const biggest = /* @__PURE__ */ new Map();
+    for (const q of [...lakes, ...cliffs])
+      if (!biggest.has(q.key) || biggest.get(q.key).cells.length < q.cells.length)
+        biggest.set(q.key, q);
+    const featureText = [...biggest.values()].map((q) => ({ q, text: typo(q.name.replace(/^the /, "")), at: q.kind === "lake" ? { x: q.x, y: q.y } : q.line.pts[Math.floor(q.line.pts.length / 2)] }));
+    const spots = placeLabels(shown.map(({ i, text }) => ({ x: M2.nodes[i].x, y: M2.nodes[i].y, r: radius(i), w: textW(text), h: fs })).concat(featureText.map((f) => ({ x: f.at.x, y: f.at.y, r: fs * 0.3, w: textW(f.text) * 0.9, h: fs * 0.9 }))), {
       boxes: timeBoxes,
       segs: M2.edges.map((e) => [M2.nodes[e.a], M2.nodes[e.b]]).concat(trees.flatMap((t) => t.segs)),
       discs: M2.nodes.filter((v) => !v.unmarked).map((v) => ({ x: v.x, y: v.y, r: radius(M2.nodes.indexOf(v)) })),
       bounds: { x0, y0, x1: x0 + span, y1: y0 + span }
     });
     const labelOf = new Map(shown.map((l, k) => [l.i, `<text x="${spots[k].x0}" y="${spots[k].y1 - fs * 0.22}" font-size="${fs}">${esc(l.text)}</text>`]));
+    const featureLabels = featureText.map((f, k) => {
+      const b = spots[shown.length + k];
+      return `<text class="flabel ${f.q.kind}" x="${b.x0}" y="${b.y1 - fs * 0.2}" font-size="${fs * 0.9}">${esc(f.text)}</text>`;
+    }).join("");
+    const area = (q) => `<g class="feature ${q.kind}" data-hike="${q.id}" role="button" tabindex="0" aria-label="${esc(typo(`Head for ${q.name} (${timeWords(lineHours2(S.L, here, q.cells.reduce((a, c) => Math.hypot(c.x - here.x, c.y - here.y) < Math.hypot(a.x - here.x, a.y - here.y) ? c : a)), "guess")})`))}"><title>${esc(typo(cap3(q.name)))}</title>`;
+    const Lk = lakes.map((q) => area(q) + q.cells.map((c) => `<rect x="${c.x - 0.7}" y="${c.y - 0.7}" width="1.4" height="1.4" rx="0.7"/>`).join("") + "</g>").join("");
+    const Cl = cliffs.map((q) => {
+      const { pts, nx, ny } = q.line, d = pts.map((p, k) => `${k ? "L" : "M"}${p.x} ${p.y}`).join(""), t = fs * 0.45;
+      return area(q) + `<path class="face" d="${d}" stroke-width="${fs * 0.24}"/>` + pts.map((p) => `<line class="tick" x1="${p.x}" y1="${p.y}" x2="${p.x + nx * t}" y2="${p.y + ny * t}" stroke-width="${fs * 0.13}"/>`).join("") + `<path class="hit" d="${d}" stroke-width="${fs * 2.2}"/></g>`;
+    }).join("");
     const land = landImage();
     const chev = (x, y, dx, dy) => {
       const k = fs * 0.4;
@@ -7652,15 +7822,17 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const t = timeWords(e ? e.hours : lineHours2(S.L, here, v), e ? e.certainty : v.certainty === "known" ? "guess" : v.certainty);
       const say = i === hi ? `${cap3(v.name)} (here)` : `${v.site !== void 0 ? "Head back to" : "Head for"} ${v.name} (${t})`;
       const label = labelOf.get(i) ?? "";
-      return `<g ${i === hi ? "" : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" class="node ${v.site !== void 0 ? "site" : v.frontier ? "frontier" : "sus"} ${v.certainty}${i === hi ? " here" : ""}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${fs * (i === hi ? 0.65 : v.frontier ? 0.35 : 0.45)}" stroke-width="${fs * 0.12}"/>${i === hi ? "" : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${label}</g>`;
+      return `<g ${i === hi ? "" : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" data-i="${i}" class="node ${v.site !== void 0 ? "site" : v.frontier ? "frontier" : "sus"}${v.spring ? " spring" : ""} ${v.certainty}${i === hi ? " here" : ""}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${fs * (i === hi ? 0.65 : v.frontier ? 0.35 : 0.45)}" stroke-width="${fs * 0.12}"/>${i === hi ? "" : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${label}</g>`;
     }).join("");
-    const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map of places and landmarks; north is up. Tap one to hike there.">${land ? `<image class="land" href="${land}" x="-0.5" y="-0.5" width="${N}" height="${N}" preserveAspectRatio="none"/>` : ""}${E}${W}${Nd}${F}</svg>`;
+    const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map of places and landmarks; north is up. Tap one to hike there.">${land ? `<image class="land" href="${land}" x="-0.5" y="-0.5" width="${N}" height="${N}" preserveAspectRatio="none"/>` : ""}${Lk}${E}${Cl}${W}${featureLabels}${Nd}${F}</svg>`;
     const tools = `<div class="map-tools"><small class="hint">Tap a place to hike there; tap several in turn to pick a route. Drag to pan; pinch or scroll to zoom.</small>${S.mapView ? '<button class="ghost" data-mapfit="1">Fit</button>' : ""}<button class="ghost" data-mapland="1">${LAND_MODES[S.mapLand ?? "seen"]}</button></div>`;
-    return `${svg}${tools}<p class="hint">North is up. Filled dots: places I\u2019ve been. Rings: things I\u2019ve seen or heard. Small dotted rings: unexplored ground. Blue lines: streams as I know them, solid where I\u2019ve walked along them, chevrons pointing downstream; tap one to head for it. At a stream, the arrows by me follow it a stretch, downstream or up a branch. Times are walking times; \u201C~\u201D is a guess, \u201C?\u201D I can\u2019t say.</p>`;
+    return `${svg}${tools}<p class="hint">North is up. Filled dots: places I\u2019ve been. Rings: things I\u2019ve seen or heard. Small dotted rings: unexplored ground. Blue shapes: lakes, as much as I\u2019ve seen of them; blue dots: springs; lines with ticks: cliffs, ticks on the low side. Blue lines: streams as I know them, solid where I\u2019ve walked along them, chevrons pointing downstream; tap one to head for it. At a stream, the arrows by me follow it a stretch, downstream or up a branch. Times are walking times; \u201C~\u201D is a guess, \u201C?\u201D I can\u2019t say.</p>`;
   }
   function hike(key) {
     if (key.startsWith("stream:"))
       return headForStream(key.slice(7));
+    if (key.startsWith("lake:") || key.startsWith("cliff:"))
+      return headForFeature(key);
     if (key.startsWith("follow:")) {
       const [, dir, b] = key.split(":");
       return followStream(dir, b ? { x: +b.split("_")[0], y: +b.split("_")[1] } : null);
@@ -7736,6 +7908,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         pass(0.5, 200);
         sense(s, true);
         markSeen(s.x, s.y, 50, { eye: lookoutEye(S.L, s) });
+        noteSeenFeatures();
         if (!S.milestones.lookout) {
           S.milestones.lookout = true;
           log("A view at last.", "milestone");
@@ -8061,7 +8234,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       }).observe(box);
     }
   }
-  var BUILD = "hk-2026-10-22d";
+  var BUILD = "hk-2026-10-22e";
   function record(d) {
     S.record ?? (S.record = []);
     S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });

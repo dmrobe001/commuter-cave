@@ -136,6 +136,14 @@ button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 6
 .mapsvg .stream .flow { stroke: var(--water); stroke-linecap: round; stroke-dasharray: calc(.6 * var(--u)) calc(.35 * var(--u)); }
 .mapsvg .stream .flow.lone { stroke-dasharray: none; }
 .mapsvg .stream .flow.known { stroke-dasharray: none; }
+.mapsvg .feature { cursor: pointer; }
+.mapsvg .feature.lake { opacity: .55; } /* the whole lake faded at once, so overlapping cells don't darken */
+.mapsvg .feature.lake rect { fill: var(--water); }
+.mapsvg .feature.cliff .face, .mapsvg .feature.cliff .tick { stroke: var(--ink); fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
+.mapsvg .feature .hit { stroke: transparent; fill: none; pointer-events: stroke; }
+.mapsvg .flabel { fill: var(--muted); font-style: italic; paint-order: stroke; stroke: var(--bg); stroke-width: calc(.25 * var(--u)); pointer-events: none; }
+.mapsvg .flabel.lake { fill: var(--water); }
+.mapsvg .node.site.spring circle:not(.hit) { fill: var(--water); stroke: var(--water); }
 .mapsvg .follow { cursor: pointer; }
 .mapsvg .follow line:not(.hit), .mapsvg .follow path { stroke: var(--water); fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .mapsvg .follow .hit { stroke: transparent; pointer-events: stroke; }
