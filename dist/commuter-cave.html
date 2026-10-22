@@ -8022,36 +8022,77 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       return area(q, "cliff") + `<path class="face" d="${d}" stroke-width="${u(3.5)}"/>` + along(pts, 16).marks.map((m) => `<line class="tick" x1="${m.x}" y1="${m.y}" x2="${m.x + nx * t}" y2="${m.y + ny * t}" stroke-width="${u(2)}"/>`).join("") + `<path class="hit" d="${d}" stroke-width="${fs * 2.2}"/></g>`;
     }).join("");
     const land = landImage();
+    const curve = (pts, tan) => {
+      let d = `M${pts[0].x} ${pts[0].y}`;
+      const fine = [pts[0]];
+      for (let k = 1; k < pts.length; k++) {
+        const a = pts[k - 1], b = pts[k], L = Math.hypot(b.x - a.x, b.y - a.y) || 1, cx = (b.x - a.x) / L, cy = (b.y - a.y) / L;
+        const t0 = tan[k - 1].x * cx + tan[k - 1].y * cy > 0.3 ? tan[k - 1] : { x: cx, y: cy }, t1 = tan[k].x * cx + tan[k].y * cy > 0.3 ? tan[k] : { x: cx, y: cy };
+        const c0 = { x: a.x + t0.x * L / 3, y: a.y + t0.y * L / 3 }, c1 = { x: b.x - t1.x * L / 3, y: b.y - t1.y * L / 3 };
+        d += `C${+c0.x.toFixed(2)} ${+c0.y.toFixed(2)} ${+c1.x.toFixed(2)} ${+c1.y.toFixed(2)} ${b.x} ${b.y}`;
+        for (let j = 1; j <= 8; j++) {
+          const t = j / 8, m = 1 - t;
+          fine.push({ x: m * m * m * a.x + 3 * m * m * t * c0.x + 3 * m * t * t * c1.x + t * t * t * b.x, y: m * m * m * a.y + 3 * m * m * t * c0.y + 3 * m * t * t * c1.y + t * t * t * b.y });
+        }
+      }
+      return { d, fine };
+    };
+    const keyCells = new Set(S.sites.filter((t) => !unmarked(t)).map((t) => `${t.x},${t.y}`));
     const W = trees.map((t) => {
       const near = nearestOnStream(t, here), say = `Head for ${t.name} (${timeWords(routeHours(here, near), "guess")})`;
-      const downOf = new Map(t.segs.map((sg) => [sg[0], sg])), fed = new Set(t.segs.map((sg) => sg[1])), drawn = /* @__PURE__ */ new Set(), marks = [], pieces = [];
+      const downOf = new Map(t.segs.map((sg) => [sg[0], sg])), ins = /* @__PURE__ */ new Map(), drawn = /* @__PURE__ */ new Set(), marks = [], pieces = [];
+      for (const sg of t.segs)
+        ins.set(sg[1], (ins.get(sg[1]) ?? 0) + 1);
       const draw = (sg, fresh) => {
         const last = pieces[pieces.length - 1];
         if (!fresh && last && last.known === !!sg.known)
           last.pts.push(sg[1]);
         else
-          pieces.push({ known: !!sg.known, pts: [sg[0], sg[1]] });
+          pieces.push({ known: !!sg.known, pts: [sg[0], sg[1]], fresh });
       };
-      for (const src of t.segs.map((sg) => sg[0]).filter((f) => !fed.has(f))) {
-        let f = src, carry = 35, fresh = true;
+      for (const src of t.segs.map((sg) => sg[0]).filter((f) => !ins.has(f))) {
+        let f = src, fresh = true;
         while (downOf.has(f) && !drawn.has(f)) {
           const sg = downOf.get(f);
           drawn.add(f);
           draw(sg, fresh);
           fresh = false;
-          const r = along(sg, 70, carry);
-          marks.push(...r.marks);
-          carry = r.carry;
           f = sg[1];
         }
       }
       for (const sg of t.segs)
-        if (!drawn.has(sg[0])) {
+        if (!drawn.has(sg[0]))
           draw(sg, true);
-          marks.push(...along(sg, 70).marks);
+      const tangent = (q, k) => {
+        const f = q.pts[k];
+        let dn = f;
+        for (let n = 0; n < 2 && downOf.has(dn); n++)
+          dn = downOf.get(dn)[1];
+        const up = q.pts[Math.max(0, k - 2)];
+        let x = dn.x - up.x, y = dn.y - up.y;
+        if (!q.known && f.flow != null) {
+          const r = f.flow * Math.PI / 180;
+          x = Math.sin(r);
+          y = -Math.cos(r);
         }
+        const l = Math.hypot(x, y);
+        return l ? { x: x / l, y: y / l } : { x: 0, y: 1 };
+      };
+      let carry = 35;
       const lines = pieces.map((q) => {
-        const d = q.pts.map((p, k) => `${k ? "L" : "M"}${p.x} ${p.y}`).join("");
+        const keep = q.known ? q.pts.map((f, k) => k).filter((k) => k === 0 || k === q.pts.length - 1 || waterMark(q.pts[k]) || (ins.get(q.pts[k]) ?? 0) >= 2 || keyCells.has(`${q.pts[k].x},${q.pts[k].y}`)) : q.pts.map((f, k) => k);
+        const idx5 = [];
+        for (const k of keep) {
+          const last = idx5[idx5.length - 1] ?? 0;
+          for (let m = last + 10; m < k - 4; m += 10)
+            idx5.push(m);
+          if (!idx5.length || idx5[idx5.length - 1] !== k)
+            idx5.push(k);
+        }
+        const { d, fine } = curve(idx5.map((k) => q.pts[k]), idx5.map((k) => tangent(q, k)));
+        const r = along(fine, 70, q.fresh ? 35 : carry);
+        marks.push(...r.marks);
+        carry = r.carry;
         return `<path class="flow${q.known ? " known" : ""}" d="${d}" stroke-width="${u(3.5)}"/><path class="hit" d="${d}" stroke-width="${fs * 2.2}"/>`;
       }).concat(t.lone.map((f) => {
         const r = (f.flow ?? 180) * Math.PI / 180, dx = Math.sin(r), dy = -Math.cos(r), k = u(20);
