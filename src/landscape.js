@@ -172,7 +172,7 @@ export function generateLandscape(world) {
     if (chan[c] && down[c] >= 0 && chan[c] >= 2 && elev[c] - elev[down[c]] > 8) steep[c] = 1; // a steep drop along the channel
     if (chan[c]) { // spring heads: channel cells with no channel draining into them, on sloping ground
       const cx = c % N, cy = (c / N) | 0;
-      const fed = NB.some(([dx, dy]) => { const nx = cx + dx, ny = cy + dy; return nx >= 0 && ny >= 0 && nx < N && ny < N && down[idx(nx, ny)] === c && chan[idx(nx, ny)]; });
+      const fed = NB.some(([dx, dy]) => { const nx = cx + dx, ny = cy + dy; return nx >= 0 && ny >= 0 && nx < N && ny < N && down[idx(nx, ny)] === c && (chan[idx(nx, ny)] || lake[idx(nx, ny)]); }); // fed by a stream, or by a lake (an outlet, not a spring)
       if (!fed && slope[c] > 0.04) features.springs.push({ x: cx, y: cy });
     }
   }

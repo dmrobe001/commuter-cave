@@ -121,7 +121,7 @@ export function perceive(L, pos, { time = 'day', lookout = false, boost = 1 } = 
   const maxSight = lookout ? 7000 : 4000;
   for (const f of V) {
     const d = distM(pos, f);
-    if (d < 150 || d > maxSight) continue;
+    if (d < 1 || d > maxSight) continue; // everything but my own cell: a hill next door is seen next door
     // lakes and river traces need a view from above, except close by in open country
     const openHere = L.veg[idx(pos.x, pos.y)] < 0.4;
     if (f.needHeight && !lookout && !(d < 600 && openHere)) continue;
@@ -193,11 +193,13 @@ export function hear(L, pos, { time = 'day', boost = 1 } = {}) {
 }
 
 // Turn a perception into a noisy, character-level suspicion: bearing and rough distance.
+// Within about 120 m (the next cell), I can see exactly where it is.
 export function suspicionFrom(cue, pos, rng) {
   const bSd = cue.channel === 'sight' ? 6 : 25, dSd = cue.channel === 'sight' ? 0.2 : 0.45;
   const b = cue.trueBearing + rng.normal(0, bSd);
   const d = cue.trueDist * Math.exp(rng.normal(0, dSd));
   const rad = (b * Math.PI) / 180;
+  if (cue.trueDist <= 1.5 * CELL && cue.x != null) return { bearing: cue.trueBearing, dist: cue.trueDist, est: { x: cue.x, y: cue.y } };
   return { bearing: b, dist: d, est: { x: clamp(Math.round(pos.x + (Math.sin(rad) * d) / CELL), 0, N - 1), y: clamp(Math.round(pos.y - (Math.cos(rad) * d) / CELL), 0, N - 1) } };
 }
 
@@ -319,12 +321,14 @@ export function walk(L, from, target, { maxHours = 3, rng, resense = null, arriv
 // One stage of following a stream: along it from `from` (on or beside the channel), downstream, or
 // upstream starting at the inflow cell `branch` and then up the biggest feeder, for about `maxHours`
 // or until something worth stopping for: where streams join (a fork), a waterfall or cascade, a
-// spring, a lake, the stream's source, or the edge of the land. `why` says which; null means time.
+// spring, a lake (going down), where it leaves a lake (going up), the stream's source, or the edge of
+// the land; each on its own cell. `why` says which; null means time.
 export function followStage(L, from, dir, { branch = null, maxHours = 0.25 } = {}) {
   let p = { ...from }, hours = 0;
   const path = [p];
   const inflows = c => NB.map(([dx, dy]) => ({ x: (c % N) + dx, y: ((c / N) | 0) + dy })).filter(q => inside(q.x, q.y) && L.chan[idx(q.x, q.y)] && !L.lake[idx(q.x, q.y)] && L.down[idx(q.x, q.y)] === c);
   const near = (list, q, r) => list.some(f => Math.abs(f.x - q.x) <= r && Math.abs(f.y - q.y) <= r);
+  const fromLake = c => NB.some(([dx, dy]) => { const x = (c % N) + dx, y = ((c / N) | 0) + dy; return inside(x, y) && L.lake[idx(x, y)] && L.down[idx(x, y)] === c; });
   if (!L.chan[idx(p.x, p.y)]) { // step into the water first
     const q = NB.map(([dx, dy]) => ({ x: p.x + dx, y: p.y + dy })).find(q => inside(q.x, q.y) && L.chan[idx(q.x, q.y)] && !L.lake[idx(q.x, q.y)]);
     if (!q) return { end: p, hours: 0, path, why: 'no stream here' };
@@ -338,6 +342,7 @@ export function followStage(L, from, dir, { branch = null, maxHours = 0.25 } = {
       if (d < 0) return { end: p, hours, path, why: 'edge' };
       next = { x: d % N, y: (d / N) | 0 };
     } else {
+      if (fromLake(c)) return { end: p, hours, path, why: 'outlet' }; // upstream of here is the lake
       const ins = inflows(c);
       next = steps === 0 && branch ? branch : ins.sort((a, b) => L.acc[idx(b.x, b.y)] - L.acc[idx(a.x, a.y)])[0];
       if (!next) return { end: p, hours, path, why: 'source' };
@@ -350,8 +355,9 @@ export function followStage(L, from, dir, { branch = null, maxHours = 0.25 } = {
     const n = idx(p.x, p.y);
     if (inflows(n).length >= 2) return { end: p, hours, path, why: 'fork' };
     // a waterfall or spring stops me when I come to it, not the one I'm setting off from
-    if (near(L.features.waterfalls, p, 1) && !near(L.features.waterfalls, from, 2)) return { end: p, hours, path, why: 'falls' };
-    if (near(L.features.springs, p, 0) && !near(L.features.springs, from, 1)) return { end: p, hours, path, why: 'spring' };
+    if (near(L.features.waterfalls, p, 0)) return { end: p, hours, path, why: 'falls' };
+    if (near(L.features.springs, p, 0)) return { end: p, hours, path, why: 'spring' };
+    if (dir === 'up' && fromLake(n)) return { end: p, hours, path, why: 'outlet' };
     if (hours >= maxHours) break;
   }
   return { end: p, hours, path, why: null };

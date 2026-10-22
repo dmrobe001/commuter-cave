@@ -3009,7 +3009,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         const cx = c % N, cy = c / N | 0;
         const fed = NB.some(([dx, dy]) => {
           const nx = cx + dx, ny = cy + dy;
-          return nx >= 0 && ny >= 0 && nx < N && ny < N && down[idx(nx, ny)] === c && chan[idx(nx, ny)];
+          return nx >= 0 && ny >= 0 && nx < N && ny < N && down[idx(nx, ny)] === c && (chan[idx(nx, ny)] || lake[idx(nx, ny)]);
         });
         if (!fed && slope[c] > 0.04)
           features.springs.push({ x: cx, y: cy });
@@ -3240,7 +3240,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const maxSight = lookout ? 7e3 : 4e3;
     for (const f of V) {
       const d = distM(pos, f);
-      if (d < 150 || d > maxSight)
+      if (d < 1 || d > maxSight)
         continue;
       const openHere = L.veg[idx2(pos.x, pos.y)] < 0.4;
       if (f.needHeight && !lookout && !(d < 600 && openHere))
@@ -3331,6 +3331,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const b = cue.trueBearing + rng.normal(0, bSd);
     const d = cue.trueDist * Math.exp(rng.normal(0, dSd));
     const rad = b * Math.PI / 180;
+    if (cue.trueDist <= 1.5 * CELL && cue.x != null)
+      return { bearing: cue.trueBearing, dist: cue.trueDist, est: { x: cue.x, y: cue.y } };
     return { bearing: b, dist: d, est: { x: clamp(Math.round(pos.x + Math.sin(rad) * d / CELL), 0, N - 1), y: clamp(Math.round(pos.y - Math.cos(rad) * d / CELL), 0, N - 1) } };
   }
   var CUE_WORDS = {
@@ -3508,6 +3510,10 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const path = [p];
     const inflows = (c) => NB2.map(([dx, dy]) => ({ x: c % N + dx, y: (c / N | 0) + dy })).filter((q) => inside(q.x, q.y) && L.chan[idx2(q.x, q.y)] && !L.lake[idx2(q.x, q.y)] && L.down[idx2(q.x, q.y)] === c);
     const near = (list, q, r) => list.some((f) => Math.abs(f.x - q.x) <= r && Math.abs(f.y - q.y) <= r);
+    const fromLake = (c) => NB2.some(([dx, dy]) => {
+      const x = c % N + dx, y = (c / N | 0) + dy;
+      return inside(x, y) && L.lake[idx2(x, y)] && L.down[idx2(x, y)] === c;
+    });
     if (!L.chan[idx2(p.x, p.y)]) {
       const q = NB2.map(([dx, dy]) => ({ x: p.x + dx, y: p.y + dy })).find((q2) => inside(q2.x, q2.y) && L.chan[idx2(q2.x, q2.y)] && !L.lake[idx2(q2.x, q2.y)]);
       if (!q)
@@ -3525,6 +3531,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
           return { end: p, hours, path, why: "edge" };
         next = { x: d % N, y: d / N | 0 };
       } else {
+        if (fromLake(c))
+          return { end: p, hours, path, why: "outlet" };
         const ins = inflows(c);
         next = steps === 0 && branch ? branch : ins.sort((a, b) => L.acc[idx2(b.x, b.y)] - L.acc[idx2(a.x, a.y)])[0];
         if (!next)
@@ -3538,10 +3546,12 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       const n = idx2(p.x, p.y);
       if (inflows(n).length >= 2)
         return { end: p, hours, path, why: "fork" };
-      if (near(L.features.waterfalls, p, 1) && !near(L.features.waterfalls, from, 2))
+      if (near(L.features.waterfalls, p, 0))
         return { end: p, hours, path, why: "falls" };
-      if (near(L.features.springs, p, 0) && !near(L.features.springs, from, 1))
+      if (near(L.features.springs, p, 0))
         return { end: p, hours, path, why: "spring" };
+      if (dir === "up" && fromLake(n))
+        return { end: p, hours, path, why: "outlet" };
       if (hours >= maxHours)
         break;
     }
@@ -5554,15 +5564,23 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const c = cellOf(x, y);
     return !!S.L.chan[c] && !S.L.lake[c] && S.L.down[c] >= 0 && !!S.L.lake[S.L.down[c]];
   };
+  var isOutlet = (x, y) => {
+    const c = cellOf(x, y);
+    return !!S.L.chan[c] && !S.L.lake[c] && NB8.some(([dx, dy]) => {
+      const n = cellOf(x + dx, y + dy);
+      return x + dx >= 0 && y + dy >= 0 && x + dx < N && y + dy < N && S.L.lake[n] && S.L.down[n] === c;
+    });
+  };
   function waterMark(t) {
     if (isMouth(t.x, t.y))
       return "mouth";
+    if (isOutlet(t.x, t.y))
+      return "outlet";
     if (S.L.chan[cellOf(t.x, t.y)] && inflowsAt(t.x, t.y).length >= 2)
       return "fork";
     if (t.micro === "spring" || nearFeature(S.L.features.springs, t, 0))
       return "spring";
-    const fall = S.L.features.waterfalls.find((f) => Math.abs(f.x - t.x) <= 1 && Math.abs(f.y - t.y) <= 1);
-    if (fall && !S.sites.some((o) => o !== t && Math.hypot(o.x - fall.x, o.y - fall.y) < Math.hypot(t.x - fall.x, t.y - fall.y)))
+    if (nearFeature(S.L.features.waterfalls, t, 0))
       return "falls";
     return null;
   }
@@ -5571,9 +5589,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     return x >= 0 && y >= 0 && x < N && y < N && S.L.lake[cellOf(x, y)];
   });
   function unmarked(t) {
-    if (!(S.L.chan[cellOf(t.x, t.y)] || ["streambank", "streambed"].includes(t.micro) || lakeside(t)))
-      return false;
-    return !(waterMark(t) || t.name === "where I woke" || t.hut || t.fireUntil > 0 || t.renamed || t === site());
+    return !(t === site() || waterMark(t) || t.landmark || isLookout(S.L, t.x, t.y) || t.micro === "claybank" || t.name === "where I woke" || t.hut || t.fireUntil > 0 || t.renamed || t.gathered);
   }
   var DETOUR = 1.5;
   function placeLinks() {
@@ -5626,12 +5642,11 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     return e ? e.hours : lineHours2(S.L, from, target);
   }
   function newSite(x, y, name) {
-    const micro = microAt(x, y), wet = !!S.L.chan[cellOf(x, y)];
-    const mark = isMouth(x, y) || nearFeature(S.L.features.springs, { x, y }, 0);
-    const near = S.sites.find((t) => t.x === x && t.y === y) ?? (!mark && S.sites.find((t) => Math.abs(t.x - x) <= 1 && Math.abs(t.y - y) <= 1 && t.micro === micro && !!S.L.chan[cellOf(t.x, t.y)] === wet && !isMouth(t.x, t.y)));
-    if (near)
-      return near;
-    const noun = { fork: "fork", falls: "falls", spring: "spring", mouth: "mouth" }[waterMark({ x, y, micro })] ?? SITE_NOUN[micro] ?? micro;
+    const micro = microAt(x, y);
+    const same = S.sites.find((t) => t.x === x && t.y === y);
+    if (same)
+      return same;
+    const noun = { fork: "fork", falls: "falls", spring: "spring", mouth: "mouth", outlet: "outlet" }[waterMark({ x, y, micro })] ?? SITE_NOUN[micro] ?? micro;
     const s = { key: `p${x}_${y}`, x, y, micro, name: name ?? uniqueName(noun, { x, y }, looksOf("site", x, y)), known: /* @__PURE__ */ new Set(), visits: 0, hut: false, fireUntil: -1 };
     S.sites.push(s);
     return s;
@@ -5795,7 +5810,8 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     for (const u of S.suspects)
       if (!u.reached && atTarget({ x, y }, { truePos: u.truePos, sus: u })) {
         u.reached = true;
-        if (fresh && s.name !== "where I woke")
+        s.landmark ?? (s.landmark = u.label);
+        if (fresh && s.name !== "where I woke" && !waterMark(s))
           s.name = placeNameFor(u, x, y);
         log(`Found ${u.label}.`, "act");
         if (u.kind === "carcass") {
@@ -5850,10 +5866,11 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
           }
         let wname, news;
         if (best.lake) {
-          wname = waterName(waterKeyAt(S.L, best.x, best.y), "lake", best);
-          const known = S.sites.length;
-          newSite(wx, wy, waterSiteName(wname, wx, wy));
-          news = S.sites.length > known;
+          const key = waterKeyAt(S.L, best.x, best.y), c = cellOf(best.x, best.y);
+          wname = waterName(key, "lake", best);
+          news = (S.seenLand?.[c] ?? 0) < SEEN;
+          revealFeature(key, s, 1.7);
+          noteSeenFeatures();
         } else
           ({ st: { name: wname }, isNew: news } = addFix(best, "near"));
         const first = !S.milestones.water;
@@ -5924,7 +5941,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const k = edgeKey(fromKey, toKey), old = S.walked[k];
     S.walked[k] = { hours: old ? 0.5 * (old.hours + hours) : hours, crossings: [.../* @__PURE__ */ new Set([...old?.crossings ?? [], ...keys])] };
   }
-  var PASS_R = 2;
+  var PASS_R = 0;
   function rememberTrip(from, path, hours, crossings, knownBefore) {
     const end = site(), stops = [{ i: 0, s: from }];
     for (const t of S.sites.slice(0, knownBefore)) {
@@ -5977,18 +5994,11 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
   function atTarget(p, info) {
     if (!info.truePos)
       return false;
-    if (Math.hypot(p.x - info.truePos.x, p.y - info.truePos.y) <= 2)
+    if (p.x === info.truePos.x && p.y === info.truePos.y)
       return true;
     const u = info.sus;
-    if (u?.group === "water" && u.kind !== "river trace") {
-      const want = waterKeyOf(u.trueKey);
-      for (let dy = -2; dy <= 2; dy++)
-        for (let dx = -2; dx <= 2; dx++) {
-          const x = p.x + dx, y = p.y + dy;
-          if (x >= 0 && y >= 0 && x < N && y < N && waterKeyAt(S.L, x, y) === want)
-            return true;
-        }
-    }
+    if (u?.group === "water" && /^(lake|river|brook)-/.test(waterKeyOf(u.trueKey)))
+      return onWater(p, waterKeyOf(u.trueKey));
     return false;
   }
   function missedTarget(target, from) {
@@ -6001,9 +6011,9 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
         sus.est = est = g.est;
         sus.err = fixErr(c.channel, g.dist);
         how = `I can still ${c.channel === "sound" ? "hear" : "see"} it`;
-      } else if (Math.hypot(here.x - sus.est.x, here.y - sus.est.y) <= 2 || here === from) {
+      } else if (here.x === sus.est.x && here.y === sus.est.y || here === from) {
         sus.lost = true;
-        return log(`Didn\u2019t reach ${name}. ${here === from && Math.hypot(here.x - sus.est.x, here.y - sus.est.y) > 2 ? "I can\u2019t get any nearer this way, and there\u2019s no sign of it" : "No sign of it where I expected"}; I\u2019ve lost track of it. A scan, or a view from higher up, might pick it up again.`, "thought");
+        return log(`Didn\u2019t reach ${name}. ${here === from && !(here.x === sus.est.x && here.y === sus.est.y) ? "I can\u2019t get any nearer this way, and there\u2019s no sign of it" : "No sign of it where I expected"}; I\u2019ve lost track of it. A scan, or a view from higher up, might pick it up again.`, "thought");
       } else {
         est = sus.est;
         how = "by my reckoning";
@@ -6027,7 +6037,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     if (!t)
       return;
     const p = nearestOnStream(t, from);
-    if (S.L.chan[cellOf(from.x, from.y)] && Math.hypot(p.x - from.x, p.y - from.y) <= 2)
+    if (S.L.chan[cellOf(from.x, from.y)] && p.x === from.x && p.y === from.y)
       return log(`I\u2019m at ${t.name} already.`, "thought");
     travelTo({ x: p.x, y: p.y, stream: id, seg: p.seg }, `toward ${t.name}`);
   }
@@ -6041,7 +6051,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const name = (S.streams.find((st) => st.fixes.some((f) => Math.hypot(f.x - at.x, f.y - at.y) <= 1.5)) ?? matchStream(makeFix(at)))?.name ?? "the stream";
     const goes = (dir, branch) => {
       const t = followStage(S.L, h, dir, { branch });
-      return t.hours > 0 && Math.max(Math.abs(t.end.x - h.x), Math.abs(t.end.y - h.y)) > 1;
+      return t.hours > 0 && (t.end.x !== h.x || t.end.y !== h.y);
     };
     const out = [], down = flowAt(at.x, at.y);
     if (down != null && !isMouth(at.x, at.y) && goes("down"))
@@ -6062,7 +6072,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     }
     return out;
   }
-  var STOP_WORDS = { fork: "to where streams join", lake: "to where it runs into a lake", falls: "to a waterfall", spring: "to a spring, where it rises", source: "until it gave out at its source", edge: "as far as I dare go that way" };
+  var STOP_WORDS = { fork: "to where streams join", lake: "to where it runs into a lake", outlet: "to where it leaves a lake", falls: "to a waterfall", spring: "to a spring, where it rises", source: "until it gave out at its source", edge: "as far as I dare go that way" };
   function followStream(dir, branch) {
     const from = site(), knownBefore = S.sites.length;
     const trip = followStage(S.L, from, dir, { branch });
@@ -6095,7 +6105,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
   }
   function travelTo(target, label) {
     const from = site();
-    if (target.suspect && Math.hypot(target.x - from.x, target.y - from.y) <= 1.5) {
+    if (target.suspect && target.x === from.x && target.y === from.y) {
       const info = targetInfo(target);
       pass(0.1, 120);
       if (atTarget(from, info)) {
@@ -7954,8 +7964,8 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const [x, y] = key.slice(3).split("_").map(Number), h = site();
       if (S.mapPin?.x === x && S.mapPin?.y === y)
         S.mapPin = null;
-      if (Math.hypot(x - h.x, y - h.y) <= 1.5)
-        return log("That\u2019s about where I am already.", "thought");
+      if (x === h.x && y === h.y)
+        return log("That\u2019s where I am.", "thought");
       return travelTo({ x, y, point: true, label: "the spot I picked" }, `toward a spot to the ${bearingWord(bearing(h, { x, y }))}`);
     }
     if (key.startsWith("follow:")) {
@@ -8357,7 +8367,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       }).observe(box);
     }
   }
-  var BUILD = "hk-2026-10-22g";
+  var BUILD = "hk-2026-10-22h";
   function record(d) {
     S.record ?? (S.record = []);
     S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
@@ -8476,6 +8486,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     else if (d.gather !== void 0) {
       const g = gatherOptions(site())[Number(d.gather)];
       pass(g.hours, g.kcal);
+      site().gathered = true;
       const it = g.fn();
       touch([it], 0.5);
       log(`Gathered ${it.name}.`);

@@ -257,10 +257,11 @@ const placeNameFor = (u, x, y) => (u.group === 'water' && u.kind !== 'river trac
 
 // ------------------------------------------------------------ places worth a marker
 //
-// A place in or beside a stream, or on a lake shore, is still a place (I can survey, drink and gather
-// there, and trails run through it), but it isn't drawn: the stream line or the lake marks it. It gets a marker only if it's somewhere
-// in its own right: where streams join, by a waterfall or cascade, at a spring, where I woke, where
-// I've built a hut or lit a fire, a place I've named myself, or where I stand now.
+// Every cell I've stood on is a place (the game remembers what I found there, and trails run through
+// it), but once I've left it, it keeps a marker only if it's of interest in its own right, on that
+// cell: a landmark I reached there, a stream's mouth or outlet, a fork, a spring, a waterfall, a
+// lookout, a clay bank, where I woke, a hut or a fire, a name I gave it, or something I gathered there.
+// Anything else is marked only while I stand on it.
 const NB8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 function inflowsAt(x, y) { // channel cells that drain into this one
   const c = cellOf(x, y);
@@ -268,18 +269,18 @@ function inflowsAt(x, y) { // channel cells that drain into this one
 }
 const nearFeature = (list, p, r) => list.some(f => Math.abs(f.x - p.x) <= r && Math.abs(f.y - p.y) <= r);
 const isMouth = (x, y) => { const c = cellOf(x, y); return !!S.L.chan[c] && !S.L.lake[c] && S.L.down[c] >= 0 && !!S.L.lake[S.L.down[c]]; };
+const isOutlet = (x, y) => { const c = cellOf(x, y); return !!S.L.chan[c] && !S.L.lake[c] && NB8.some(([dx, dy]) => { const n = cellOf(x + dx, y + dy); return x + dx >= 0 && y + dy >= 0 && x + dx < GN && y + dy < GN && S.L.lake[n] && S.L.down[n] === c; }); };
 function waterMark(t) { // what makes a place by water worth a marker, if anything
   if (isMouth(t.x, t.y)) return 'mouth'; // where a stream runs into a lake
+  if (isOutlet(t.x, t.y)) return 'outlet'; // where one leaves a lake
   if (S.L.chan[cellOf(t.x, t.y)] && inflowsAt(t.x, t.y).length >= 2) return 'fork';
-  if (t.micro === 'spring' || nearFeature(S.L.features.springs, t, 0)) return 'spring'; // a spring is a point: its own cell
-  const fall = S.L.features.waterfalls.find(f => Math.abs(f.x - t.x) <= 1 && Math.abs(f.y - t.y) <= 1);
-  if (fall && !S.sites.some(o => o !== t && Math.hypot(o.x - fall.x, o.y - fall.y) < Math.hypot(t.x - fall.x, t.y - fall.y))) return 'falls'; // the place nearest it
+  if (t.micro === 'spring' || nearFeature(S.L.features.springs, t, 0)) return 'spring';
+  if (nearFeature(S.L.features.waterfalls, t, 0)) return 'falls';
   return null;
 }
 const lakeside = t => NB8.some(([dx, dy]) => { const x = t.x + dx, y = t.y + dy; return x >= 0 && y >= 0 && x < GN && y < GN && S.L.lake[cellOf(x, y)]; });
 function unmarked(t) {
-  if (!(S.L.chan[cellOf(t.x, t.y)] || ['streambank', 'streambed'].includes(t.micro) || lakeside(t))) return false;
-  return !(waterMark(t) || t.name === 'where I woke' || t.hut || t.fireUntil > 0 || t.renamed || t === site());
+  return !(t === site() || waterMark(t) || t.landmark || isLookout(S.L, t.x, t.y) || t.micro === 'claybank' || t.name === 'where I woke' || t.hut || t.fireUntil > 0 || t.renamed || t.gathered);
 }
 
 // ------------------------------------------------------------ the mental map
@@ -335,14 +336,12 @@ function mapHours(from, key, target) {
   return e ? e.hours : lineHours(S.L, from, target);
 }
 
-// Sites are real positions. Reuse a known site within a cell rather than making a near-duplicate,
-// but only one of the same kind of ground: the bank of a stream is not the wood beside it.
+// Sites are real positions: one place per cell, never merged with the one next to it.
 function newSite(x, y, name) {
-  const micro = microAt(x, y), wet = !!S.L.chan[cellOf(x, y)];
-  const mark = isMouth(x, y) || nearFeature(S.L.features.springs, { x, y }, 0); // a mouth or a spring is a place of its own
-  const near = S.sites.find(t => t.x === x && t.y === y) ?? (!mark && S.sites.find(t => Math.abs(t.x - x) <= 1 && Math.abs(t.y - y) <= 1 && t.micro === micro && !!S.L.chan[cellOf(t.x, t.y)] === wet && !isMouth(t.x, t.y)));
-  if (near) return near;
-  const noun = { fork: 'fork', falls: 'falls', spring: 'spring', mouth: 'mouth' }[waterMark({ x, y, micro })] ?? SITE_NOUN[micro] ?? micro; // a place by water named for what makes it one
+  const micro = microAt(x, y);
+  const same = S.sites.find(t => t.x === x && t.y === y);
+  if (same) return same;
+  const noun = { fork: 'fork', falls: 'falls', spring: 'spring', mouth: 'mouth', outlet: 'outlet' }[waterMark({ x, y, micro })] ?? SITE_NOUN[micro] ?? micro; // a place by water named for what makes it one
   const s = { key: `p${x}_${y}`, x, y, micro, name: name ?? uniqueName(noun, { x, y }, looksOf('site', x, y)), known: new Set(), visits: 0, hut: false, fireUntil: -1 };
   S.sites.push(s);
   return s;
@@ -484,7 +483,8 @@ function arrive(x, y, how, onTheWay = null) {
   const fresh = S.sites[S.sites.length - 1] === s && s.visits === 0;
   for (const u of S.suspects) if (!u.reached && atTarget({ x, y }, { truePos: u.truePos, sus: u })) {
     u.reached = true;
-    if (fresh && s.name !== 'where I woke') s.name = placeNameFor(u, x, y); // the place takes the landmark's name
+    s.landmark ??= u.label;
+    if (fresh && s.name !== 'where I woke' && !waterMark(s)) s.name = placeNameFor(u, x, y); // a mouth, spring or the like keeps its own name // the place takes the landmark's name
     log(`Found ${u.label}.`, 'act');
     if (u.kind === 'carcass') {
       const a = entity(u.source?.animal), fresh = u.source?.epoch === Math.floor((S.day - 1) / 4);
@@ -515,11 +515,12 @@ function arrive(x, y, how, onTheWay = null) {
       let wx = best.x, wy = best.y;
       if (best.lake) for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const a = best.x + dx, b = best.y + dy; if (a >= 0 && b >= 0 && a < GN && b < GN && !S.L.lake[cellOf(a, b)]) { wx = a; wy = b; break; } }
       let wname, news;
-      if (best.lake) {
-        wname = waterName(waterKeyAt(S.L, best.x, best.y), 'lake', best);
-        const known = S.sites.length;
-        newSite(wx, wy, waterSiteName(wname, wx, wy));
-        news = S.sites.length > known;
+      if (best.lake) { // seen from here; no place made on a shore I haven't stood on
+        const key = waterKeyAt(S.L, best.x, best.y), c = cellOf(best.x, best.y);
+        wname = waterName(key, 'lake', best);
+        news = (S.seenLand?.[c] ?? 0) < SEEN;
+        revealFeature(key, s, 1.7);
+        noteSeenFeatures();
       } else ({ st: { name: wname }, isNew: news } = addFix(best, 'near'));
       const first = !S.milestones.water;
       if (news || first) log(`${first ? 'Water! ' : ''}${best.lake ? 'A lake' : 'A watercourse'} just to the ${bearingWord(bearing(s, best))}, ${timeWords(best.d * CELL / 3000)} away: ${wname}. Marked it.`, first ? 'act' : 'note');
@@ -581,10 +582,10 @@ function rememberLeg(fromKey, toKey, hours, keys) {
   const k = edgeKey(fromKey, toKey), old = S.walked[k];
   S.walked[k] = { hours: old ? 0.5 * (old.hours + hours) : hours, crossings: [...new Set([...(old?.crossings ?? []), ...keys])] };
 }
-// A walk is remembered as legs between the places it passed: a place I already knew that the path
-// comes within PASS_R cells (about 150 m) of splits the walk there, so trails run through the places
-// they really go by. Each leg's share of the time is its share of the walk's estimated time.
-const PASS_R = 2;
+// A walk is remembered as legs between the places it passed: a place I already knew whose cell the
+// path goes through splits the walk there, so trails run through the places they really go by. Each
+// leg's share of the time is its share of the walk's estimated time.
+const PASS_R = 0;
 function rememberTrip(from, path, hours, crossings, knownBefore) {
   const end = site(), stops = [{ i: 0, s: from }];
   for (const t of S.sites.slice(0, knownBefore)) {
@@ -618,15 +619,12 @@ function onWater(p, want) {
   for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const x = p.x + dx, y = p.y + dy; if (x >= 0 && y >= 0 && x < GN && y < GN && S.L.lake[cellOf(x, y)] && waterKeyAt(S.L, x, y) === want) return true; }
   return false;
 }
-// Am I at it? For water, being at its edge counts: a lake or a river is bigger than its marker.
+// Am I at it? On its own cell; for a stream or river, on any cell of it; for a lake, on its shore.
 function atTarget(p, info) {
   if (!info.truePos) return false;
-  if (Math.hypot(p.x - info.truePos.x, p.y - info.truePos.y) <= 2) return true;
+  if (p.x === info.truePos.x && p.y === info.truePos.y) return true;
   const u = info.sus;
-  if (u?.group === 'water' && u.kind !== 'river trace') {
-    const want = waterKeyOf(u.trueKey);
-    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { const x = p.x + dx, y = p.y + dy; if (x >= 0 && y >= 0 && x < GN && y < GN && waterKeyAt(S.L, x, y) === want) return true; }
-  }
+  if (u?.group === 'water' && /^(lake|river|brook)-/.test(waterKeyOf(u.trueKey))) return onWater(p, waterKeyOf(u.trueKey));
   return false;
 }
 // Didn't get there: say so, with a revised direction and walking time.
@@ -636,12 +634,12 @@ function missedTarget(target, from) {
   if (sus) {
     const c = perceive(S.L, here, { time: timeOfDay(), boost: 1.4 }).find(k => k.key === sus.trueKey);
     if (c) { const g = suspicionFrom(c, here, S.rng); sus.est = est = g.est; sus.err = fixErr(c.channel, g.dist); how = `I can still ${c.channel === 'sound' ? 'hear' : 'see'} it`; }
-    else if (Math.hypot(here.x - sus.est.x, here.y - sus.est.y) <= 2 || here === from) {
+    else if ((here.x === sus.est.x && here.y === sus.est.y) || here === from) {
       // Here is where I thought it was (or as near as I can get: the walk ended where it began, at a
       // shore, say), and there's no sign of it. Guessing "further on" sends me chasing it in ever
       // smaller hops, sometimes the wrong way, so it comes off the map until I pick it up again.
       sus.lost = true;
-      return log(`Didn’t reach ${name}. ${here === from && Math.hypot(here.x - sus.est.x, here.y - sus.est.y) > 2 ? 'I can’t get any nearer this way, and there’s no sign of it' : 'No sign of it where I expected'}; I’ve lost track of it. A scan, or a view from higher up, might pick it up again.`, 'thought');
+      return log(`Didn’t reach ${name}. ${here === from && !(here.x === sus.est.x && here.y === sus.est.y) ? 'I can’t get any nearer this way, and there’s no sign of it' : 'No sign of it where I expected'}; I’ve lost track of it. A scan, or a view from higher up, might pick it up again.`, 'thought');
     } else { est = sus.est; how = 'by my reckoning'; }
   } else how = 'by my reckoning';
   if (Math.hypot(here.x - est.x, here.y - est.y) < 1) return;
@@ -661,7 +659,7 @@ function headForStream(id) {
   const t = streamTrees().find(x => x.id === id), from = site();
   if (!t) return;
   const p = nearestOnStream(t, from);
-  if (S.L.chan[cellOf(from.x, from.y)] && Math.hypot(p.x - from.x, p.y - from.y) <= 2) return log(`I’m at ${t.name} already.`, 'thought');
+  if (S.L.chan[cellOf(from.x, from.y)] && p.x === from.x && p.y === from.y) return log(`I’m at ${t.name} already.`, 'thought');
   travelTo({ x: p.x, y: p.y, stream: id, seg: p.seg }, `toward ${t.name}`);
 }
 
@@ -673,7 +671,7 @@ function followOptions() {
   if (!at) return [];
   const name = (S.streams.find(st => st.fixes.some(f => Math.hypot(f.x - at.x, f.y - at.y) <= 1.5)) ?? matchStream(makeFix(at)))?.name ?? 'the stream';
   // offered only where a stage would get me to a new place (not straight into a lake, say)
-  const goes = (dir, branch) => { const t = followStage(S.L, h, dir, { branch }); return t.hours > 0 && Math.max(Math.abs(t.end.x - h.x), Math.abs(t.end.y - h.y)) > 1; };
+  const goes = (dir, branch) => { const t = followStage(S.L, h, dir, { branch }); return t.hours > 0 && (t.end.x !== h.x || t.end.y !== h.y); };
   const out = [], down = flowAt(at.x, at.y);
   if (down != null && !isMouth(at.x, at.y) && goes('down')) out.push({ key: 'follow:down', dir: down, say: `Follow ${name} downstream (up to 15 min)` });
   const ins = inflowsAt(at.x, at.y);
@@ -686,7 +684,7 @@ function followOptions() {
   }
   return out;
 }
-const STOP_WORDS = { fork: 'to where streams join', lake: 'to where it runs into a lake', falls: 'to a waterfall', spring: 'to a spring, where it rises', source: 'until it gave out at its source', edge: 'as far as I dare go that way' };
+const STOP_WORDS = { fork: 'to where streams join', lake: 'to where it runs into a lake', outlet: 'to where it leaves a lake', falls: 'to a waterfall', spring: 'to a spring, where it rises', source: 'until it gave out at its source', edge: 'as far as I dare go that way' };
 // Follow the stream a stage: about a quarter of an hour, or less if something stops me. The stretch
 // walked goes on the map as known (fixes every few cells, one run).
 function followStream(dir, branch) {
@@ -714,8 +712,8 @@ function followStream(dir, branch) {
 // Head straight for something: a suspected landmark, a known place, or any spot I pick on the map.
 function travelTo(target, label) {
   const from = site();
-  if (target.suspect && Math.hypot(target.x - from.x, target.y - from.y) <= 1.5) {
-    // It should be right here: a step would land me back at this same place, so look instead of walking.
+  if (target.suspect && target.x === from.x && target.y === from.y) {
+    // It should be right here, on this very cell: look instead of walking.
     const info = targetInfo(target);
     pass(0.1, 120);
     if (atTarget(from, info)) { info.sus.reached = true; return log(`Found ${info.sus.label}, right here.`, 'act'); }
@@ -2112,7 +2110,7 @@ function hike(key) {
   if (key.startsWith('go:')) { // a spot I picked on the map
     const [x, y] = key.slice(3).split('_').map(Number), h = site();
     if (S.mapPin?.x === x && S.mapPin?.y === y) S.mapPin = null;
-    if (Math.hypot(x - h.x, y - h.y) <= 1.5) return log('That’s about where I am already.', 'thought');
+    if (x === h.x && y === h.y) return log('That’s where I am.', 'thought');
     return travelTo({ x, y, point: true, label: 'the spot I picked' }, `toward a spot to the ${bearingWord(bearing(h, { x, y }))}`);
   }
   if (key.startsWith('follow:')) { const [, dir, b] = key.split(':'); return followStream(dir, b ? { x: +b.split('_')[0], y: +b.split('_')[1] } : null); }
@@ -2418,7 +2416,7 @@ if (typeof document !== 'undefined') {
 // Everything that happens follows from the world seed and the player's choices, so a record of the
 // seed and each choice reproduces a game exactly. Each action is the data of what was tapped (or
 // the value chosen); `act` applies one, and replaying a record runs them in order on a fresh game.
-const BUILD = 'hk-2026-10-22g'; // game logic version: a record replays faithfully only on the build that made it
+const BUILD = 'hk-2026-10-22h'; // game logic version: a record replays faithfully only on the build that made it
 function record(d) {
   S.record ??= [];
   S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
@@ -2474,7 +2472,7 @@ function act(d) {
   if (d.goalPick !== undefined) { S.goal = d.goalPick; S.revealed[S.goal] ??= new Set(); return true; }
   if (d.slotPick) { sel[d.slotPick] = Number(d.value); return true; }
   if (d.here) doHere(d.here);
-  else if (d.gather !== undefined) { const g = gatherOptions(site())[Number(d.gather)]; pass(g.hours, g.kcal); const it = g.fn(); touch([it], 0.5); log(`Gathered ${it.name}.`); }
+  else if (d.gather !== undefined) { const g = gatherOptions(site())[Number(d.gather)]; pass(g.hours, g.kcal); site().gathered = true; const it = g.fn(); touch([it], 0.5); log(`Gathered ${it.name}.`); }
   else if (d.pk) {
     if (d.pk === 'close') picker = null;
     else if (d.pk === 'back') picker = { kind: picker.kind, step: 'root' };
