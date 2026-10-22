@@ -29,7 +29,10 @@ const seeds = process.argv.slice(2).length ? process.argv.slice(2) : ['wgxdd', '
     click(d.querySelector('[data-here="scan"]'));
     for (let n = 0; n < 6; n++) {
       const g = [...d.querySelectorAll('.mapsvg .node.sus[data-hike]')].find(g => /lake|stream|brook|river|rapids/.test(g.getAttribute('aria-label')));
-      if (!g) { const s = d.querySelector('[data-here="scan"]:not([disabled])'); if (s) click(s); continue; }
+      if (!g) { // nothing heard: rain or fog may be drowning it out, so wait a couple of hours and listen again
+        click(d.querySelector('[data-here="rest"]')); click(d.querySelector('[data-rest="2"]') ?? d.querySelector('[data-rest]'));
+        const s = d.querySelector('[data-here="scan"]:not([disabled])'); if (s) click(s); continue;
+      }
       const name = g.querySelector('text')?.textContent.replace(/\?$/, ''), before = entries().length;
       click(g);
       const now = entries().slice(before);

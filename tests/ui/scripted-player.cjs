@@ -103,7 +103,7 @@ const triedBones = new Set(), triedSharp = new Set();
 const where = () => d.querySelector('#where').textContent;
 
 function step() {
-  if (hour() >= 21 || hour() < 5) { closePicker(); click('[data-here="rest"]'); return click('[data-rest="morning"]'); }
+  if (/, night/.test(d.querySelector('#when').textContent)) { closePicker(); click('[data-here="rest"]'); return click('[data-rest="morning"]'); } // night, as the header says
   const b = body();
   // water
   if (/(^| )(Thirsty|Very thirsty|Parched)/.test(b)) {
@@ -114,7 +114,7 @@ function step() {
     return explore(WATER, 'water') || explore(/hill/, 'water');
   }
   // food
-  if (/Very hungry|Starving/.test(b)) {
+  if (/Very hungry|Starving/.test(b) && !/Full\./.test(b)) { // hungry for days still, but a full stomach can't take more now
     const safe = items().find(i => i.el.querySelector('[data-eat]') && !/sick/.test(i.imp));
     if (safe) { safe.el.querySelector('[data-eat]').click(); return true; }
     if (collect(/^(Nuts|Fruits|Berries|Pods|Seed heads|Small creatures|Tubers|Bulbs|Corms|Taproots)/, t => !/sick/.test(t))) return true;
@@ -190,6 +190,7 @@ setTimeout(() => {
       if (journal().length + d.querySelector('#when').textContent === before) stalls++; else stalls = 0;
       if (stalls > 25) { console.log('(stalled: no action changed anything)'); break; }
     }
+    if (process.env.DUMP) console.log(journal().join('\n')); // DUMP=1: the whole journal, for diagnosing
     const J = journal();
     const drills = J.filter(t => /at the drill/.test(t));
     const attempts = drills.reduce((s, t) => s + Number((t.replace(/^\d\d:\d\d/, '').match(/^(\d+) attempts/) || [0, 1])[1]), 0);

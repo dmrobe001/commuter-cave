@@ -1611,6 +1611,63 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     { id: "parasite", label: "parasite load", kind: "useful", scale: "01", sd: 0.6, when: (t) => t.parasite >= 0.1, prior: { moisture: 1 }, median: (t) => t.parasite },
     { id: "toxin", label: "toxicity", kind: "useful", scale: "01", sd: 0.5, when: (t) => t.aposematic, prior: {}, median: (t) => t.toxin }
   ];
+  var BEHAVIOUR = {
+    songbird: { breed: [85, 175], migrant: 0.6, shy: true, song: "bird" },
+    groundbird: { breed: [75, 160], shy: true, song: "bird" },
+    frog: { breed: [60, 130], dormant: 6, rainCaller: true, song: "frog" },
+    lizard: { breed: [100, 170], dormant: 10, basker: true },
+    browser: { breed: [265, 315], song: "deer", rut: true },
+    rooter: { breed: [320, 365], song: "grunter" },
+    predator: { breed: [20, 70], song: (t) => t.pack ? "canid" : "felid" },
+    hare: { breed: [40, 200] },
+    rodent: { dormant: 3, hibernator: 0.4 },
+    stinker: { dormant: -4 },
+    soarer: { migrant: 0.3, basker: true },
+    fish: {},
+    ant: { dormant: 5 },
+    grasshopper: { dormant: 10 },
+    caterpillar: { dormant: 8 },
+    beetle: { dormant: 6 },
+    snail: { dormant: 5 },
+    crayfish: { dormant: 3 },
+    worm: { dormant: 2 },
+    woodlouse: { dormant: 1 },
+    cricket: { dormant: 10 },
+    termite: { dormant: 12 },
+    bee: { dormant: 9 },
+    wasp: { dormant: 9 },
+    mosquito: { dormant: 10 },
+    gnat: { dormant: 8 },
+    fly: { dormant: 8 },
+    grub: {},
+    mussel: {}
+  };
+  var inWindow = (doy, [a, b]) => {
+    const d = (doy % 365 + 365) % 365;
+    return a <= b ? d >= a && d <= b : d >= a || d <= b;
+  };
+  var CLOUDY = ["overcast", "rain", "storm", "fog", "snow", "blizzard"];
+  function animalNow(a, cond) {
+    const b = a.behaviour ?? {};
+    const away = !!b.migrant && cond.meanC < 8, dormant = b.dormant != null && cond.meanC < b.dormant;
+    const breeding = !!b.breed && inWindow(cond.doy, b.breed);
+    let calls = 1, seen = 1;
+    if (breeding && b.breedCall)
+      calls *= 2.5;
+    if (cond.wet) {
+      if (b.shy) {
+        calls *= 0.15;
+        seen *= 0.5;
+      }
+      if (b.rainCaller)
+        calls *= breeding ? 2 : 1.3;
+      if (a.cls === "invertebrate")
+        seen *= 0.5;
+    }
+    if (b.basker && CLOUDY.includes(cond.weather))
+      seen *= 0.3;
+    return { here: away || dormant ? 0 : 1, away, dormant, breeding, calls, seen, callNow: (r) => breeding && b.breedCall && r.chance(0.7) ? b.breedCall : a.signs?.call ?? null };
+  }
   var EGGS = {
     groundbird: { kg: 0.25, nest: "a clutch in a scrape on the ground" },
     songbird: { kg: 0.03, nest: "a few small eggs in a cup nest" },
@@ -1724,11 +1781,24 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         distant: !!prof.distant
       };
     }
+    const br = makeRng(`${seed}/behaviour/${id}`), B = BEHAVIOUR[t.key] ?? {};
+    const behaviour = {
+      breed: B.breed ? env.leanSeason === "dry season" && ["songbird", "groundbird", "frog", "lizard"].includes(t.key) ? [150, 240] : B.breed : null,
+      dormant: B.dormant != null && (B.hibernator == null || br.chance(B.hibernator)) ? B.dormant : null,
+      migrant: !!B.migrant && env.meanTempC < 15 && br.chance(B.migrant),
+      shy: !!B.shy,
+      rainCaller: !!B.rainCaller,
+      basker: !!B.basker,
+      rut: !!B.rut,
+      songFamily: B.song ? typeof B.song === "function" ? B.song(t) : B.song : null,
+      breedCall: null
+    };
     return {
       id,
       kind: "animal",
       cls: t.cls,
       cryptic: !!T2.cryptic,
+      behaviour,
       name: namer.animal(t, habitats[0]?.micro),
       unit: T2.unit,
       traits: t,
@@ -1783,6 +1853,9 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       const id = `A${i + 1}`;
       return buildAnimal(seed, id, animalArchetype(rng.fork(id), key, env), env, namer, mc, callsUsed);
     });
+    for (const a of out)
+      if (a.behaviour.breed && a.behaviour.songFamily && a.signs)
+        a.behaviour.breedCall = makeCall(makeRng(`${seed}/song/${a.id}`), a.behaviour.songFamily, callsUsed);
     for (const a of out) {
       const kin = out.filter((b) => b !== a && b.traits.key === a.traits.key);
       if (!kin.length)
@@ -2462,8 +2535,9 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     }
     return out;
   }
-  function observeSite(world, memory, { site: site2, micro, skill = 0.5, time = "day" }) {
+  function observeSite(world, memory, { site: site2, micro, skill = 0.5, time = "day", cond = null }) {
     var _a, _b, _c, _d, _e, _f, _g;
+    const light = cond?.light ?? 1, hearing = cond?.hearing ?? 1;
     const env = world.environment;
     const all = [...world.stones, ...world.plants, ...world.animals];
     const byId = (id) => all.find((x) => x.id === id);
@@ -2476,7 +2550,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const firstVisit = memory.visits === 0;
     const skillF = 0.6 + 0.8 * skill;
     const charBits = [];
-    for (const k of ["moisture", "exposure", "fertility"]) {
+    for (const k of light < 0.1 ? ["moisture"] : light < 0.35 ? ["moisture", "fertility"] : ["moisture", "exposure", "fertility"]) {
       const z = zScore(memory.factors[k], perceived[k], 0.3);
       const dir = perceived[k] > 0 ? "up" : "down";
       if (z !== null && Math.abs(z) > 1.1)
@@ -2508,7 +2582,10 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       const count = (h.perInstance ?? h.pieces) * Math.exp((e.kind === "stone" ? 0 : 0.35 * f.fertility) + 0.5 * ar.normal());
       if (!ar.chance(1 - Math.exp(-count / 2)))
         continue;
-      let p = NOTICE[e.kind === "stone" ? "stone" : e.form ?? e.cls] * skillF;
+      const now2 = e.kind === "animal" && cond ? animalNow(e, cond) : null;
+      if (now2 && !now2.here)
+        continue;
+      let p = NOTICE[e.kind === "stone" ? "stone" : e.form ?? e.cls] * skillF * light * (now2?.seen ?? 1);
       if (!r.chance(clamp(p)))
         continue;
       sightings.push({ e, logCount: Math.log(count + 1) + r.normal(0, 0.2) });
@@ -2516,36 +2593,39 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     let bolted = null;
     for (const e of world.animals.filter((x) => x.cls !== "invertebrate" && x.habitats.some((h) => h.micro === micro))) {
       const s = e.signs ?? {};
+      const now2 = cond ? animalNow(e, cond) : null;
+      if (now2 && !now2.here)
+        continue;
       const active = activeAt(e, time);
       const here = 1 - Math.exp(-e.perKm2 * 0.08);
       const recent = 1 - Math.exp(-e.perKm2 * 0.3);
       const presentNow = r.chance(here);
       if (s.distant) {
-        if (presentNow && r.chance(clamp(0.5 + 0.5 * f.exposure, 0, 1) * (active ? 1 : 0.2)))
+        if (presentNow && r.chance(clamp(0.5 + 0.5 * f.exposure, 0, 1) * (active ? 1 : 0.2) * (now2?.seen ?? 1) * Math.min(1, 2 * light)))
           sightings.push({ e, distant: true });
         continue;
       }
-      const seen = presentNow && r.chance(clamp(NOTICE[e.cls] * skillF * (active ? 1.3 : 0.5) * (1 - 0.5 * e.traits.wariness)));
+      const seen = presentNow && r.chance(clamp(NOTICE[e.cls] * skillF * (active ? 1.3 : 0.5) * (1 - 0.5 * e.traits.wariness) * light * (now2?.seen ?? 1)));
       if (seen)
         sightings.push({ e });
       if (presentNow && !seen && e.traits.wariness > 0.5 && s.speed > 0.6 && r.chance(0.3))
         bolted = bolted ?? e;
-      if (presentNow && s.call && active && r.chance(0.6))
-        signObs.push({ e, channel: "call", seenToo: seen });
+      if (presentNow && s.call && active && r.chance(clamp(0.6 * (now2?.calls ?? 1) * hearing)))
+        signObs.push({ e, channel: "call", seenToo: seen, callDesc: now2 ? now2.callNow(r) : s.call });
       if (!r.chance(recent))
         continue;
-      const trackP = (TRACK_GROUND[micro] ?? 0.4) * (0.4 + 0.6 * skill);
+      const trackP = (TRACK_GROUND[micro] ?? 0.4) * (0.4 + 0.6 * skill) * light * (cond?.wet ? 0.3 : 1);
       if (s.track && r.chance(trackP)) {
         const g = samplePatch(world, e.id, site2, micro).traits.groupSize;
         signObs.push({ e, channel: "track", seenToo: seen, cm: Math.round(2 * s.track.lengthCm * Math.exp(r.normal(0, 0.08))) / 2, group: g ? Math.max(1, Math.round(g * Math.exp(r.normal(0, 0.25)))) : null });
       }
-      if (s.scat && r.chance(0.3 * (0.4 + 0.6 * skill)))
+      if (s.scat && r.chance(0.3 * (0.4 + 0.6 * skill) * light))
         signObs.push({ e, channel: "scat", seenToo: seen });
-      if (s.damage && r.chance(0.25 * (0.4 + 0.6 * skill)))
+      if (s.damage && r.chance(0.25 * (0.4 + 0.6 * skill) * light))
         signObs.push({ e, channel: "damage", seenToo: seen });
-      if (s.den && r.chance(0.12))
+      if (s.den && r.chance(0.12 * light))
         signObs.push({ e, channel: "den", seenToo: seen });
-      if (s.hair && r.chance(0.06))
+      if (s.hair && r.chance(0.06 * light))
         signObs.push({ e, channel: "hair", seenToo: seen });
     }
     for (const sgt of sightings) {
@@ -2587,8 +2667,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const knownAnimals = world.animals.filter((a) => a.signs && memory.entities[memKeyOf(a)]);
     for (const so of signObs) {
       const { e, channel } = so;
-      const key = signature(channel, e);
-      const desc = signDesc(channel, e);
+      const key = so.callDesc ? `call:${so.callDesc}` : signature(channel, e);
+      const desc = so.callDesc ?? signDesc(channel, e);
       const sig2 = memory.signs[key];
       so.key = key;
       if (so.seenToo) {
@@ -2676,6 +2756,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const charChosen = charBits.sort((a, b) => b.score - a.score).slice(0, 2).map((c) => pick(memory, r, c.key, c.words));
     const opener = firstVisit ? `Where I woke: ${MICRO_PLAIN[micro] ?? micro}.` : pick(memory, r, `open-${micro}`, MICRO_OPENERS[micro] ?? ["Somewhere new."]);
     out.push(charChosen.length ? `${opener.replace(/\.$/, "")}; ${charChosen.join("; ")}.` : opener);
+    if (light < 0.35)
+      out.push(light < 0.1 ? "Too dark to see much; mostly I listened." : "Too dark to make out much.");
     if (aware && newCount >= 3 && r.chance(0.7))
       out.push(tpl(memory, r, "surprise")());
     const fresh = chosen.filter((x) => x.type === "new");
@@ -2773,7 +2855,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       const sig2 = memory.signs[so.key];
       if (!sig2 && !introducedSigns.has(so.key) && !(so.linkTo && memory.entities[memKeyOf(so.linkTo)]))
         continue;
-      const entry = (_e = memory.signs)[_f = so.key] ?? (_e[_f] = { channel: so.channel, desc: signDesc(so.channel, so.e), count: 0, linked: null });
+      const entry = (_e = memory.signs)[_f = so.key] ?? (_e[_f] = { channel: so.channel, desc: so.callDesc ?? signDesc(so.channel, so.e), count: 0, linked: null });
       entry.count++;
       if (so.linkTo && memory.entities[memKeyOf(so.linkTo)] && (!sig2 || linkedKeys.has(so.key)))
         entry.linked = memKeyOf(so.linkTo);
@@ -3284,7 +3366,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   }
   var isLookout = (L, x, y) => L.features.hills.some((h) => Math.abs(h.x - x) <= 1 && Math.abs(h.y - y) <= 1) || lookoutScore(L, x, y) > 0.55;
   var lookoutEye = (L, p) => Math.max(3, CANOPY_H * L.veg[idx2(p.x, p.y)] + 2);
-  function perceive(L, pos, { time = "day", lookout = false, boost = 1 } = {}) {
+  function perceive(L, pos, { time = "day", lookout = false, boost = 1, sky = null } = {}) {
     const { V, A } = landmarks(L);
     const out = /* @__PURE__ */ new Map();
     const eye = lookout ? lookoutEye(L, pos) : 1.7;
@@ -3300,11 +3382,11 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       if (angular < 4e-3)
         continue;
       const t = sightline(L, pos, f, eye, f.targetH);
-      const s = t * clamp(angular / 0.012) * Math.exp(-d / (lookout ? 12e3 : 7e3));
+      const s = t * clamp(angular / 0.012) * Math.exp(-d / (lookout ? 12e3 : 7e3)) * (sky ? sky.far * Math.exp(-3 * d / sky.visibility) : 1);
       if (s > 0.12 / boost && (!out.has(f.key) || out.get(f.key).strength < s))
         out.set(f.key, { key: f.key, kind: f.kind, channel: "sight", trueBearing: bearing(pos, f), trueDist: d, strength: s, x: f.x, y: f.y });
     }
-    for (const c of hear(L, pos, { time, boost }))
+    for (const c of hear(L, pos, { time, boost: boost * (sky?.hearing ?? 1) }))
       if (!out.has(c.key) || out.get(c.key).strength < c.strength)
         out.set(c.key, c);
     return [...out.values()];
@@ -3510,9 +3592,10 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
           aim = fresh;
           drift = 0;
         } else {
-          if ((aim.x !== p.x || aim.y !== p.y) && !blocks(L, idx2(aim.x, aim.y))) {
-            hours += stepHours(L, p, aim);
-            p = { x: aim.x, y: aim.y };
+          const spot = fresh ?? aim;
+          if ((spot.x !== p.x || spot.y !== p.y) && !blocks(L, idx2(spot.x, spot.y))) {
+            hours += stepHours(L, p, spot);
+            p = { x: spot.x, y: spot.y };
             path.push(p);
           }
           break;
@@ -3922,6 +4005,177 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       out.push({ key: s.key, kind: s.kind, channel: "smell", words: s.words, trueDist: d, trueBearing: b, x: s.x, y: s.y, strength: 1 - d / reach, source: s });
     }
     return out;
+  }
+
+  // src/sky.js
+  var RAD = Math.PI / 180;
+  var STEP = 3;
+  var SYNODIC = 29.53;
+  function calendar(world) {
+    if (world._calendar)
+      return world._calendar;
+    const e = world.environment, r = makeRng(`${world.seed}/calendar`);
+    const lat = clamp(64 - 2.2 * e.meanTempC + 10 * (e.seasonality - 0.5), 3, 62);
+    const monsoon = e.leanSeason === "dry season";
+    const cal = {
+      lat,
+      monsoon,
+      doy0: Math.round(r.uniform(80, 230)),
+      // day of the year the game starts on
+      moon0: r.next(),
+      // phase on day 1 (0 new, 0.5 full)
+      tempAmp: 2 + 20 * e.seasonality * Math.pow(lat / 60, 1.2)
+      // half the annual swing of the daily mean, °C
+    };
+    return world._calendar = cal;
+  }
+  var dayOfYear = (world, day, t = 12) => calendar(world).doy0 + (day - 1) + t / 24;
+  var wrapDoy = (d) => (d % 365 + 365) % 365;
+  function seasonOf(world, doy) {
+    const cal = calendar(world), d = wrapDoy(doy);
+    if (cal.monsoon)
+      return rainFactor(world, doy) > 1 ? "wet season" : "dry season";
+    return d < 60 || d >= 335 ? "winter" : d < 152 ? "spring" : d < 244 ? "summer" : "autumn";
+  }
+  var declination = (doy) => -23.44 * Math.cos(2 * Math.PI * (doy + 10) / 365);
+  function altitude(lat, decl, hourAngleDeg) {
+    const s = Math.sin(lat * RAD) * Math.sin(decl * RAD) + Math.cos(lat * RAD) * Math.cos(decl * RAD) * Math.cos(hourAngleDeg * RAD);
+    return Math.asin(clamp(s, -1, 1)) / RAD;
+  }
+  function sunAltitude(world, day, t) {
+    return altitude(calendar(world).lat, declination(dayOfYear(world, day, t)), 15 * (t - 12));
+  }
+  function dayLength(world, day, alt = 0) {
+    const lat = calendar(world).lat * RAD, d = declination(dayOfYear(world, day)) * RAD;
+    const c = (Math.sin(alt * RAD) - Math.sin(lat) * Math.sin(d)) / (Math.cos(lat) * Math.cos(d));
+    if (c >= 1)
+      return 0;
+    if (c <= -1)
+      return 24;
+    return 2 * Math.acos(c) / RAD / 15;
+  }
+  var dawnAt = (world, day) => 12 - dayLength(world, day, -6) / 2;
+  function moonAt(world, day, t) {
+    const cal = calendar(world), abs = day - 1 + t / 24;
+    const phase = ((cal.moon0 + abs / SYNODIC) % 1 + 1) % 1;
+    const illum = (1 - Math.cos(2 * Math.PI * phase)) / 2;
+    const alt = altitude(cal.lat, declination(dayOfYear(world, day, t)) * Math.cos(2 * Math.PI * phase), 15 * (t - 12 - 24 * phase));
+    return { phase, illum, alt };
+  }
+  function moonWords(phase) {
+    const p = phase * 8;
+    return ["new moon", "thin crescent moon", "half moon", "gibbous moon", "full moon", "gibbous moon", "half moon", "thin crescent moon"][Math.round(p) % 8];
+  }
+  function rainFactor(world, doy) {
+    const cal = calendar(world), s = world.environment.seasonality;
+    return cal.monsoon ? 1 + 0.9 * s * Math.cos(2 * Math.PI * (doy - 200) / 365) : 1 + 0.15 * Math.cos(2 * Math.PI * (doy - 15) / 365);
+  }
+  function invNorm(p) {
+    const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239];
+    const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
+    const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+    const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
+    const q = Math.min(Math.max(p, 1e-9), 1 - 1e-9);
+    if (q < 0.02425) {
+      const u2 = Math.sqrt(-2 * Math.log(q));
+      return (((((c[0] * u2 + c[1]) * u2 + c[2]) * u2 + c[3]) * u2 + c[4]) * u2 + c[5]) / ((((d[0] * u2 + d[1]) * u2 + d[2]) * u2 + d[3]) * u2 + 1);
+    }
+    if (q > 1 - 0.02425)
+      return -invNorm(1 - q);
+    const u = q - 0.5, v = u * u;
+    return (((((a[0] * v + a[1]) * v + a[2]) * v + a[3]) * v + a[4]) * v + a[5]) * u / (((((b[0] * v + b[1]) * v + b[2]) * v + b[3]) * v + b[4]) * v + 1);
+  }
+  var WEATHER_WORDS = { clear: "clear", cloudy: "broken cloud", overcast: "overcast", rain: "rain", storm: "a thunderstorm", fog: "fog", snow: "snow", blizzard: "driving snow" };
+  function weatherStep(world, k) {
+    const cache = world._weather ?? (world._weather = { front: [], states: [] });
+    const persist = Math.exp(-STEP / 48);
+    for (let i = cache.front.length; i <= k; i++) {
+      const r = makeRng(`${world.seed}/weather/${i}`);
+      const prev = i ? cache.front[i - 1] : makeRng(`${world.seed}/weather/start`).normal();
+      const front = persist * prev + Math.sqrt(1 - persist * persist) * r.normal();
+      cache.front.push(front);
+      const day = Math.floor(i * STEP / 24) + 1, t = i * STEP % 24 + STEP / 2, doy = dayOfYear(world, day, t);
+      const wetShare = clamp(world.environment.precipMm / 8e3 * rainFactor(world, doy), 0.015, 0.4);
+      const a = invNorm(1 - wetShare), temp = temperature(world, day, t, "cloudy");
+      let st = front > a + 1.1 ? "storm" : front > a ? "rain" : front > a - 0.7 ? "overcast" : front > a - 1.5 ? "cloudy" : "clear";
+      if (st === "rain" && temp > 18 && t >= 12 && t <= 20 && r.chance(0.35))
+        st = "storm";
+      if (temp < 0.5 && (st === "rain" || st === "storm"))
+        st = st === "storm" ? "blizzard" : "snow";
+      const prevSt = cache.states[i - 1];
+      if ((st === "clear" || st === "cloudy") && t >= 1 && t <= 10) {
+        const damp = clamp(world.environment.water, 0, 1.5) * (prevSt === "rain" || prevSt === "fog" ? 1.6 : 1);
+        if (r.chance(clamp(0.18 * damp * (prevSt === "fog" ? 2.5 : 1))))
+          st = "fog";
+      }
+      cache.states.push(st);
+    }
+    return cache.states[k];
+  }
+  var weatherAt = (world, day, t) => weatherStep(world, Math.max(0, Math.floor(((day - 1) * 24 + t) / STEP)));
+  var DIURNAL = { clear: 12, cloudy: 9, overcast: 5, rain: 3, storm: 4, fog: 5, snow: 3, blizzard: 3 };
+  function dailyMeanTemp(world, day) {
+    const cal = calendar(world);
+    return world.environment.meanTempC - cal.tempAmp * Math.cos(2 * Math.PI * (dayOfYear(world, day) - 15) / 365);
+  }
+  function temperature(world, day, t, weather = null) {
+    const w = weather ?? weatherAt(world, day, t);
+    return dailyMeanTemp(world, day) + DIURNAL[w] / 2 * Math.sin(2 * Math.PI * (t - 9) / 24) - (w === "rain" || w === "storm" ? 1.5 : 0);
+  }
+  var CLOUD = { clear: 1, cloudy: 0.6, overcast: 0.25, rain: 0.15, storm: 0.06, fog: 0.35, snow: 0.2, blizzard: 0.1 };
+  var VISIBILITY = { clear: 6e4, cloudy: 45e3, overcast: 25e3, rain: 4e3, storm: 1500, fog: 250, snow: 1500, blizzard: 300 };
+  var NOISE = { clear: 1, cloudy: 1, overcast: 1, rain: 0.55, storm: 0.3, fog: 1.1, snow: 0.95, blizzard: 0.4 };
+  function skyAt(world, day, t) {
+    const sunAlt = sunAltitude(world, day, t), moon = moonAt(world, day, t), weather = weatherAt(world, day, t);
+    const sun = sunAlt > 0 ? 400 + 12e4 * Math.sin(sunAlt * RAD) : Math.pow(10, 2.6 + 0.35 * Math.max(sunAlt, -18));
+    const moonLux = moon.alt > 0 ? 0.25 * Math.pow(moon.illum, 3) * Math.sqrt(Math.sin(moon.alt * RAD)) : 0;
+    const c = CLOUD[weather], night = moonLux + 2e-3;
+    const lux = sun * c + night * Math.pow(c, 1.5);
+    return {
+      day,
+      t,
+      doy: dayOfYear(world, day, t),
+      season: seasonOf(world, dayOfYear(world, day, t)),
+      sunAlt,
+      moon,
+      weather,
+      lux,
+      tempC: temperature(world, day, t, weather),
+      meanC: dailyMeanTemp(world, day),
+      visibility: VISIBILITY[weather],
+      hearing: NOISE[weather],
+      wet: ["rain", "storm", "snow", "blizzard"].includes(weather),
+      dark: sunAlt < -6
+    };
+  }
+  var seeingFar = (lux) => clamp((Math.log10(Math.max(lux, 1e-5)) + 3.3) / 3);
+  var seeingNear = (lux) => clamp((Math.log10(Math.max(lux, 1e-5)) + 1.5) / 3);
+
+  // src/injury.js
+  var BASE = 1 / 150;
+  var UNDERFOOT = { scree: 3, outcrop: 2, deadfall: 1.8, streambed: 1.8, claybank: 1.6, pond: 1.5, spring: 1.3, woodland: 1.2, edge: 1.1, streambank: 1.2, glade: 1, lake: 1 };
+  var WEATHER = { rain: 1.6, storm: 2, snow: 2, blizzard: 3, fog: 1.2 };
+  function hazard2(L, c, env, body, familiar) {
+    const micro = L.micro[c];
+    const ground = (1 + 12 * Math.max(0, L.slope[c] - 0.08)) * (UNDERFOOT[micro] ?? 1) * (L.chan[c] >= 3 ? 1.5 : 1);
+    const light = 1 + 9 * Math.pow(1 - seeingNear(env.lux * (1 - 0.75 * L.veg[c])), 1.5);
+    const weather = (WEATHER[env.weather] ?? 1) * (["rain", "storm"].includes(env.weather) && ["scree", "outcrop", "claybank", "streambed"].includes(micro) ? 1.4 : 1);
+    const b = (1 + 1.5 * body.fatigue ** 2) * (1 + 2 * Math.max(0, 0.3 - body.energy) / 0.3) * (1 + 1.5 * body.sick) * (1 + (body.limp ?? 0));
+    return BASE * ground * light * weather * b * (familiar ? 0.5 : 1);
+  }
+  function injuryAt(L, c, rng) {
+    const micro = L.micro[c], steep = L.slope[c] > 0.2 || ["scree", "outcrop"].includes(micro);
+    const sev = clamp(rng.logNormal(0.25, 0.6), 0.05, 0.9);
+    let kind;
+    if (L.chan[c] >= 2 || micro === "streambed")
+      kind = rng.chance(0.6) ? "slip" : "ankle";
+    else if (steep)
+      kind = rng.chance(0.6) ? "ankle" : "fall";
+    else if (L.veg[c] > 0.55 || micro === "deadfall")
+      kind = rng.chance(0.5) ? "cut" : "ankle";
+    else
+      kind = rng.chance(0.7) ? "ankle" : "fall";
+    return { kind, sev };
   }
 
   // src/mentalmap.js
@@ -5218,8 +5472,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     tool.props.sharpness = clamp(tool.props.sharpness - k * hours * (workedHardness / tool.props.hardness) ** 2);
   }
   var woodHardness = (density) => 1 + 3 * density;
-  function dry(item2, days, ambient) {
-    item2.props.moisture = ambient + (item2.props.moisture - ambient) * Math.exp(-0.4 * days);
+  function dry(item2, days, ambient2) {
+    item2.props.moisture = ambient2 + (item2.props.moisture - ambient2) * Math.exp(-0.4 * days);
   }
   var nextId = 1;
   var item = (name, props, provenance) => ({ id: nextId++, name, props, provenance });
@@ -5320,7 +5574,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     );
     return res;
   }
-  function pickMaterials(world, hearthChoice, ambient) {
+  function pickMaterials(world, hearthChoice, ambient2) {
     const mats = materialsOf(world);
     const site2 = "camp";
     const withPatch = (m) => {
@@ -5352,16 +5606,16 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       bone: boneSrc ? item("bone", { hardness: 3 }, prov(boneSrc)) : null,
       hammer: item("hammerstone", { hardness: hammer.props.hardness, mass: 700 }, prov(hammer)),
       anvil: item("anvil", { mass: 6e3 }, prov(anvil)),
-      hearthWood: item("dead wood", { density: hearth.props.density, resin: hearth.props.resin, moisture: ambient + 0.08 }, prov(hearth)),
-      spindleStock: stalk ? item("dead stalk", { density: 0.3, moisture: ambient, straightness: 0.95 }, prov(stalk)) : item("green shoot", { density: shoots[0].props.density, moisture: 0.55, straightness: 0.9 }, prov(shoots[0])),
-      seasonedStock: !stalk && deadShrub ? item("dead shoot", { density: deadShrub.props.density, moisture: ambient + 0.02, straightness: 0.72 }, { ...prov(deadShrub), name: `${deadShrub.sourceName} (dead shoots)` }) : null,
-      tinderMat: item("tinder material", { moisture: ambient * 0.6 }, prov(tinderMat)),
+      hearthWood: item("dead wood", { density: hearth.props.density, resin: hearth.props.resin, moisture: ambient2 + 0.08 }, prov(hearth)),
+      spindleStock: stalk ? item("dead stalk", { density: 0.3, moisture: ambient2, straightness: 0.95 }, prov(stalk)) : item("green shoot", { density: shoots[0].props.density, moisture: 0.55, straightness: 0.9 }, prov(shoots[0])),
+      seasonedStock: !stalk && deadShrub ? item("dead shoot", { density: deadShrub.props.density, moisture: ambient2 + 0.02, straightness: 0.72 }, { ...prov(deadShrub), name: `${deadShrub.sourceName} (dead shoots)` }) : null,
+      tinderMat: item("tinder material", { moisture: ambient2 * 0.6 }, prov(tinderMat)),
       hearthCandidates: dead.map((d) => `${d.sourceName} ${d.props.density.toFixed(2)}`)
     };
   }
   function estimateFire(world, { skill = 0.06, hearthChoice = "best", maxDays = 30, efficiency = 0.5 } = {}) {
-    const ambient = clamp(0.05 + 0.07 * world.environment.water, 0.05, 0.35);
-    const m = pickMaterials(world, hearthChoice, ambient);
+    const ambient2 = clamp(0.05 + 0.07 * world.environment.water, 0.05, 0.35);
+    const m = pickMaterials(world, hearthChoice, ambient2);
     if (!m)
       return { blocked: "a fire-chain material is missing entirely" };
     const knapMean = Math.log(Math.max(ROLES.knapStone(m.stone.props, skill), 1e-3)) + 3 * skill;
@@ -5373,16 +5627,16 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       const km = Math.log(Math.max(ROLES.knapStone(m.stone.props, skill), 1e-3)) + 3 * skill;
       return 1 - normCdf((-1.7 - km) / (1 - 0.7 * skill)) >= 0.05;
     })();
-    const board = { density: m.hearthWood.props.density, resin: m.hearthWood.props.resin, moisture: ambient, notch: knapOK ? 0.8 : 0.45 };
+    const board = { density: m.hearthWood.props.density, resin: m.hearthWood.props.resin, moisture: ambient2, notch: knapOK ? 0.8 : 0.45 };
     const pAttempt = (spindle) => {
       const mean = Math.log(Math.max(ROLES.hearth(board, skill), 1e-3)) + Math.log(Math.max(ROLES.spindle(spindle, skill), 1e-3)) + 0.6 * Math.log(board.notch) + HAND_DRILL.kSkill * skill;
       return 1 - normCdf((HAND_DRILL.theta - mean) / (1 - 0.7 * skill));
     };
     const pLight = 0.85;
-    const ready = m.spindleStock.name === "green shoot" ? Math.log((0.55 - ambient) / 0.03) / 0.4 + 1 : 1;
-    const late0 = pAttempt({ straightness: m.spindleStock.props.straightness, moisture: m.spindleStock.name === "green shoot" ? ambient + 0.02 : m.spindleStock.props.moisture, length: 70 });
+    const ready = m.spindleStock.name === "green shoot" ? Math.log((0.55 - ambient2) / 0.03) / 0.4 + 1 : 1;
+    const late0 = pAttempt({ straightness: m.spindleStock.props.straightness, moisture: m.spindleStock.name === "green shoot" ? ambient2 + 0.02 : m.spindleStock.props.moisture, length: 70 });
     const early = m.spindleStock.name !== "green shoot" ? late0 : m.seasonedStock ? pAttempt({ ...m.seasonedStock.props, length: 70 }) : 0;
-    const late = pAttempt({ straightness: m.spindleStock.props.straightness, moisture: ambient + 0.02, length: 70 });
+    const late = pAttempt({ straightness: m.spindleStock.props.straightness, moisture: ambient2 + 0.02, length: 70 });
     const perAttempt = 0.25 * HAND_DRILL.handLoad * 0.09 * 0.85;
     const attemptsFirst = Math.floor(0.85 / perAttempt), attemptsLater = Math.floor((0.85 - 0.55 * 0.85) / perAttempt);
     let survive = 1, median = null;
@@ -5395,7 +5649,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       if (median === null && survive <= 0.5)
         median = day;
     }
-    return { median, pFlake, edgeSource, pFireBy: (d) => curve[d - 2] ?? 1, early, late, ready: Math.ceil(ready), ambient, hearth: m.hearthWood, spindle: m.seasonedStock ? "crooked dead shoots, then seasoned green" : m.spindleStock.name };
+    return { median, pFlake, edgeSource, pFireBy: (d) => curve[d - 2] ?? 1, early, late, ready: Math.ceil(ready), ambient: ambient2, hearth: m.hearthWood, spindle: m.seasonedStock ? "crooked dead shoots, then seasoned green" : m.spindleStock.name };
   }
 
   // src/game.js
@@ -5410,7 +5664,13 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   var S = null;
   var tab = "actions";
   var now = () => (S.day - 1) * 24 + S.t;
-  var isNight = () => S.t >= 21 || S.t < 5;
+  var skyNow = () => S._sky?.k === `${S.day}/${S.t}` ? S._sky.v : (S._sky = { k: `${S.day}/${S.t}`, v: skyAt(S.world, S.day, S.t) }).v;
+  var isNight = () => skyNow().sunAlt < -6;
+  var sunsetAt = (day) => 12 + dayLength(S.world, day) / 2;
+  var ambient = () => {
+    const k = skyNow();
+    return clamp(S.ambient + ({ rain: 0.15, storm: 0.25, fog: 0.12, snow: 0.08, blizzard: 0.12 }[k.weather] ?? (k.weather === "clear" && k.sunAlt > 20 ? -0.03 : 0)), 0.03, 0.6);
+  };
   var site = () => S.sites[S.here];
   var entity = (id) => [...S.world.stones, ...S.world.plants, ...S.world.animals].find((e) => e.id === id);
   var fireHere = () => (site().fireUntil ?? -1) > now();
@@ -5467,6 +5727,11 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       walked: {},
       recentNotice: null
     };
+    {
+      const k = skyNow(), tw = k.tempC < 5 ? "cold" : k.tempC < 12 ? "cool" : k.tempC < 22 ? "mild" : "warm";
+      const when = (adj, rest2) => /season/.test(k.season) ? `a ${adj} morning in the ${k.season}${rest2}` : `a ${adj} ${k.season} morning${rest2}`;
+      log(`${cap3(k.weather === "fog" ? when("foggy", ": I can hardly see a stone\u2019s throw") : k.wet ? when("wet", `, ${WEATHER_WORDS[k.weather]} coming down`) : when(tw, `, ${WEATHER_WORDS[k.weather]}`))}.`, "note");
+    }
     const first = newSite(checked2.spawn.x, checked2.spawn.y);
     first.name = "where I woke";
     S.here = 0;
@@ -5943,7 +6208,19 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     return s;
   }
   var COMPASS_RANDOM = () => ["north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"][Math.floor(S.rng.next() * 8)];
-  var timeOfDay = () => isNight() ? "night" : S.t < 8 ? "dawn" : S.t >= 18 ? "dusk" : "day";
+  var skyView = () => {
+    const k = skyNow();
+    return { far: seeingFar(k.lux), visibility: k.visibility, hearing: k.hearing };
+  };
+  var nearLight = (s = site()) => seeingNear(skyNow().lux * (1 - 0.75 * S.L.veg[cellOf(s.x, s.y)]));
+  var condNow = (s = site()) => {
+    const k = skyNow();
+    return { doy: k.doy, meanC: k.meanC, weather: k.weather, wet: k.wet, light: nearLight(s), hearing: k.hearing };
+  };
+  var timeOfDay = () => {
+    const a = skyNow().sunAlt;
+    return a < -6 ? "night" : a < 10 ? S.t < 12 ? "dawn" : "dusk" : "day";
+  };
   var WATER_KINDS = ["falls", "cascade", "rapids", "river", "stream", "brook", "river trace", "lake", "waterfowl"];
   var isWaterKind = (k) => WATER_KINDS.includes(k);
   var cuePhrase = (c, g, from) => `${CUE_WORDS[c.kind]} to the ${bearingWord(g.bearing)}, ${c.channel === "sound" ? loudWords(c.level) : awayWords(lineHours2(S.L, from, g.est), "guess")}`;
@@ -6030,7 +6307,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   var senseEye = 1.7;
   function sense(s, lookout = false, { scan = false, focus = null } = {}) {
     senseEye = lookout ? lookoutEye(S.L, s) : 1.7;
-    let all = perceive(S.L, s, { time: timeOfDay(), lookout, boost: scan ? 1.6 : focus === "water" ? 1.4 : 1 });
+    let all = perceive(S.L, s, { time: timeOfDay(), sky: skyView(), lookout, boost: scan ? 1.6 : focus === "water" ? 1.4 : 1 });
     if (focus)
       all = all.filter((c) => isWaterKind(c.kind) || focus === "lookout" && ["hill", "cliff"].includes(c.kind));
     const cues = lookout || scan ? all : [...all].sort((a, b) => isWaterKind(b.kind) - isWaterKind(a.kind) || b.strength - a.strength).filter((c, i) => isWaterKind(c.kind) || i < 3);
@@ -6072,10 +6349,11 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       if (stillSeen.size)
         report.push(`Still there: ${[...stillSeen].map((u) => `${u.label} (${bearingWord(bearing(s, u.est))})`).join("; ")}.`);
       if (scan) {
-        const calls = S.world.animals.filter((a) => a.signs?.call && a.cls !== "invertebrate" && S.rng.chance(clamp(a.perKm2 / 15) * (timeOfDay() === "day" ? 0.5 : 1))).slice(0, 3).map((a) => {
-          const sig2 = S.mem.signs?.[`call:${a.signs.call}`];
+        const cond = condNow(s);
+        const calls = S.world.animals.filter((a) => a.signs?.call && a.cls !== "invertebrate").map((a) => ({ a, now: animalNow(a, cond) })).filter(({ a, now: now2 }) => now2.here && S.rng.chance(clamp(a.perKm2 / 15 * now2.calls * cond.hearing) * (timeOfDay() === "day" ? 0.5 : 1))).slice(0, 3).map(({ a, now: now2 }) => {
+          const call = now2.callNow(S.rng), sig2 = S.mem.signs?.[`call:${call}`];
           const who = sig2?.linked ? ` (${entity(sig2.linked)?.name ?? "something"})` : "";
-          return `${a.signs.call}${who} to the ${COMPASS_RANDOM()}, ${a.cls === "large" ? "some way off" : "close"}`;
+          return `${call}${who} to the ${COMPASS_RANDOM()}, ${a.cls === "large" ? "some way off" : "close"}`;
         });
         if (calls.length)
           report.push(`Calls: ${calls.join("; ")}.`);
@@ -6194,7 +6472,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
   function notePassing(path) {
     const passed = [];
     for (let i = 6; i < path.length; i += 6) {
-      for (const c of perceive(S.L, path[i], { time: timeOfDay() })) {
+      for (const c of perceive(S.L, path[i], { time: timeOfDay(), sky: skyView() })) {
         if (c.channel !== "sight" || !["hill", "cliff", "lake"].includes(c.kind) || c.trueDist > 900)
           continue;
         const { sus, isNew } = associate(c, path[i]);
@@ -6293,7 +6571,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const { sus, name } = targetInfo(target), here = site();
     let est = { x: target.x, y: target.y }, how;
     if (sus) {
-      const c = perceive(S.L, here, { time: timeOfDay(), boost: 1.4 }).find((k) => k.key === sus.trueKey);
+      const c = perceive(S.L, here, { time: timeOfDay(), sky: skyView(), boost: 1.4 }).find((k) => k.key === sus.trueKey);
       if (c) {
         const g = suspicionFrom(c, here, S.rng);
         sus.est = est = g.est;
@@ -6367,7 +6645,8 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const trip = followStage(S.L, from, dir, { branch });
     if (!trip.hours)
       return log(trip.why === "lake" ? "It runs straight into a lake here." : trip.why === "source" ? "This is where it rises; there\u2019s no further up." : "There\u2019s no stream right here to follow.", "warn");
-    pass(trip.hours, 260);
+    const spent = onTheMove(trip.path, trip.hours);
+    pass(spent, 260);
     let st = null;
     const run = [];
     trip.path.forEach((p) => {
@@ -6390,9 +6669,65 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const stop = STOP_WORDS[trip.why];
     S.travelHint = st?.id ?? null;
     const way = trip.path.find((p) => (p.x !== from.x || p.y !== from.y) && S.L.chan[cellOf(p.x, p.y)]) ?? from;
-    arrive(trip.end.x, trip.end.y, `Followed ${waterNameAt(st, way.x, way.y)} ${dir === "down" ? "downstream" : "upstream"} for ${timeWords(trip.hours, "known")}${stop ? `, ${stop}` : ""}.`);
+    arrive(trip.end.x, trip.end.y, `Followed ${waterNameAt(st, way.x, way.y)} ${dir === "down" ? "downstream" : "upstream"} for ${timeWords(spent, "known")}${stop ? `, ${stop}` : ""}.`);
     S.travelHint = null;
     rememberTrip(from, trip.path, trip.hours, [], knownBefore);
+  }
+  var limpFactor = () => 1 + 1.5 * (S.limp ?? 0);
+  function onTheMove(path, hours) {
+    S.trod ?? (S.trod = /* @__PURE__ */ new Set());
+    const k = skyNow(), env = { lux: k.lux, weather: k.weather }, body = { fatigue: S.ch.fatigue, energy: S.energy, sick: S.sick, limp: S.limp ?? 0 };
+    const parts = [];
+    let total = 0;
+    for (let i = 1; i < path.length; i++) {
+      const c = cellOf(path[i].x, path[i].y), h = hazard2(S.L, c, env, body, S.trod.has(c)) * stepHours(S.L, path[i - 1], path[i]);
+      total += h;
+      parts.push([c, h]);
+    }
+    for (const p of path)
+      S.trod.add(cellOf(p.x, p.y));
+    let spent = hours * limpFactor();
+    if (total > 0 && S.rng.chance(1 - Math.exp(-total))) {
+      let u = S.rng.next() * total, c = parts[parts.length - 1][0];
+      for (const [cc, h] of parts)
+        if ((u -= h) <= 0) {
+          c = cc;
+          break;
+        }
+      spent += hurt(injuryAt(S.L, c, S.rng), k);
+    }
+    return spent;
+  }
+  function hurt({ kind, sev }, k) {
+    const why = k.sunAlt < -6 ? " I couldn\u2019t see where I was putting my feet." : k.wet ? " Everything was slick with wet." : "";
+    if (kind === "ankle") {
+      S.limp = Math.max(S.limp ?? 0, sev);
+      log(`${sev < 0.3 ? "Turned my ankle on loose ground; it twinges, but it\u2019ll carry me." : sev < 0.6 ? "Went over on my ankle. It\u2019s swelling; I\u2019ll be slow for a few days." : "Badly twisted my ankle. I can barely put weight on it."}${why}`, "warn");
+      return 0.1 + 0.3 * sev;
+    }
+    if (kind === "fall") {
+      S.ch.hands = clamp(S.ch.hands + 0.05 + 0.25 * sev);
+      S.ch.fatigue = clamp(S.ch.fatigue + 0.1 + 0.2 * sev);
+      S.ch.focus = clamp(S.ch.focus - 0.1);
+      log(`Fell hard: ${sev < 0.4 ? "scraped palms and a bruised knee" : "skinned hands and a hip that will be black tomorrow"}.${why}`, "warn");
+      return 0.15;
+    }
+    if (kind === "cut") {
+      S.ch.germs = clamp(S.ch.germs + 0.2);
+      S.wound = { at: now(), sev };
+      if (S.rng.chance(0.25 + 0.5 * sev))
+        S.pendingSick.push({ at: now() + 30, severity: 0.15 + 0.35 * sev, text: "The cut on my shin is hot, swollen and weeping: it\u2019s gone bad.", wound: true });
+      log(`A broken branch tore a gash in my shin.${why} I should wash it soon.`, "warn");
+      return 0.1;
+    }
+    for (const it of S.inv)
+      if (it.props.moisture !== void 0 && it.kind !== "food")
+        it.props.moisture = Math.min(0.6, it.props.moisture + 0.3);
+    S.ch.fatigue = clamp(S.ch.fatigue + 0.05);
+    if (sev > 0.5)
+      S.limp = Math.max(S.limp ?? 0, 0.4 * sev);
+    log(`Slipped on a wet stone and went down in the water: soaked, everything I carry with me${sev > 0.5 ? ", and my ankle wrenched" : ""}.${why}`, "warn");
+    return 0.1;
   }
   function shoreOptions() {
     const h = site();
@@ -6414,7 +6749,8 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const trip = shoreStage(S.L, from, side);
     if (!trip.hours)
       return log("There\u2019s no shore here to walk.", "warn");
-    pass(trip.hours, 240);
+    const spent = onTheMove(trip.path, trip.hours);
+    pass(spent, 240);
     const lake = trip.path.map((p) => NB8.map(([dx, dy]) => ({ x: p.x + dx, y: p.y + dy })).find((q) => q.x >= 0 && q.y >= 0 && q.x < N && q.y < N && S.L.lake[cellOf(q.x, q.y)])).find(Boolean);
     const key = waterKeyAt(S.L, lake.x, lake.y);
     trip.path.forEach((p, i) => {
@@ -6425,7 +6761,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     noteSeenFeatures();
     noticeCrossings(trip.path);
     const stop = SHORE_STOPS[trip.why];
-    arrive(trip.end.x, trip.end.y, `Walked the shore of ${waterName(key, "lake", lake)} for ${timeWords(trip.hours, "known")}${stop ? `, ${stop}` : ""}.`);
+    arrive(trip.end.x, trip.end.y, `Walked the shore of ${waterName(key, "lake", lake)} for ${timeWords(spent, "known")}${stop ? `, ${stop}` : ""}.`);
     rememberTrip(from, trip.path, trip.hours, [], knownBefore);
   }
   function travelTo(target, label) {
@@ -6437,6 +6773,11 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
         info.sus.reached = true;
         return log(`Found ${info.sus.label}, right here.`, "act");
       }
+      const c = perceive(S.L, from, { time: timeOfDay(), sky: skyView(), boost: 1.4 }).find((k) => k.key === info.sus.trueKey), g = c && suspicionFrom(c, from, S.rng);
+      if (g && (g.est.x !== from.x || g.est.y !== from.y)) {
+        info.sus.est = g.est;
+        return travelTo({ ...g.est, suspect: info.sus.id }, label);
+      }
       return missedTarget(target, from);
     }
     const thirsty = S.hyd < 0.55 && !waterHere(from);
@@ -6445,7 +6786,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const resense = sus ? (p, force) => {
       if (++n % 3 && !force)
         return null;
-      const c = perceive(S.L, p, { time: timeOfDay() }).find((k) => k.key === sus.trueKey);
+      const c = perceive(S.L, p, { time: timeOfDay(), sky: skyView(), boost: force ? 1.4 : 1 }).find((k) => k.key === sus.trueKey);
       return c ? suspicionFrom(c, p, S.rng).est : null;
     } : null;
     const want = sus?.group === "water" ? waterKeyOf(sus.trueKey) : null;
@@ -6460,7 +6801,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const toWater = !!target.lake || sus?.group === "water" && /^lake-/.test(waterKeyOf(sus.trueKey));
     const trip = walk(S.L, from, target, { rng: S.rng, maxHours: budget, resense, arrived, stopAtWater: thirsty, driftSd: dest ? 1.5 : 2.5, toWater });
     const knownBefore = S.sites.length;
-    const hours = trip.hours * (S.looking ? 1.25 : 1);
+    const hours = onTheMove(trip.path, trip.hours * (S.looking ? 1.25 : 1));
     if (S.looking)
       S.ch.focus = clamp(S.ch.focus - 0.05);
     pass(hours, 300);
@@ -6529,9 +6870,9 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     return by("pond") ?? { name: "lake water", hidden: { pathogen: 0.5 } };
   }
   function look(s, skill) {
-    const time = S.t < 8 ? "dawn" : S.t >= 18 ? "dusk" : "day";
+    const time = timeOfDay();
     const before = new Set(Object.keys(S.mem.entities));
-    const out = observeSite(S.world, S.mem, { site: s.key, micro: s.micro, skill, time });
+    const out = observeSite(S.world, S.mem, { site: s.key, micro: s.micro, skill, time, cond: condNow(s) });
     for (const id of out.noticed)
       s.known.add(id);
     const fresh = Object.keys(S.mem.entities).filter((k) => !before.has(k)).map(entity).filter((e) => e && (e.kind === "animal" && e.cls !== "invertebrate" || ["tree", "shrub"].includes(e.form))).pop();
@@ -6540,18 +6881,48 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     s.visits++;
     log(out.text, "note");
   }
+  var WET_WORDS = { rain: "Rain set in.", storm: "Thunder, then a downpour: a storm.", snow: "Snow began to fall.", blizzard: "The snow thickened and the wind got up: hard to see anything.", fog: "Fog crept in; I can hardly see a stone\u2019s throw." };
+  function noteSky(a, b) {
+    if (a.weather !== b.weather) {
+      if (WET_WORDS[b.weather] && !(a.wet && b.wet))
+        log(WET_WORDS[b.weather], "note");
+      else if (a.weather === "fog" && b.weather !== "fog")
+        log("The fog lifted.", "note");
+      else if (a.wet && !b.wet)
+        log(`The ${a.weather === "snow" || a.weather === "blizzard" ? "snow" : "rain"} stopped.`, "note");
+      if (b.wet && fireHere() && !site().hut && !a.wet)
+        log("Rain on the fire: it won\u2019t last long like this.", "warn");
+    }
+    if (a.sunAlt >= -6 && b.sunAlt < -6)
+      log(`Night fell. ${moonLine(b)}`, "note");
+  }
+  function moonLine(k) {
+    const m = k.moon, up = m.alt > 0, cloud = ["overcast", "rain", "storm", "snow", "blizzard", "fog"].includes(k.weather);
+    if (cloud)
+      return "Cloud over everything: a black night.";
+    if (!up || m.illum < 0.05)
+      return m.illum < 0.05 ? "No moon; only starlight." : "The moon isn\u2019t up yet; only starlight.";
+    return `A ${moonWords(m.phase)}${m.illum > 0.9 ? ", bright enough to see by" : m.illum < 0.3 ? ", not much use" : ""}.`;
+  }
   function pass(hours, kcal = 150) {
     const steps = Math.max(1, Math.ceil(hours / 0.5));
     const dt = hours / steps;
     for (let i = 0; i < steps; i++) {
+      const was = skyNow();
       S.t += dt;
       if (S.t >= 24) {
         S.t -= 24;
         S.day++;
       }
+      noteSky(was, skyNow());
       S.hyd -= dt * (0.032 + 0.02 * Math.max(0, kcal - 150) / 250 + 0.02 * S.sick);
       S.energy -= dt * kcal / 24e3;
       S.gut = Math.max(0, S.gut - 0.12 * dt);
+      if (S.limp > 0) {
+        S.limp = Math.max(0, S.limp - dt * 0.1 / 24);
+        if (!S.limp)
+          log("My ankle feels sound again.", "note");
+      }
       if (S.inv.length > 1)
         touch(S.inv, 0.01 * dt, false);
       const warm = Math.pow(2, (S.world.environment.meanTempC - 20) / 10);
@@ -6564,7 +6935,10 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       const nearFire = fireHere();
       for (const it of S.inv)
         if (it.props.moisture !== void 0 && it.kind !== "food")
-          dry(it, dt / 24 * (nearFire ? 3 : 1), S.ambient);
+          dry(it, dt / 24 * (nearFire ? 3 : 1) * (skyNow().wet ? 4 : 1), ambient());
+      const f = site();
+      if (nearFire && skyNow().wet && !f.hut)
+        f.fireUntil -= dt * ({ storm: 3, blizzard: 3, rain: 1, snow: 0.5 }[skyNow().weather] ?? 0);
       for (const p of [...S.pendingSick])
         if (now() >= p.at) {
           S.sick = clamp(S.sick + p.severity);
@@ -6593,27 +6967,36 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
   function sleep(forced = false) {
     const s = site();
     const banked = fireHere() && takeWood(2) === 2;
-    const cold = S.world.environment.meanTempC < 10;
+    const wakeDay = S.t >= dawnAt(S.world, S.day) ? S.day + 1 : S.day, wake = clamp(dawnAt(S.world, wakeDay) + 0.25, 4, 8.5);
+    const lowC = temperature(S.world, wakeDay, Math.max(0, wake - 1.5)), cold = lowC < 8;
     let q = 0.5 + (s.hut ? 0.3 : 0) + (banked ? 0.3 : 0) - (cold && !s.hut && !banked ? 0.25 : 0);
-    const biters = S.world.environment.meanTempC >= 8 && !banked && S.world.animals.some((a) => ["mosquito", "gnat"].includes(a.traits.key) && (waterHere(s) || a.habitats.some((h) => h.micro === s.micro)));
+    const biters = temperature(S.world, S.day, Math.min(23.9, sunsetAt(S.day) + 1)) >= 10 && !banked && S.world.animals.some((a) => ["mosquito", "gnat"].includes(a.traits.key) && (waterHere(s) || a.habitats.some((h) => h.micro === s.micro)));
     if (biters)
       q -= 0.15;
     q = clamp(q, 0.15, 1);
-    const hoursToMorning = S.t < 6 ? 6 - S.t : 30 - S.t;
+    const hoursToMorning = (wakeDay - S.day) * 24 + wake - S.t;
     for (const it of S.inv)
       if (it.props.moisture !== void 0 && it.kind !== "food")
-        dry(it, hoursToMorning / 24, S.ambient);
+        dry(it, hoursToMorning / 24, ambient());
     rest(S.ch);
     S.ch.fatigue = clamp(S.ch.fatigue + (1 - q) * 0.35);
     S.hyd = clamp(S.hyd - 0.12);
     S.energy = clamp(S.energy - 0.035);
     S.sick = clamp(S.sick - 0.25 * q);
-    if (S.t >= 6)
-      S.day++;
-    S.t = 6;
+    if (S.limp > 0) {
+      S.limp = Math.max(0, S.limp - 0.06 * q);
+      if (!S.limp)
+        log("My ankle feels sound again.", "note");
+    }
+    const seasonBefore = seasonOf(S.world, dayOfYear(S.world, S.day));
+    S.day = wakeDay;
+    S.t = wake;
+    const seasonNow = seasonOf(S.world, dayOfYear(S.world, S.day));
+    if (seasonNow !== seasonBefore)
+      log(`${{ spring: "The days are lengthening and the air has softened: spring.", summer: "High summer now: long days, short nights.", autumn: "The nights are drawing in: autumn.", winter: "Winter: short days and hard nights.", "wet season": "The rains have come: the wet season.", "dry season": "The rains have stopped: the dry season." }[seasonNow]}`, "note");
     if (banked)
       s.fireUntil = now() + 1.5;
-    const words = q >= 0.8 ? "Slept warm and deep." : q >= 0.55 ? "Slept well enough." : q >= 0.35 ? "A cold, broken night." : "Barely slept; cold to the bone.";
+    const words = q >= 0.8 ? "Slept warm and deep." : q >= 0.55 ? "Slept well enough." : q >= 0.35 ? `A ${cold ? "cold" : "restless"}, broken night.` : cold ? "Barely slept; cold to the bone." : "Barely slept.";
     if (!forced)
       log(`${words}${biters ? ` ${S.world.animals.some((a) => a.traits.key === "mosquito") ? "Mosquitoes" : "Gnats"} whined at my ears half the night; smoke would have kept them off.` : ""}${banked ? " Banked the fire with two pieces of wood; it was still glowing at dawn." : ""}${s.hut ? " The hut kept the wind off." : ""}`, "act");
     for (const p of [...S.pendingSick])
@@ -6632,6 +7015,10 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     w.push(ch.hands < 0.25 ? "Hands fine." : ch.hands < 0.5 ? "Palms sore." : ch.hands < 0.8 ? "Palms blistered." : "Blisters open; palms raw.");
     if (ch.callus > 0.25)
       w.push("Calluses forming.");
+    if (S.limp > 0.05)
+      w.push(S.limp < 0.3 ? "Ankle a little sore." : S.limp < 0.6 ? "Limping on a swollen ankle." : "Hobbling; the ankle can barely take my weight.");
+    if (S.wound && now() - S.wound.at < 48)
+      w.push("A gash on my shin.");
     w.push(ch.focus > 0.7 ? "Thinking clearly." : ch.focus > 0.4 ? "Thinking feels slow." : "Thinking feels foggy.");
     const mt = S.macro.p + S.macro.f + S.macro.c;
     if (mt > 600 && S.macro.p / mt > 0.33)
@@ -6772,33 +7159,33 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       const add = (label, fn, hours = 0.3, kcal = 200) => opts.push({ label, part: label.replace(/ \(.*$/, "").replace(/ · .*$/, ""), species: nm, fn, hours, kcal, blocked: needEdge && !cutter ? "needs a cutting edge" : needStick ? "needs a digging stick" : null });
       switch (m.material) {
         case "dead-wood":
-          add(`Dead wood (${nm})`, () => addItem(`dead wood, ${nm}`, "wood", { density: patchDensity(e, s), resin: m.props.resin, moisture: S.ambient + 0.06 }, { id: e.id, name: nm, part: "dead wood", site: s.key }), 0.3, 250);
+          add(`Dead wood (${nm})`, () => addItem(`dead wood, ${nm}`, "wood", { density: patchDensity(e, s), resin: m.props.resin, moisture: ambient() + 0.06 }, { id: e.id, name: nm, part: "dead wood", site: s.key }), 0.3, 250);
           if (e.form === "shrub")
-            add(`Dead shoots (${nm})`, () => addItem(`dead shoot, ${nm}`, "shoot", { density: patchDensity(e, s), moisture: S.ambient + 0.02, straightness: 0.72 }, { id: e.id, name: nm, part: "dead shoots", site: s.key }), 0.25);
+            add(`Dead shoots (${nm})`, () => addItem(`dead shoot, ${nm}`, "shoot", { density: patchDensity(e, s), moisture: ambient() + 0.02, straightness: 0.72 }, { id: e.id, name: nm, part: "dead shoots", site: s.key }), 0.25);
           break;
         case "live-wood":
           if (m.props.straight)
             add(`Green shoot (${nm})`, () => addItem(`green shoot, ${nm}`, "shoot", { density: patchDensity(e, s), moisture: 0.55, straightness: 0.9 }, { id: e.id, name: nm, part: "green shoot", site: s.key }), 0.3);
           break;
         case "dead-stalk":
-          add(`Dead stalk (${nm})`, () => addItem(`dead stalk, ${nm}`, "stalk", { density: 0.3, moisture: S.ambient, straightness: 0.95 }, { id: e.id, name: nm, part: "dead stalk", site: s.key }), 0.2);
+          add(`Dead stalk (${nm})`, () => addItem(`dead stalk, ${nm}`, "stalk", { density: 0.3, moisture: ambient(), straightness: 0.95 }, { id: e.id, name: nm, part: "dead stalk", site: s.key }), 0.2);
           break;
         case "dry-grass":
         case "fluff":
         case "fungus-tinder":
         case "lichen-tinder":
-          add(`${cap3(m.part)} (${nm})`, () => addItem(`${m.part}, ${nm}`, "tindermat", { moisture: S.ambient * (m.material === "fungus-tinder" ? 0.9 : 0.6) }, { id: e.id, name: nm, part: m.part, site: s.key }), 0.25);
+          add(`${cap3(m.part)} (${nm})`, () => addItem(`${m.part}, ${nm}`, "tindermat", { moisture: ambient() * (m.material === "fungus-tinder" ? 0.9 : 0.6) }, { id: e.id, name: nm, part: m.part, site: s.key }), 0.25);
           break;
         case "moss":
-          add(`Moss (${nm})`, () => addItem(`moss, ${nm}`, "moss", { moisture: S.ambient + 0.2 }, { id: e.id, name: nm, part: "moss", site: s.key }), 0.2);
+          add(`Moss (${nm})`, () => addItem(`moss, ${nm}`, "moss", { moisture: ambient() + 0.2 }, { id: e.id, name: nm, part: "moss", site: s.key }), 0.2);
           break;
         case "outer-bark":
           if (m.props.papery)
-            add(`Papery bark (${nm})`, () => addItem(`papery bark, ${nm}`, "tindermat", { moisture: S.ambient * 0.7 }, { id: e.id, name: nm, part: "outer bark", site: s.key }), 0.25);
+            add(`Papery bark (${nm})`, () => addItem(`papery bark, ${nm}`, "tindermat", { moisture: ambient() * 0.7 }, { id: e.id, name: nm, part: "outer bark", site: s.key }), 0.25);
           break;
         case "inner-bark":
           if (m.props.fiber > 0.4)
-            add(`Inner bark for tinder (${nm})`, () => addItem(`inner bark for tinder, ${nm}`, "tindermat", { moisture: S.ambient + 0.1 }, { id: e.id, name: nm, part: "inner bark", site: s.key }), 0.4);
+            add(`Inner bark for tinder (${nm})`, () => addItem(`inner bark for tinder, ${nm}`, "tindermat", { moisture: ambient() + 0.1 }, { id: e.id, name: nm, part: "inner bark", site: s.key }), 0.4);
           break;
         case "stone":
           add(`Fist-sized stone (${nm})`, () => addItem(`stone, ${nm}`, "stone", { fracture: m.props.fracture, flaws: m.props.flaws, hardness: m.props.hardness, mass: Math.round(S.rng.uniform(450, 1100)), rough: m.props.abrasive ? 0.85 : 0.35, spall: m.props.spall ?? 0.3 }, { id: e.id, name: nm, part: "cobble", site: s.key }), 0.15);
@@ -6848,7 +7235,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
           } });
         continue;
       }
-      if (e?.eggs && !s.eggsTaken?.includes(e.id) && e.habitats.some((h) => h.micro === s.micro)) {
+      if (e?.eggs && !s.eggsTaken?.includes(e.id) && e.habitats.some((h) => h.micro === s.micro) && animalNow(e, condNow(s)).breeding) {
         const lore = S.lore[loreKey(e, "eggs")];
         opts.push({ label: `${cap3(e.eggs.nest)} (${e.name})${lore ? ` \xB7 ${loreWords(lore)}` : ""}`, part: "Eggs", species: e.name, hours: 0.4, kcal: 120, fn: () => {
           (s.eggsTaken ?? (s.eggsTaken = [])).push(e.id);
@@ -6898,7 +7285,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     if (["wood", "shoot", "stalk", "board", "spindle"].includes(it.kind)) {
       if (it.props.density !== void 0)
         T2.push(["Thumbnail and heft", () => DENSITY_WORDS(noisy(it.props.density))]);
-      T2.push(["Snap test", () => MOIST_WORDS(noisy(it.props.moisture), S.ambient)]);
+      T2.push(["Snap test", () => MOIST_WORDS(noisy(it.props.moisture), ambient())]);
       if (field("Crush"))
         T2.push(["Crush and smell", () => field("Crush")]);
     }
@@ -7092,7 +7479,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
         const room = 1 - p.hardness;
         const charred = !careful && S.rng.chance(0.35);
         p.hardness = clamp(p.hardness + room * (careful ? 0.3 : 0.18) * (p.hardened ? 0.4 : 1) - (charred ? 0.08 : 0));
-        p.moisture = Math.min(p.moisture ?? 0.2, S.ambient + 0.02);
+        p.moisture = Math.min(p.moisture ?? 0.2, ambient() + 0.02);
         p.hardened++;
         log(charred ? "Hurried the stick over the fire and charred the tip; scraped off the black. Harder underneath, but the point is thinner." : `Turned the point over the coals until it browned${careful ? ", slowly, a little at a time" : ""}. It rings harder when tapped.`);
         break;
@@ -7613,7 +8000,7 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
     if (!T2)
       return lines;
     if (T2.type === "distant") {
-      for (const c of perceive(S.L, s, { time: timeOfDay(), boost: passing ? 1.2 : 1.6, lookout: !passing && isLookout(S.L, s.x, s.y) })) {
+      for (const c of perceive(S.L, s, { time: timeOfDay(), sky: skyView(), boost: passing ? 1.2 : 1.6, lookout: !passing && isLookout(S.L, s.x, s.y) })) {
         const want = T2.key === "water" ? isWaterKind(c.kind) : ["hill", "cliff"].includes(c.kind);
         if (!want)
           continue;
@@ -7881,15 +8268,15 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       O.push(["1", "An hour"], ["2", "Two hours"]);
     else
       O.push(["1", "An hour"]);
-    if (S.t < 17.5 && S.t >= 5)
+    if (!isNight() && S.t < sunsetAt(S.day) - 0.5 && S.t >= 5)
       O.push(["dusk", "Until dusk"]);
-    O.push(["morning", isNight() || S.t >= 18 ? "Sleep until morning" : "Until morning (skips the day)"]);
+    O.push(["morning", isNight() || S.t >= sunsetAt(S.day) ? "Sleep until morning" : "Until morning (skips the day)"]);
     return O;
   }
   function restFor(choice) {
     if (choice === "morning")
       return sleep();
-    const hours = choice === "dusk" ? 18 - S.t : Number(choice);
+    const hours = choice === "dusk" ? sunsetAt(S.day) - S.t : Number(choice);
     pass(hours, 90);
     S.ch.fatigue *= Math.pow(0.15, hours / 9);
     S.ch.hands *= Math.pow(0.55, hours / 12);
@@ -7902,6 +8289,10 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
   };
   function markSeen(x, y, r, view = null) {
     S.seenLand ?? (S.seenLand = new Uint8Array(N * N));
+    if (view) {
+      const k = skyNow();
+      r = Math.max(2, Math.round(Math.min(r, k.visibility / CELL) * (0.2 + 0.8 * seeingFar(k.lux))));
+    }
     let changed = false;
     const at = { x: Math.round(x), y: Math.round(y) };
     for (let dy = -r; dy <= r; dy++)
@@ -7985,6 +8376,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
   function revealFeature(key, from, eye, fromEdge = false) {
     const esc2 = cliffIndex(), cliff = key.startsWith("cliff-"), want = cliff ? +key.slice(6) : key;
     S.seenLand ?? (S.seenLand = new Uint8Array(N * N));
+    const k = skyNow(), reach = Math.min(4e3, k.visibility) * seeingFar(k.lux);
     let changed = false;
     for (let c = 0; c < N * N; c++) {
       if (cliff ? esc2[c] !== want : !(S.L.lake[c] && waterKeyAt(S.L, c % N, Math.floor(c / N)) === want))
@@ -7992,7 +8384,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       if (S.seenLand[c] >= 255)
         continue;
       const q = { x: c % N, y: Math.floor(c / N) };
-      if (Math.hypot(q.x - from.x, q.y - from.y) * CELL > 4e3)
+      if (Math.hypot(q.x - from.x, q.y - from.y) * CELL > reach)
         continue;
       if (sightline(S.L, { x: Math.round(from.x), y: Math.round(from.y) }, q, eye, cliff ? 8 : waterUp(q.x, q.y) + 0.5, { fromEdge }) > 0.1) {
         S.seenLand[c] = 255;
@@ -8438,7 +8830,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     A.push({ id: "survey", label: "Survey", hint: "visible local resources", disabled: night });
     A.push(S.looking ? { id: "look", label: `Looking for ${S.looking.label} (\u2715)`, hint: "tap to stop looking", cls: "looking" } : { id: "look", label: "Look", hint: "for something in particular", disabled: night });
     A.push({ id: "poke", label: "Poke", hint: `around under stuff${bestStick() ? ", with the digging stick" : ""}`, disabled: night });
-    A.push({ id: "scan", label: "Scan", hint: "the distance", disabled: S.t >= 22 });
+    A.push({ id: "scan", label: "Scan", hint: night ? "listen in the dark" : "the distance" });
     A.push({ id: "make", label: "Make", hint: "from what\u2019s on hand" });
     A.push({ id: "inspect", label: "Inspect", hint: "something in particular", disabled: night });
     A.push({ id: "collect", label: "Collect", hint: "something I can carry", disabled: night });
@@ -8447,7 +8839,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     if (waterHere(s))
       A.push({ id: "washhands", label: "Wash my hands", hint: S.ch.germs > 0.3 ? "they\u2019re filthy" : "" });
     if (isLookout(S.L, s.x, s.y))
-      A.push({ id: "lookout", label: "Look out from up here", hint: "\xBD h; climb a tree if I must", disabled: night || S.t >= 19.5 });
+      A.push({ id: "lookout", label: "Look out from up here", hint: "\xBD h; climb a tree if I must", disabled: night || skyNow().sunAlt < 3 });
     if (fireHere())
       A.push({ id: "feed", label: "Feed the fire", hint: "uses dead wood", disabled: !has("wood") });
     const trees = [...s.known].some((id) => ["tree", "shrub"].includes(entity(id)?.form));
@@ -8495,11 +8887,19 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
           log("A view at last.", "milestone");
         }
         break;
-      case "washhands":
+      case "washhands": {
         pass(0.1, 110);
         S.ch.germs = S.ch.germs * 0.3 + 0.3 * waterGerms();
-        log("Washed my hands in the water.");
+        const cut = S.wound && now() - S.wound.at < 4;
+        if (cut) {
+          const p = S.pendingSick.find((x) => x.wound);
+          if (p && S.rng.chance(0.8))
+            S.pendingSick.splice(S.pendingSick.indexOf(p), 1);
+          S.wound = null;
+        }
+        log(cut ? "Washed my hands, and the cut on my shin, clean." : "Washed my hands in the water.");
         break;
+      }
       case "drink": {
         const w = waterSource(s);
         pass(0.25, 120);
@@ -8703,7 +9103,10 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     if (!S)
       return;
     const s = site(), e = S.world.environment;
-    $("#when").textContent = `Day ${S.day}, ${clock(S.t)}${isNight() ? ", night" : S.t >= 18 ? ", dusk" : ""}`;
+    {
+      const k = skyNow(), tod = timeOfDay();
+      $("#when").textContent = `Day ${S.day}, ${clock(S.t)}${tod === "night" ? ", night" : tod === "dusk" && k.sunAlt < 3 ? ", dusk" : ""} \xB7 ${k.season} \xB7 ${WEATHER_WORDS[k.weather]}, ${Math.round(k.tempC)}\xB0C${tod === "night" && k.moon.alt > 0 && k.moon.illum > 0.05 ? ` \xB7 ${moonWords(k.moon.phase)}` : ""}`;
+    }
     setHTML("#where", `<span class="place" data-rename="1" title="Rename this place">${esc(typo(cap3(s.name)))}</span>${fireHere() ? ' <span class="fire">fire burning</span>' : ""}${s.hut ? ' <span class="tag">hut</span>' : ""}`);
     $("#world-line").textContent = typo(`${cap3(e.biome)}; ${e.leanSeason === "winter" ? "cool nights" : "warm days"}`);
     const fresh = renderJournal();
@@ -8819,7 +9222,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       }).observe(box);
     }
   }
-  var BUILD = "hk-2026-10-23a";
+  var BUILD = "hk-2026-10-24a";
   function record(d) {
     S.record ?? (S.record = []);
     S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });

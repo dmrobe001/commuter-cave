@@ -114,7 +114,9 @@ export const lookoutEye = (L, p) => Math.max(3, CANOPY_H * L.veg[idx(p.x, p.y)] 
 // ------------------------------------------------------------ perception
 
 // What reaches an observer: [{ key, kind, channel, trueBearing, trueDist, strength }]
-export function perceive(L, pos, { time = 'day', lookout = false, boost = 1 } = {}) {
+// `sky`: { far: how well shapes can be made out by this light (0..1), visibility: how far one sees
+// through the air (m), hearing: what rain or wind leaves of hearing (0..1) } (sky.js); none: clear day.
+export function perceive(L, pos, { time = 'day', lookout = false, boost = 1, sky = null } = {}) {
   const { V, A } = landmarks(L);
   const out = new Map();
   const eye = lookout ? lookoutEye(L, pos) : 1.7;
@@ -128,10 +130,10 @@ export function perceive(L, pos, { time = 'day', lookout = false, boost = 1 } = 
     const angular = f.size / d;
     if (angular < 0.004) continue;
     const t = sightline(L, pos, f, eye, f.targetH);
-    const s = t * clamp(angular / 0.012) * Math.exp(-d / (lookout ? 12000 : 7000)); // haze
+    const s = t * clamp(angular / 0.012) * Math.exp(-d / (lookout ? 12000 : 7000)) * (sky ? sky.far * Math.exp(-3 * d / sky.visibility) : 1); // haze; the light; fog, rain or snow in the air
     if (s > 0.12 / boost && (!out.has(f.key) || out.get(f.key).strength < s)) out.set(f.key, { key: f.key, kind: f.kind, channel: 'sight', trueBearing: bearing(pos, f), trueDist: d, strength: s, x: f.x, y: f.y });
   }
-  for (const c of hear(L, pos, { time, boost })) if (!out.has(c.key) || out.get(c.key).strength < c.strength) out.set(c.key, c);
+  for (const c of hear(L, pos, { time, boost: boost * (sky?.hearing ?? 1) })) if (!out.has(c.key) || out.get(c.key).strength < c.strength) out.set(c.key, c);
   return [...out.values()];
 }
 
@@ -296,8 +298,9 @@ export function walk(L, from, target, { maxHours = 3, rng, resense = null, arriv
     if (Math.hypot(aim.x - p.x, aim.y - p.y) <= 1.5) { // at the believed spot: still sensing it further on? then home in on that
       const fresh = resense ? resense(p, true) : null;
       if (fresh && Math.hypot(fresh.x - p.x, fresh.y - p.y) > 1.5) { aim = fresh; drift = 0; }
-      else { // finish on the spot itself
-        if ((aim.x !== p.x || aim.y !== p.y) && !blocks(L, idx(aim.x, aim.y))) { hours += stepHours(L, p, aim); p = { x: aim.x, y: aim.y }; path.push(p); }
+      else { // finish on the spot itself: where I now sense it, if I do (close by, that's exact), else where I thought
+        const spot = fresh ?? aim;
+        if ((spot.x !== p.x || spot.y !== p.y) && !blocks(L, idx(spot.x, spot.y))) { hours += stepHours(L, p, spot); p = { x: spot.x, y: spot.y }; path.push(p); }
         break;
       }
     }

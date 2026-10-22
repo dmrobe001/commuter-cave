@@ -635,6 +635,51 @@ const ANIMAL_VARYING = [
   { id: 'toxin', label: 'toxicity', kind: 'useful', scale: '01', sd: 0.5, when: t => t.aposematic, prior: {}, median: t => t.toxin },
 ];
 
+// How each kind lives through the year and the weather (a northern temperate calendar, in days of the
+// year; in monsoon climates birds and frogs breed with the rains instead). breed: the breeding season,
+// when birds sing, frogs chorus, stags roar and wolves howl: calls more often, and a call of the season
+// (a song, a rut roar) that is a new sound to someone who only knows the everyday call. dormant: below
+// this daily mean temperature (°C) it's inactive (hibernating, brumating, overwintering as eggs or
+// grubs); hibernator: the chance a world's species of this kind does that at all. migrant: the chance
+// it leaves for the cold months (gone below 8 °C). shy: quiet and hidden in rain. rainCaller: calls more
+// in rain. basker: needs sun (lizards on rocks, soaring birds on thermals), so is little seen under cloud.
+const BEHAVIOUR = {
+  songbird: { breed: [85, 175], migrant: 0.6, shy: true, song: 'bird' },
+  groundbird: { breed: [75, 160], shy: true, song: 'bird' },
+  frog: { breed: [60, 130], dormant: 6, rainCaller: true, song: 'frog' },
+  lizard: { breed: [100, 170], dormant: 10, basker: true },
+  browser: { breed: [265, 315], song: 'deer', rut: true },
+  rooter: { breed: [320, 365], song: 'grunter' },
+  predator: { breed: [20, 70], song: t => (t.pack ? 'canid' : 'felid') },
+  hare: { breed: [40, 200] },
+  rodent: { dormant: 3, hibernator: 0.4 },
+  stinker: { dormant: -4 },
+  soarer: { migrant: 0.3, basker: true },
+  fish: {},
+  ant: { dormant: 5 }, grasshopper: { dormant: 10 }, caterpillar: { dormant: 8 }, beetle: { dormant: 6 }, snail: { dormant: 5 }, crayfish: { dormant: 3 },
+  worm: { dormant: 2 }, woodlouse: { dormant: 1 }, cricket: { dormant: 10 }, termite: { dormant: 12 }, bee: { dormant: 9 }, wasp: { dormant: 9 },
+  mosquito: { dormant: 10 }, gnat: { dormant: 8 }, fly: { dormant: 8 }, grub: {}, mussel: {},
+};
+const inWindow = (doy, [a, b]) => { const d = ((doy % 365) + 365) % 365; return a <= b ? d >= a && d <= b : d >= a || d <= b; };
+const CLOUDY = ['overcast', 'rain', 'storm', 'fog', 'snow', 'blizzard'];
+// What an animal is up to now. cond: { doy, meanC (today's mean temperature), weather, wet }. Returns
+// here (0 gone or dormant, 1 about), calls and seen (multipliers on how often it's heard and seen), and
+// callNow(r): which of its calls it gives this time (the season's call, when breeding, most of the time).
+export function animalNow(a, cond) {
+  const b = a.behaviour ?? {};
+  const away = !!b.migrant && cond.meanC < 8, dormant = b.dormant != null && cond.meanC < b.dormant;
+  const breeding = !!b.breed && inWindow(cond.doy, b.breed);
+  let calls = 1, seen = 1;
+  if (breeding && b.breedCall) calls *= 2.5;
+  if (cond.wet) {
+    if (b.shy) { calls *= 0.15; seen *= 0.5; }
+    if (b.rainCaller) calls *= breeding ? 2 : 1.3;
+    if (a.cls === 'invertebrate') seen *= 0.5;
+  }
+  if (b.basker && CLOUDY.includes(cond.weather)) seen *= 0.3;
+  return { here: away || dormant ? 0 : 1, away, dormant, breeding, calls, seen, callNow: r => (breeding && b.breedCall && r.chance(0.7) ? b.breedCall : a.signs?.call ?? null) };
+}
+
 // Egg-layers whose clutches can be found and eaten: kg in a find, and where the clutch is.
 const EGGS = {
   groundbird: { kg: 0.25, nest: 'a clutch in a scrape on the ground' },
@@ -752,8 +797,15 @@ function buildAnimal(seed, id, t, env, namer, mc, callsUsed) {
       speed: prof.speed, group: val(prof.group), distant: !!prof.distant,
     };
   }
+  const br = makeRng(`${seed}/behaviour/${id}`), B = BEHAVIOUR[t.key] ?? {};
+  const behaviour = {
+    breed: B.breed ? (env.leanSeason === 'dry season' && ['songbird', 'groundbird', 'frog', 'lizard'].includes(t.key) ? [150, 240] : B.breed) : null,
+    dormant: B.dormant != null && (B.hibernator == null || br.chance(B.hibernator)) ? B.dormant : null,
+    migrant: !!B.migrant && env.meanTempC < 15 && br.chance(B.migrant),
+    shy: !!B.shy, rainCaller: !!B.rainCaller, basker: !!B.basker, rut: !!B.rut, songFamily: B.song ? (typeof B.song === 'function' ? B.song(t) : B.song) : null, breedCall: null,
+  };
   return {
-    id, kind: 'animal', cls: t.cls, cryptic: !!T.cryptic,
+    id, kind: 'animal', cls: t.cls, cryptic: !!T.cryptic, behaviour,
     name: namer.animal(t, habitats[0]?.micro),
     unit: T.unit, traits: t, habitats, perKm2,
     varying: t.varying, variation: summarize(seed, id, t.varying, sites, env, mc), signs,
@@ -786,6 +838,8 @@ export function generateAnimals(rng, env, seed, namer, mc) {
     const id = `A${i + 1}`;
     return buildAnimal(seed, id, animalArchetype(rng.fork(id), key, env), env, namer, mc, callsUsed);
   });
+  // the season's calls, made after every everyday call so those stay as they were (a song, a roar)
+  for (const a of out) if (a.behaviour.breed && a.behaviour.songFamily && a.signs) a.behaviour.breedCall = makeCall(makeRng(`${seed}/song/${a.id}`), a.behaviour.songFamily, callsUsed);
   // Two species of one kind (two ants): neither keeps the bare name; each gets its look ("red ant", "big ant").
   for (const a of out) {
     const kin = out.filter(b => b !== a && b.traits.key === a.traits.key);
