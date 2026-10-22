@@ -4,8 +4,9 @@
 // of the original would drift as the rules change): onto the stream below the spring, follow it up
 // until it stops at the spring, then down until it stops at the lake. Checks: one spring, marked on
 // the spring's own cell; the mouth marked; no follow arrow that goes nowhere; the lake drawn. And a
-// second reported game (seed gbn2f): getting round a lake (below).
+// second reported game (seed gbn2f): getting round a lake, and a fork marked off the lines (below).
 const { JSDOM } = require('jsdom');
+const { tidiness } = require('./stream-lines.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
 const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
 const w = dom.window, d = w.document, errors = [], fails = [];
@@ -49,6 +50,19 @@ setTimeout(() => {
   for (const [x, y] of [[62, 53], [64, 47]]) { const end = go('go:67_53', `go:${x}_${y}`); if (end !== `${x},${y}`) fails.push(`gbn2f: a spot across the lake (${x},${y}) wasn't reached; ended at ${end}`); }
   const wet = go('go:67_53', 'go:66_51'), said = lines().slice(-4).join(' | ');
   if (wet === '67,53' && !/as near as I can get/.test(said)) fails.push(`gbn2f: a spot in the lake gave neither a move nor an explanation: ${said}`);
+  // gbn2f again: a stream with two branches out of a lake, followed from the falls up to the fork, up
+  // each branch to its outlet, and down to the mouth. The fork was marked two cells off where the
+  // lines met (fixes within two cells of each other were taken for one). Now: one fix per cell, every
+  // cell of a followed stretch on the line, so the lines run unbroken from each outlet to the mouth
+  // and meet at the fork.
+  go('go:70_54', 'follow:up:71_55', 'follow:up:71_56', 'go:71_55', 'follow:up:72_56', 'go:71_55', 'follow:down', 'follow:down');
+  const tidy = tidiness(d);
+  fails.push(...tidy.bad.map(b => `gbn2f: ${b}`));
+  if (!/mouth/.test(d.querySelector('.mapsvg .node.here')?.getAttribute('aria-label') ?? '')) fails.push(`gbn2f: followed down from the fork but didn't reach the mouth (at ${at()})`);
+  const fork = d.querySelector('.mapsvg .node.site.fork circle');
+  if (!fork || `${fork.getAttribute('cx')},${fork.getAttribute('cy')}` !== '71,55') fails.push(`gbn2f: expected the fork marked at 71,55, found ${fork ? `${fork.getAttribute('cx')},${fork.getAttribute('cy')}` : 'none'}`);
+  for (const end of ['71,58', '73,57', '67,53']) if (!tidy.deg.has(end)) fails.push(`gbn2f: no solid line reaches ${end}`);
+  if (tidy.lines.length !== 2 || tidy.deg.get('71,55') !== 3) fails.push(`gbn2f: expected two solid lines meeting at the fork (one from an outlet down to the mouth, the other branch ending at the fork), got ${tidy.lines.length}, ${tidy.deg.get('71,55') ?? 0} ends at the fork`);
   if (errors.length) fails.push(...errors);
   console.log(fails.length ? 'FAIL\n  ' + fails.join('\n  ') : 'reported (hbgk9, gbn2f): all passed');
   if (fails.length) process.exitCode = 1;

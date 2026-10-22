@@ -132,6 +132,19 @@ export function generateLandscape(world) {
       while (st.length) { const k = st.pop(); g.push(k); for (const [dx, dy] of NB) { const nx = (k % N) + dx, ny = ((k / N) | 0) + dy; if (nx < 0 || ny < 0 || nx >= N || ny >= N) continue; const n = idx(nx, ny); if (!seen[n] && lake[n]) { seen[n] = 1; st.push(n); } } }
       if (g.length >= 10) for (const k of g) keep[k] = 1; } }
   lake.set(keep);
+  // Water that leaves a lake and runs back into a lake on the same water level, within half a metre
+  // (another lobe of one sheet of water, or a lake brimming over a sill into its neighbour), is crossing
+  // a neck too shallow to have counted as lake: fill the neck, so the lobes are one lake and no stream
+  // runs between them.
+  const neck = [];
+  for (let c = 0; c < N * N; c++) {
+    if (!lake[c]) continue;
+    const path = [];
+    let n = down[c];
+    while (n >= 0 && !lake[n] && Math.abs(filled[n] - filled[c]) < 0.5 && path.length < 40) { path.push(n); n = down[n]; }
+    if (path.length && n >= 0 && lake[n] && Math.abs(filled[n] - filled[c]) < 0.5) neck.push(...path);
+  }
+  for (const k of neck) lake[k] = 1;
 
   // channels: upslope area over a threshold set by the water balance
   const Acrit = 160 / clamp(env.water, 0.3, 2); // ~1 km² of catchment in a temperate climate

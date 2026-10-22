@@ -1,9 +1,11 @@
 // Following a stream in stages from the map: at a stream, the arrows by me follow it about a quarter of
 // an hour downstream or up a branch, stopping early at a fork, waterfall, spring, lake, source or the
 // edge of the land; the stretch walked is drawn solid; places along a stream that are nothing in
-// their own right get no marker once I've moved on. Usage: node tests/ui/follow.cjs [seed ...]
+// their own right get no marker once I've moved on; the solid lines step cell to cell and meet only at
+// marked forks. Usage: node tests/ui/follow.cjs [seed ...]
 const { JSDOM } = require('jsdom');
 const { strikeOut } = require('./tap-map.cjs');
+const { tidiness } = require('./stream-lines.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const seeds = process.argv.slice(2).length ? process.argv.slice(2) : ['wgxdd', 'a', 'pig-rock', 'm', 'h'];
@@ -46,6 +48,7 @@ const seeds = process.argv.slice(2).length ? process.argv.slice(2) : ['wgxdd', '
       if (here() === before && !/source|edge of a lake|dare/.test(why)) fails.push(`${seed}: followed but didn't move: ${said}`);
     }
     if (!d.querySelector('.mapsvg .stream .flow.known')) fails.push(`${seed}: followed a stream but no stretch is drawn solid`);
+    fails.push(...tidiness(d).bad.map(b => `${seed}: ${b}`)); // followed stretches: unbroken, meeting at forks
     // plain stream stops I've left are not drawn as places (forks, falls, springs and the start are)
     const marked = [...d.querySelectorAll('.mapsvg .node.site:not(.here)')].map(g => g.getAttribute('aria-label'));
     const plain = marked.filter(l => /gravel bar|stream bank/.test(l) && !/where I woke/.test(l));

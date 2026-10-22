@@ -357,6 +357,7 @@ export function followStage(L, from, dir, { branch = null, maxHours = 0.25 } = {
     } else {
       if (fromLake(c)) return { end: p, hours, path, why: 'outlet' }; // upstream of here is the lake
       const ins = inflows(c);
+      if (steps === 0 && branch && !ins.some(q => q.x === branch.x && q.y === branch.y)) return { end: p, hours: 0, path, why: 'no stream here' }; // not a branch that feeds this spot
       next = steps === 0 && branch ? branch : ins.sort((a, b) => L.acc[idx(b.x, b.y)] - L.acc[idx(a.x, a.y)])[0];
       if (!next) return { end: p, hours, path, why: 'source' };
     }

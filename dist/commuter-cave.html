@@ -133,7 +133,7 @@ button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 6
 .mapsvg .edge.route { stroke: var(--ochre); }
 .mapsvg .etime { fill: var(--muted); }
 .mapsvg .stream { cursor: pointer; }
-.mapsvg .stream .flow { stroke: var(--water); stroke-linecap: round; stroke-dasharray: calc(.6 * var(--u)) calc(.35 * var(--u)); }
+.mapsvg .stream .flow { fill: none; stroke: var(--water); stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: calc(.6 * var(--u)) calc(.35 * var(--u)); }
 .mapsvg .stream .flow.lone { stroke-dasharray: none; }
 .mapsvg .pin { cursor: pointer; }
 .mapsvg .pin path { fill: var(--ochre); stroke: var(--bg); }
@@ -156,7 +156,7 @@ button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 6
 .mapsvg .follow .face > * { stroke: #fff; }
 .mapsvg .follow .hit { stroke: transparent; pointer-events: stroke; }
 .mapsvg .stream .chev { fill: none; stroke: var(--water); stroke-linecap: round; stroke-linejoin: round; }
-.mapsvg .stream .hit { stroke: transparent; pointer-events: stroke; }
+.mapsvg .stream .hit { fill: none; stroke: transparent; pointer-events: stroke; }
 .mapsvg .node { cursor: pointer; }
 .mapsvg .node circle { fill: var(--surface); stroke: var(--ochre); }
 .mapsvg .node.site circle { fill: var(--ink); stroke: var(--ink); }
@@ -2957,6 +2957,21 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       }
     }
     lake.set(keep);
+    const neck = [];
+    for (let c = 0; c < N * N; c++) {
+      if (!lake[c])
+        continue;
+      const path = [];
+      let n = down[c];
+      while (n >= 0 && !lake[n] && Math.abs(filled[n] - filled[c]) < 0.5 && path.length < 40) {
+        path.push(n);
+        n = down[n];
+      }
+      if (path.length && n >= 0 && lake[n] && Math.abs(filled[n] - filled[c]) < 0.5)
+        neck.push(...path);
+    }
+    for (const k of neck)
+      lake[k] = 1;
     const Acrit = 160 / clamp(env.water, 0.3, 2);
     const chan = new Uint8Array(N * N);
     for (let c = 0; c < N * N; c++) {
@@ -3541,6 +3556,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         if (fromLake(c))
           return { end: p, hours, path, why: "outlet" };
         const ins = inflows(c);
+        if (steps === 0 && branch && !ins.some((q) => q.x === branch.x && q.y === branch.y))
+          return { end: p, hours: 0, path, why: "no stream here" };
         next = steps === 0 && branch ? branch : ins.sort((a, b) => L.acc[idx2(b.x, b.y)] - L.acc[idx2(a.x, a.y)])[0];
         if (!next)
           return { end: p, hours, path, why: "source" };
@@ -5495,18 +5512,42 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     S.streams.push(st);
     return st;
   }
-  function addFix(p, how, hint = null) {
-    const fix = makeFix(p, how);
-    const st = hint && S.streams.find((x) => x.id === hint) || matchStream(fix) || newStream(fix.size, p);
-    const old = st.fixes.find((f) => Math.hypot(f.x - p.x, f.y - p.y) < 2), isNew = !old;
-    if (isNew) {
-      st.fixes.push(fix);
-      S.streamVer = (S.streamVer ?? 0) + 1;
+  function streamById(id) {
+    let st = S.streams.find((x) => x.id === id);
+    while (st?.into)
+      st = S.streams.find((x) => x.id === st.into);
+    return st ?? null;
+  }
+  function mergeStreams(a, b) {
+    if (a === b)
+      return a;
+    const [keep, drop] = S.streams.indexOf(a) < S.streams.indexOf(b) ? [a, b] : [b, a];
+    keep.fixes.push(...drop.fixes);
+    if (drop.runs?.length)
+      (keep.runs ?? (keep.runs = [])).push(...drop.runs);
+    keep.size = Math.max(keep.size, drop.size);
+    keep.sus ?? (keep.sus = drop.sus);
+    Object.assign(drop, { fixes: [], runs: [], sus: null, into: keep.id });
+    S.waterNames[drop.id] = keep.name;
+    S.streamVer = (S.streamVer ?? 0) + 1;
+    return keep;
+  }
+  function addFix(p, how, hint = null, along = null) {
+    for (const st0 of S.streams) {
+      const old = st0.fixes.find((f) => f.x === p.x && f.y === p.y);
+      if (!old)
+        continue;
+      const via = along && streamById(along);
+      return { st: via && via !== st0 ? mergeStreams(via, st0) : st0, isNew: false, fix: old };
     }
+    const fix = makeFix(p, how);
+    const st = along && streamById(along) || hint && streamById(hint) || matchStream(fix) || newStream(fix.size, p);
+    st.fixes.push(fix);
+    S.streamVer = (S.streamVer ?? 0) + 1;
     const u = st.sus && S.suspects.find((v) => v.id === st.sus);
     if (u && !u.reached)
       u.reached = true;
-    return { st, isNew, fix: old ?? fix };
+    return { st, isNew: true, fix };
   }
   function streamTrees() {
     const memo = `${S.streamVer ?? 0}/${[...S.streamGaps ?? []].length}`;
@@ -5617,7 +5658,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   var byDistance = (p) => [...S.sites].sort((s, t) => Math.hypot(s.x - p.x, s.y - p.y) - Math.hypot(t.x - p.x, t.y - p.y));
   function mentalMap() {
     const nodes = [], links = placeLinks().map((e) => ({ ...e }));
-    S.sites.forEach((t, i) => nodes.push({ key: t.key, name: t.name, x: t.x, y: t.y, site: i, certainty: "known", unmarked: unmarked(t), spring: waterMark(t) === "spring" }));
+    S.sites.forEach((t, i) => nodes.push({ key: t.key, name: t.name, x: t.x, y: t.y, site: i, certainty: "known", unmarked: unmarked(t), mark: waterMark(t) }));
     const segs = links.map((e) => [S.sites[e.a], S.sites[e.b]]);
     const hang = (v, prefer, kind) => {
       const t = firstClear(v, [.../* @__PURE__ */ new Set([...prefer, ...byDistance(v)])], segs);
@@ -6043,7 +6084,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
   function targetInfo(target) {
     const sus = S.suspects.find((u) => u.id === target.suspect);
     const dest = target.site !== void 0 ? S.sites[target.site] : null;
-    const st = target.stream ? S.streams.find((x) => x.id === target.stream) : null, area = target.lake || target.cliff;
+    const st = target.stream ? streamById(target.stream) : null, area = target.lake || target.cliff;
     return { sus, dest, st, area, truePos: sus?.truePos ?? dest ?? (st || area || target.point ? { x: target.x, y: target.y } : null), name: sus?.label ?? dest?.name ?? st?.name ?? target.label ?? "there" };
   }
   function onWater(p, want) {
@@ -6147,10 +6188,10 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     pass(trip.hours, 260);
     let st = null;
     const run = [];
-    trip.path.forEach((p, i) => {
-      if (!S.L.chan[cellOf(p.x, p.y)] || i % 3 && i !== trip.path.length - 1)
+    trip.path.forEach((p) => {
+      if (!S.L.chan[cellOf(p.x, p.y)] || S.L.lake[cellOf(p.x, p.y)])
         return;
-      const r = addFix(p, "followed", st?.id ?? null);
+      const r = addFix(p, "followed", null, st?.id ?? null);
       st = r.st;
       if (run[run.length - 1] !== r.fix)
         run.push(r.fix);
@@ -7983,12 +8024,21 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     const land = landImage();
     const W = trees.map((t) => {
       const near = nearestOnStream(t, here), say = `Head for ${t.name} (${timeWords(routeHours(here, near), "guess")})`;
-      const downOf = new Map(t.segs.map((sg) => [sg[0], sg])), fed = new Set(t.segs.map((sg) => sg[1])), drawn = /* @__PURE__ */ new Set(), marks = [];
+      const downOf = new Map(t.segs.map((sg) => [sg[0], sg])), fed = new Set(t.segs.map((sg) => sg[1])), drawn = /* @__PURE__ */ new Set(), marks = [], pieces = [];
+      const draw = (sg, fresh) => {
+        const last = pieces[pieces.length - 1];
+        if (!fresh && last && last.known === !!sg.known)
+          last.pts.push(sg[1]);
+        else
+          pieces.push({ known: !!sg.known, pts: [sg[0], sg[1]] });
+      };
       for (const src of t.segs.map((sg) => sg[0]).filter((f) => !fed.has(f))) {
-        let f = src, carry = 35;
+        let f = src, carry = 35, fresh = true;
         while (downOf.has(f) && !drawn.has(f)) {
           const sg = downOf.get(f);
           drawn.add(f);
+          draw(sg, fresh);
+          fresh = false;
           const r = along(sg, 70, carry);
           marks.push(...r.marks);
           carry = r.carry;
@@ -7996,9 +8046,14 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         }
       }
       for (const sg of t.segs)
-        if (!drawn.has(sg[0]))
+        if (!drawn.has(sg[0])) {
+          draw(sg, true);
           marks.push(...along(sg, 70).marks);
-      const lines = t.segs.map((sg) => `<line class="flow${sg.known ? " known" : ""}" x1="${sg[0].x}" y1="${sg[0].y}" x2="${sg[1].x}" y2="${sg[1].y}" stroke-width="${u(3.5)}"/><line class="hit" x1="${sg[0].x}" y1="${sg[0].y}" x2="${sg[1].x}" y2="${sg[1].y}" stroke-width="${fs * 2.2}"/>`).concat(t.lone.map((f) => {
+        }
+      const lines = pieces.map((q) => {
+        const d = q.pts.map((p, k) => `${k ? "L" : "M"}${p.x} ${p.y}`).join("");
+        return `<path class="flow${q.known ? " known" : ""}" d="${d}" stroke-width="${u(3.5)}"/><path class="hit" d="${d}" stroke-width="${fs * 2.2}"/>`;
+      }).concat(t.lone.map((f) => {
         const r = (f.flow ?? 180) * Math.PI / 180, dx = Math.sin(r), dy = -Math.cos(r), k = u(20);
         marks.push({ x: f.x + dx * k * 0.7, y: f.y + dy * k * 0.7, dx, dy });
         return `<line class="flow lone" x1="${f.x - dx * k}" y1="${f.y - dy * k}" x2="${f.x + dx * k}" y2="${f.y + dy * k}" stroke-width="${u(3.5)}"/><line class="hit" x1="${f.x - dx * k}" y1="${f.y - dy * k}" x2="${f.x + dx * k}" y2="${f.y + dy * k}" stroke-width="${fs * 2.2}"/>`;
@@ -8026,7 +8081,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const e = M2.edges.find((x) => x.a === hi && x.b === i || x.b === hi && x.a === i);
       const t = timeWords(e ? e.hours : routeHours(here, v), e ? e.certainty : v.certainty === "known" ? "guess" : v.certainty);
       const say = i === hi ? `${cap3(v.name)} (here)` : `${v.site !== void 0 ? "Head back to" : "Head for"} ${v.name} (${t})`;
-      return `<g ${i === hi ? "" : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" data-i="${i}" class="node ${v.site !== void 0 ? "site" : "sus"}${v.spring ? " spring" : ""} ${v.certainty}${i === hi ? " here" : ""}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${radius(i)}" stroke-width="${fs * 0.12}"/>${i === hi ? "" : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${labelOf.get(i) ?? ""}</g>`;
+      return `<g ${i === hi ? "" : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" data-i="${i}" class="node ${v.site !== void 0 ? "site" : "sus"}${v.mark ? ` ${v.mark}` : ""} ${v.certainty}${i === hi ? " here" : ""}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${radius(i)}" stroke-width="${fs * 0.12}"/>${i === hi ? "" : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${labelOf.get(i) ?? ""}</g>`;
     }).join("");
     const P = !pin ? "" : `<g class="pin" data-hike="go:${pin.x}_${pin.y}" role="button" tabindex="0" aria-label="${esc(typo(pinSay))}"><title>${esc(typo(pinSay))}</title><path d="M${pin.x} ${pin.y}l${-u(7)} ${-u(14)}a${u(7.5)} ${u(7.5)} 0 1 1 ${u(14)} 0z" stroke-width="${u(2)}"/><circle class="hit" cx="${pin.x}" cy="${pin.y - u(14)}" r="${fs * 1.45}"/>${pinLabel}</g>`;
     const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map; north is up. Tap a place to hike there, or tap anywhere to pick a spot.">${land ? `<image class="land" href="${land}" x="-0.5" y="-0.5" width="${N}" height="${N}" preserveAspectRatio="none"/>` : ""}${Lk}${E}${Cl}${W}${featureLabels.join("")}${Nd}${F}${P}</svg>`;
@@ -8445,7 +8500,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       }).observe(box);
     }
   }
-  var BUILD = "hk-2026-10-22i";
+  var BUILD = "hk-2026-10-22j";
   function record(d) {
     S.record ?? (S.record = []);
     S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });

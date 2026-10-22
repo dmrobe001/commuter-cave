@@ -199,15 +199,44 @@ function newStream(size, pos) {
   S.streams.push(st);
   return st;
 }
-// A fix on the water at p: which stream it is (`hint`: the one I was heading for), and whether it's news.
-function addFix(p, how, hint = null) {
+// A stream by id; one merged into another answers for the one it joined.
+function streamById(id) {
+  let st = S.streams.find(x => x.id === id);
+  while (st?.into) st = S.streams.find(x => x.id === st.into);
+  return st ?? null;
+}
+// Two streams I'd thought apart turn out to be one (I walked along the water from one to the other):
+// the older keeps its name, and takes the other's fixes and walked stretches.
+function mergeStreams(a, b) {
+  if (a === b) return a;
+  const [keep, drop] = S.streams.indexOf(a) < S.streams.indexOf(b) ? [a, b] : [b, a];
+  keep.fixes.push(...drop.fixes);
+  if (drop.runs?.length) (keep.runs ??= []).push(...drop.runs);
+  keep.size = Math.max(keep.size, drop.size);
+  keep.sus ??= drop.sus;
+  Object.assign(drop, { fixes: [], runs: [], sus: null, into: keep.id });
+  S.waterNames[drop.id] = keep.name;
+  S.streamVer = (S.streamVer ?? 0) + 1;
+  return keep;
+}
+// A fix on the water at p: which stream it is, and whether it's news. One fix per cell: a cell I
+// already have a fix on keeps it, and its stream. `hint`: the stream I was heading for, if this cell
+// is new to me; `along`: the stream I'm following to here, which is then the same water as whatever
+// I already had here.
+function addFix(p, how, hint = null, along = null) {
+  for (const st0 of S.streams) {
+    const old = st0.fixes.find(f => f.x === p.x && f.y === p.y);
+    if (!old) continue;
+    const via = along && streamById(along);
+    return { st: via && via !== st0 ? mergeStreams(via, st0) : st0, isNew: false, fix: old };
+  }
   const fix = makeFix(p, how);
-  const st = (hint && S.streams.find(x => x.id === hint)) || matchStream(fix) || newStream(fix.size, p);
-  const old = st.fixes.find(f => Math.hypot(f.x - p.x, f.y - p.y) < 2), isNew = !old;
-  if (isNew) { st.fixes.push(fix); S.streamVer = (S.streamVer ?? 0) + 1; }
+  const st = (along && streamById(along)) || (hint && streamById(hint)) || matchStream(fix) || newStream(fix.size, p);
+  st.fixes.push(fix);
+  S.streamVer = (S.streamVer ?? 0) + 1;
   const u = st.sus && S.suspects.find(v => v.id === st.sus);
   if (u && !u.reached) u.reached = true; // the one I'd heard: found
-  return { st, isNew, fix: old ?? fix };
+  return { st, isNew: true, fix };
 }
 // Each stream as drawn: links from each fix to the nearest one it could flow down to, and lone fixes.
 // The guesses are made afresh each time from what I know now, so one I've since learnt can't be
@@ -304,7 +333,7 @@ function placeLinks() { // trails and shortcuts between visited places; only cha
 const byDistance = p => [...S.sites].sort((s, t) => Math.hypot(s.x - p.x, s.y - p.y) - Math.hypot(t.x - p.x, t.y - p.y));
 function mentalMap() {
   const nodes = [], links = placeLinks().map(e => ({ ...e }));
-  S.sites.forEach((t, i) => nodes.push({ key: t.key, name: t.name, x: t.x, y: t.y, site: i, certainty: 'known', unmarked: unmarked(t), spring: waterMark(t) === 'spring' }));
+  S.sites.forEach((t, i) => nodes.push({ key: t.key, name: t.name, x: t.x, y: t.y, site: i, certainty: 'known', unmarked: unmarked(t), mark: waterMark(t) }));
   const segs = links.map(e => [S.sites[e.a], S.sites[e.b]]);
   const hang = (v, prefer, kind) => { // link v to the preferred place, or the nearest one that doesn't cross the map
     const t = firstClear(v, [...new Set([...prefer, ...byDistance(v)])], segs);
@@ -634,7 +663,7 @@ function rememberTrip(from, path, hours, crossings, knownBefore) {
 function targetInfo(target) {
   const sus = S.suspects.find(u => u.id === target.suspect);
   const dest = target.site !== undefined ? S.sites[target.site] : null;
-  const st = target.stream ? S.streams.find(x => x.id === target.stream) : null, area = target.lake || target.cliff;
+  const st = target.stream ? streamById(target.stream) : null, area = target.lake || target.cliff;
   return { sus, dest, st, area, truePos: sus?.truePos ?? dest ?? (st || area || target.point ? { x: target.x, y: target.y } : null), name: sus?.label ?? dest?.name ?? st?.name ?? target.label ?? 'there' };
 }
 // Standing in it: on a stream or river of it, or on the shore of a lake of it (where I can drink).
@@ -718,9 +747,9 @@ function followStream(dir, branch) {
   pass(trip.hours, 260);
   let st = null;
   const run = [];
-  trip.path.forEach((p, i) => {
-    if (!S.L.chan[cellOf(p.x, p.y)] || (i % 3 && i !== trip.path.length - 1)) return;
-    const r = addFix(p, 'followed', st?.id ?? null);
+  trip.path.forEach(p => { // every cell of the water I walk along: the line runs where the water does
+    if (!S.L.chan[cellOf(p.x, p.y)] || S.L.lake[cellOf(p.x, p.y)]) return;
+    const r = addFix(p, 'followed', null, st?.id ?? null);
     st = r.st;
     if (run[run.length - 1] !== r.fix) run.push(r.fix);
   });
@@ -2089,13 +2118,15 @@ function mapHTML() {
   // each stream from its source down, so a long stream keeps one rhythm); lone fixes are short arrows
   const W = trees.map(t => {
     const near = nearestOnStream(t, here), say = `Head for ${t.name} (${timeWords(routeHours(here, near), 'guess')})`;
-    const downOf = new Map(t.segs.map(sg => [sg[0], sg])), fed = new Set(t.segs.map(sg => sg[1])), drawn = new Set(), marks = [];
+    // drawn as unbroken lines from each source down, a new line wherever walked gives way to guessed
+    const downOf = new Map(t.segs.map(sg => [sg[0], sg])), fed = new Set(t.segs.map(sg => sg[1])), drawn = new Set(), marks = [], pieces = [];
+    const draw = (sg, fresh) => { const last = pieces[pieces.length - 1]; if (!fresh && last && last.known === !!sg.known) last.pts.push(sg[1]); else pieces.push({ known: !!sg.known, pts: [sg[0], sg[1]] }); };
     for (const src of t.segs.map(sg => sg[0]).filter(f => !fed.has(f))) {
-      let f = src, carry = 35;
-      while (downOf.has(f) && !drawn.has(f)) { const sg = downOf.get(f); drawn.add(f); const r = along(sg, 70, carry); marks.push(...r.marks); carry = r.carry; f = sg[1]; }
+      let f = src, carry = 35, fresh = true;
+      while (downOf.has(f) && !drawn.has(f)) { const sg = downOf.get(f); drawn.add(f); draw(sg, fresh); fresh = false; const r = along(sg, 70, carry); marks.push(...r.marks); carry = r.carry; f = sg[1]; }
     }
-    for (const sg of t.segs) if (!drawn.has(sg[0])) marks.push(...along(sg, 70).marks); // a loop with no source (rare)
-    const lines = t.segs.map(sg => `<line class="flow${sg.known ? ' known' : ''}" x1="${sg[0].x}" y1="${sg[0].y}" x2="${sg[1].x}" y2="${sg[1].y}" stroke-width="${u(3.5)}"/><line class="hit" x1="${sg[0].x}" y1="${sg[0].y}" x2="${sg[1].x}" y2="${sg[1].y}" stroke-width="${fs * 2.2}"/>`)
+    for (const sg of t.segs) if (!drawn.has(sg[0])) { draw(sg, true); marks.push(...along(sg, 70).marks); } // a loop with no source (rare)
+    const lines = pieces.map(q => { const d = q.pts.map((p, k) => `${k ? 'L' : 'M'}${p.x} ${p.y}`).join(''); return `<path class="flow${q.known ? ' known' : ''}" d="${d}" stroke-width="${u(3.5)}"/><path class="hit" d="${d}" stroke-width="${fs * 2.2}"/>`; })
       .concat(t.lone.map(f => { const r = (f.flow ?? 180) * Math.PI / 180, dx = Math.sin(r), dy = -Math.cos(r), k = u(20); marks.push({ x: f.x + dx * k * 0.7, y: f.y + dy * k * 0.7, dx, dy }); return `<line class="flow lone" x1="${f.x - dx * k}" y1="${f.y - dy * k}" x2="${f.x + dx * k}" y2="${f.y + dy * k}" stroke-width="${u(3.5)}"/><line class="hit" x1="${f.x - dx * k}" y1="${f.y - dy * k}" x2="${f.x + dx * k}" y2="${f.y + dy * k}" stroke-width="${fs * 2.2}"/>`; }));
     return `<g class="stream" data-hike="stream:${t.id}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title>${lines.join('')}${marks.map(m => `<path class="chev" d="${chev(m.x, m.y, m.dx, m.dy, u(6))}" stroke-width="${u(3.5)}"/>`).join('')}</g>`;
   }).join('');
@@ -2124,7 +2155,7 @@ function mapHTML() {
     const e = M.edges.find(x => (x.a === hi && x.b === i) || (x.b === hi && x.a === i));
     const t = timeWords(e ? e.hours : routeHours(here, v), e ? e.certainty : v.certainty === 'known' ? 'guess' : v.certainty);
     const say = i === hi ? `${cap(v.name)} (here)` : `${v.site !== undefined ? 'Head back to' : 'Head for'} ${v.name} (${t})`;
-    return `<g ${i === hi ? '' : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" data-i="${i}" class="node ${v.site !== undefined ? 'site' : 'sus'}${v.spring ? ' spring' : ''} ${v.certainty}${i === hi ? ' here' : ''}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${radius(i)}" stroke-width="${fs * 0.12}"/>${i === hi ? '' : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${labelOf.get(i) ?? ''}</g>`; // hit: a finger-sized target (about 44 px across)
+    return `<g ${i === hi ? '' : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" data-i="${i}" class="node ${v.site !== undefined ? 'site' : 'sus'}${v.mark ? ` ${v.mark}` : ''} ${v.certainty}${i === hi ? ' here' : ''}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${radius(i)}" stroke-width="${fs * 0.12}"/>${i === hi ? '' : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${labelOf.get(i) ?? ''}</g>`; // hit: a finger-sized target (about 44 px across)
   }).join('');
 
   // ---- a spot I've picked: tap it to go
@@ -2447,7 +2478,7 @@ if (typeof document !== 'undefined') {
 // Everything that happens follows from the world seed and the player's choices, so a record of the
 // seed and each choice reproduces a game exactly. Each action is the data of what was tapped (or
 // the value chosen); `act` applies one, and replaying a record runs them in order on a fresh game.
-const BUILD = 'hk-2026-10-22i'; // game logic version: a record replays faithfully only on the build that made it
+const BUILD = 'hk-2026-10-22j'; // game logic version: a record replays faithfully only on the build that made it
 function record(d) {
   S.record ??= [];
   S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });

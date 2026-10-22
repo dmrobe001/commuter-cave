@@ -133,7 +133,7 @@ button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 6
 .mapsvg .edge.route { stroke: var(--ochre); }
 .mapsvg .etime { fill: var(--muted); }
 .mapsvg .stream { cursor: pointer; }
-.mapsvg .stream .flow { stroke: var(--water); stroke-linecap: round; stroke-dasharray: calc(.6 * var(--u)) calc(.35 * var(--u)); }
+.mapsvg .stream .flow { fill: none; stroke: var(--water); stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: calc(.6 * var(--u)) calc(.35 * var(--u)); }
 .mapsvg .stream .flow.lone { stroke-dasharray: none; }
 .mapsvg .pin { cursor: pointer; }
 .mapsvg .pin path { fill: var(--ochre); stroke: var(--bg); }
@@ -156,7 +156,7 @@ button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 6
 .mapsvg .follow .face > * { stroke: #fff; }
 .mapsvg .follow .hit { stroke: transparent; pointer-events: stroke; }
 .mapsvg .stream .chev { fill: none; stroke: var(--water); stroke-linecap: round; stroke-linejoin: round; }
-.mapsvg .stream .hit { stroke: transparent; pointer-events: stroke; }
+.mapsvg .stream .hit { fill: none; stroke: transparent; pointer-events: stroke; }
 .mapsvg .node { cursor: pointer; }
 .mapsvg .node circle { fill: var(--surface); stroke: var(--ochre); }
 .mapsvg .node.site circle { fill: var(--ink); stroke: var(--ink); }
