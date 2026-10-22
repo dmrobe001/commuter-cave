@@ -40,7 +40,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     click('[data-pk="close"]');
     click('[data-here="poke"]'); click('[data-here="poke"]');
     console.log('POKE WITH THE STICK:\n' + entries().slice(n0).join('\n'));
-    S.sites[S.here].fireUntil = (S.day - 1) * 24 + S.t + 5; // pretend a fire is burning here
+    S.sites[S.at].fireUntil = (S.day - 1) * 24 + S.t + 5; // pretend a fire is burning here
     click('[data-here="make"]'); click('[data-craft="harden"][data-mode="careful"]');
     console.log(`after careful fire-hardening: hardness ${stick.props.hardness.toFixed(2)}; ${entries().slice(-1)[0]}`);
   }

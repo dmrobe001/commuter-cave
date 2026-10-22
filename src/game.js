@@ -18,8 +18,8 @@ import { chooseSpawn, perceive, suspicionFrom, walk, followStage, shoreStage, st
 import { trailGraph, firstClear, placeLabels, suspectedCrossings, timeWords, awayWords, explainTrip } from './mentalmap.js';
 import { materialsOf, expandGoal, thought, ITEMS, lookHint, PROCESSES } from './process.js';
 import { viewOf as viewFor, rehearse, apply, stateOver, hoursOf, kcalOf, readyFor } from './act.js';
-import { TICKS, SLEEP_HOUR, DRINK, WASH_HANDS, MAKE_BED, BUILD_HUT, FEED_FIRE, KNAP, PREPARE, EAT, SURVEY, GUT_KG, loreKey, populationAt, findBones, boneLines, noteKnown as knowIt, pluralize, lineFor, mix } from './acts.js';
-import { newCharacter, dry, ROLES, knapFlakes, notchHearth, refineNotch, carveSpindle, makeTinder, handDrill, lightFire, searchNaturalEdge, splinterBone, estimateFire } from './craft.js';
+import { TICKS, SLEEP_HOUR, CRAFTS, DRILL_ATTEMPT, EMBER, HANDLE, REST, DRINK, WASH_HANDS, MAKE_BED, BUILD_HUT, FEED_FIRE, KNAP, PREPARE, EAT, SURVEY, GUT_KG, loreKey, populationAt, findBones, boneLines, noteKnown as knowIt, pluralize, lineFor, mix } from './acts.js';
+import { newCharacter, dry, ROLES, searchNaturalEdge, estimateFire } from './craft.js';
 
 // ------------------------------------------------------------ helpers
 
@@ -55,7 +55,7 @@ const isNight = () => skyNow().sunAlt < -6; // too dark to work: the sun more th
 const sunsetAt = day => 12 + dayLength(S.world, day) / 2;
 // how damp things left out get: the climate's usual, wetter in rain and fog, drier on a clear afternoon
 const ambient = () => { const k = skyNow(); return clamp(S.ambient + ({ rain: 0.15, storm: 0.25, fog: 0.12, snow: 0.08, blizzard: 0.12 }[k.weather] ?? (k.weather === 'clear' && k.sunAlt > 20 ? -0.03 : 0)), 0.03, 0.6); };
-const site = () => S.sites[S.here];
+const site = () => S.sites[S.at];
 const entity = id => [...S.world.stones, ...S.world.plants, ...S.world.animals].find(e => e.id === id);
 const fireHere = () => (site().fireUntil ?? -1) > now();
 
@@ -86,7 +86,7 @@ function newGame(seed, preset, checked) {
     body: { ...newCharacter(), germs: 0.1, hyd: 0.8, energy: 0.75, sick: 0, pendingSick: [], gut: 0, macro: { p: 0, f: 0, c: 0 }, chill: 0, limp: 0, wound: null,
       clothes: { clo: 1.0, wet: 0 } }, // what I came in: trousers, shirt and a light jacket, about 1 clo; wet 0 dry .. 1 soaked
     mem: newMemory(), mind: { moonNoted: null }, day: 1, t: 6.5, showProps: false,
-    sites: [], here: 0, inv: [], log: [], uid: 1,
+    sites: [], at: 0, inv: [], log: [], uid: 1,
     goal: 'fire', revealed: { fire: new Set() },
     milestones: {}, mats: materialsOf(world), lore: {},
     ambient: clamp(0.05 + 0.07 * world.environment.water, 0.05, 0.35),
@@ -99,7 +99,7 @@ function newGame(seed, preset, checked) {
     log(`${cap(k.weather === 'fog' ? when('foggy', ': I can hardly see a stone’s throw') : k.wet ? when('wet', `, ${WEATHER_WORDS[k.weather]} coming down`) : when(tw, `, ${WEATHER_WORDS[k.weather]}`))}.`, 'note'); }
   const first = newSite(checked.spawn.x, checked.spawn.y);
   first.name = 'where I woke';
-  S.here = 0;
+  S.at = 0;
   look(first, 0.5);
   markSeen(first.x, first.y, 20, { eye: 1.7 });
   noteSeenFeatures();
@@ -474,8 +474,8 @@ function mapHours(from, key, target) {
 function routeField(from) {
   const key = `${from.x},${from.y}/${S.seenVer ?? 0}/${S.day}`; // the water changes by the day
   if (S.routeMemo?.key === key) return S.routeMemo.D;
-  const esc = cliffIndex(), known = c => (S.seenLand?.[c] ?? 0) >= SEEN;
-  const blocked = c => known(c) && !!S.L.lake[c];
+  const esc = cliffIndex(), seen = S.seenLand, land = S.L, lake = land.lake, known = c => (seen?.[c] ?? 0) >= SEEN;
+  const blocked = c => known(c) && !!lake[c];
   const D = new Float64Array(GN * GN).fill(Infinity), heap = [], start = cellOf(from.x, from.y);
   const push = (c, d) => { heap.push([d, c]); let i = heap.length - 1; while (i > 0) { const j = (i - 1) >> 1; if (heap[j][0] <= heap[i][0]) break; [heap[i], heap[j]] = [heap[j], heap[i]]; i = j; } };
   const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[i], heap[m]] = [heap[m], heap[i]]; i = m; } } return top; };
@@ -486,7 +486,7 @@ function routeField(from) {
     const x = c % GN, y = Math.floor(c / GN);
     for (const [dx, dy] of NB8) {
       const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= GN || ny >= GN) continue;
-      const n = cellOf(nx, ny), nd = d + (blocked(n) ? 0 : stepHours(S.L, { x, y }, { x: nx, y: ny }) * (S.L.lake[n] ? 1.6 : known(n) && esc[n] >= 0 ? CLIFF_COST : 1));
+      const n = cellOf(nx, ny), nd = d + (blocked(n) ? 0 : stepHours(land, { x, y }, { x: nx, y: ny }) * (lake[n] ? 1.6 : known(n) && esc[n] >= 0 ? CLIFF_COST : 1));
       if (nd < D[n]) { D[n] = nd; push(n, nd); }
     }
   }
@@ -662,7 +662,7 @@ function arrive(x, y, how, onTheWay = null) {
   if (S.L.chan[cellOf(x, y)]) addFix({ x, y }, 'stood', S.travelHint);
   noteSeenFeatures();
   noteTrail(S.mem, s.key);
-  S.here = S.sites.indexOf(s);
+  S.at = S.sites.indexOf(s);
   if (how) log(how); // the walk first, then what it found
   { const w = waterAt(S.L, groundNow(), cellOf(x, y)); // the water here today
     if (w?.dry) log(`The ${SIZE_NOUN[w.size]} is dry here: a bed of stones and sand, no water.`, 'note');
@@ -1126,28 +1126,87 @@ const HERE = {
   marsh: () => smellsToday().some(x => x.kind === 'marsh' && Math.hypot(x.x - site().x, x.y - site().y) < 15),
   seeing: () => senseLimits(true) || null,
 };
+// Beyond these, any path names the game's own state by its key (sites, suspects, streams, day, t, ...).
 const stateFor = (binding = {}) => stateOver({
-  body: S.body, site: site(), sky: skyNow, ground: groundNow, world: S.world, mem: S.mem, lore: S.lore, mind: S.mind, milestones: S.milestones, inv: S.inv,
-  clock: () => ({ day: S.day, t: S.t, now: now() }), ...binding,
-}, { here: HERE });
+  site: site, sky: skyNow, ground: groundNow, clock: () => ({ day: S.day, t: S.t, now: now() }), ...binding,
+}, { here: HERE }, S);
 const dice = () => ({ act: S.rng, place: key => makeRng(`${S.world.seed}/${key}`) });
+// State that is no process's business: the generated world and land, caches and version counters for
+// redrawing, what the screen shows, the record of play. Processes reach these straight through.
+const LIVE = new Set(['world', 'L', 'seed', 'preset', 'mats', 'ambient', '_sky', '_smells', '_smellDay', 'landMemo', 'routeMemo', 'pieceMemo', 'linkMemo', 'lakeMemo', 'segMemo',
+  'seenVer', 'streamVer', 'namedVer', 'mapRoutes', 'mapView', 'mapPin', 'mapLand', 'showProps', 'record', 'lastTag', 'lastAct', 'goal', 'revealed']);
+// (The memos above hold numbers, keyed by what they were worked out from, so they can be shared.) A memo
+// holding the state's own things (the stream trees hold its fixes) is the process's own while it runs,
+// starting empty, so nothing from its copy is kept; its key tells the game's when it's out of date.
+const MEMOS = new Set(['treeMemo']);
+// A process whose run needs the game's own helpers (the mental map, streams, perception, the journal):
+// while it runs, the game's state is its view, so the helpers read and change the copy, within its
+// contract. Its run must look everything up afresh (site(), not a place captured beforehand).
+const hosted = fn => Object.assign((v, d) => { const real = S; S = v; try { return fn(v, d) ?? {}; } finally { S = real; } }, { hosted: true });
 // Do a process: check it can be done, let its time pass (as of when it's done, the state it reads),
 // run it on a copy of what it reads, put back what it changed, take what it used up, add what it made,
 // and say what it has to say. The last one done is kept (S.lastAct) for looking into.
-function perform(proc, binding = {}, { quiet = false } = {}) {
+let depth = 0;
+function perform(proc, binding = {}, { quiet = false, refusal = false } = {}) {
   let v = viewFor(proc, stateFor(binding));
   const ok = readyFor(proc, v);
-  if (ok !== true) { log(ok, 'warn'); return null; }
+  if (ok !== true) { if (refusal) return { refused: ok }; log(ok, 'warn'); return null; }
   const hours = hoursOf(proc, v);
   if (hours > 0) { pass(hours, kcalOf(proc, v)); v = viewFor(proc, stateFor(binding)); }
-  const fx = rehearse(proc, v, dice());
+  const real = S, d = dice(), memo = {};
+  const live = { has: k => k === 'rng' || LIVE.has(k) || MEMOS.has(k), get: k => (k === 'rng' ? d.act : MEMOS.has(k) ? memo[k] : real[k]), set: (k, x) => { if (MEMOS.has(k)) memo[k] = x; else real[k] = x; } };
+  depth++;
+  let fx;
+  try { fx = rehearse(proc, v, d, { live }); } catch (e) { if (/without declaring/.test(e.message) && !depth) console.error(`contract: ${e.message}`); throw e; } finally { depth--; }
   apply(fx, stateFor(binding));
   for (const it of fx.use) remove(S.inv.find(i => i.uid === it.uid));
   fx.made = fx.make.map(m => addItem(m.name, m.kind, m.props, m.from, m.extra));
   if (!quiet) for (const [text, kind] of fx.say) log(text, kind);
-  if (!quiet && !TICKS.includes(proc)) S.lastAct = { id: proc.id, binding: Object.keys(binding), view: v, fx };
+  if (!quiet && !depth && !TICKS.includes(proc)) S.lastAct = { id: proc.id, binding: Object.keys(binding), view: v, fx };
   return fx;
 }
+
+// ------------------------------------------------------------ game-side processes
+//
+// Processes whose runs use the game's own helpers (see hosted), declared over the game's state by key.
+// What they may touch, in bundles:
+const TIME = ['day', 't', 'body', 'inv', 'sites', 'at', 'mind', 'lore', 'collapsed', 'uid', 'milestones', '+log']; // time passing: the ticks, and a collapse into sleep
+const KNOW = ['mem', 'sites', 'at']; // what I've noticed, here and in my notes
+const MAP = ['suspects', 'streams', 'seenLand', 'waterNames', 'segNames', 'cliffNames', 'walked', 'travelHint', 'trod', 'crossingsKnown', 'streamGaps', 'crossedWater', 'landNamed', 'recentNotice', 'fruitNoted', 'looking']; // the mental map and what I'm about
+const foggy = v => (v.body.focus < 0.25 ? 'Too foggy to think it through. I need rest, water or food first.' : true);
+const GAME = {
+  poke: { id: 'poke', name: 'Poke around', reads: ['day', 't'], writes: ['body.germs', ...KNOW, 'inv', '+log'], hours: 0.5, kcal: 230, run: hosted(() => pokeAround(site())) },
+  scan: { id: 'scan', name: 'Scan', reads: ['day', 't', 'inv'], writes: [...KNOW, ...MAP, 'body.focus', '+log'], hours: 0.5, kcal: 120,
+    run: hosted(() => { S.body.focus = clamp(S.body.focus - 0.04); sense(site(), false, { scan: true }); }) },
+  lookout: { id: 'lookout', name: 'Look out from up here', reads: ['day', 't', 'inv'], writes: [...KNOW, ...MAP, 'milestones.lookout', '+log'], hours: 0.5, kcal: 200,
+    run: hosted(() => {
+      const s = site();
+      sense(s, true); markSeen(s.x, s.y, 50, { eye: lookoutEye(S.L, s) }); noteSeenFeatures();
+      if (!S.milestones.lookout) { S.milestones.lookout = true; log('A view at last.', 'milestone'); }
+    }) },
+  look: { id: 'look', name: 'Look for something', reads: ['spec', 'day', 't', 'lore'], writes: [...KNOW, ...MAP, 'body', 'inv', 'uid', 'milestones', '+log'], hours: 0.5, kcal: 180, run: hosted(v => startLooking(v.spec)) },
+  stopLooking: { id: 'stop-looking', name: 'Stop looking', reads: [], writes: ['looking', '+log'], run: hosted(() => { log(`Stopped looking for ${S.looking.label}.`, 'thought'); S.looking = null; }) },
+  inspect: { id: 'inspect', name: 'Inspect and assess', reads: ['entity', 'lore', 'inv', 'day', 't'], writes: [...KNOW, 'body.focus', '+log'],
+    hours: v => 0.25 + (v.body.focus >= 0.25 ? 0.15 : 0), kcal: 130, run: hosted(v => { const e = entity(v.entity); inspect(e); assess(e); }) },
+  test: { id: 'test', name: 'Test something', reads: ['thing.uid', 'name'], writes: ['inv', '+log'], hours: 0.1, kcal: 120,
+    run: hosted(v => { const it = byUid(v.thing.uid), T = testsFor(it).find(([k]) => k === v.name); it.notes[v.name] = T[1](); log(`${v.name} on the ${it.name}: ${it.notes[v.name]}.`); }) },
+  gather: { id: 'gather', name: 'Collect', reads: ['index', 'option', 'day', 't', 'lore'], writes: [...KNOW, 'inv', 'uid', 'body', '+log'],
+    hours: v => v.option.hours, kcal: v => v.option.kcal,
+    run: hosted(v => { const g = gatherOptions(site())[v.index]; site().gathered = true; const it = g.fn(); touch([it], 0.5); log(`Gathered ${it.name}.`); }) },
+  drop: { id: 'drop', name: 'Leave something behind', reads: ['thing.uid'], writes: ['inv', '+log'], run: hosted(v => { const it = byUid(v.thing.uid); remove(it); log(`Left the ${it.name} behind.`); }) },
+  rename: { id: 'rename', name: 'Name a place', reads: ['place', 'name', 'origin'], writes: ['sites', 'at', '+log'],
+    run: hosted(v => {
+      const t = S.sites.find(x => x.key === v.place);
+      log(v.origin ? `Decided to call ${t === site() ? 'this place' : 'the place I got that from'} ${v.name}. It goes on my map.` : `Decided to call this place ${v.name}.`);
+      t.name = v.name; t.renamed = true;
+    }) },
+  think: { id: 'think', name: 'Think it through', reads: ['path'], writes: ['body.focus', '+log'], hours: 0.1, kcal: 110, ready: foggy, run: hosted(v => think(v.path)) },
+  sleep: { id: 'sleep', name: 'Sleep till morning', reads: ['forced', 'ambientNow'], writes: TIME, run: hosted(v => sleepNow(v.forced)) },
+  hike: { id: 'hike', name: 'Walk', reads: ['key'], writes: [...TIME, ...KNOW, ...MAP], run: hosted(v => hikeNow(v.key)) },
+};
+for (const p of Object.values(GAME)) p.reads = [...new Set([...p.reads, 'day', 't'])]; // every journal line is stamped with the time
+const sleep = (forced = false) => perform(GAME.sleep, { forced, ambientNow: ambient() });
+const hike = key => perform(GAME.hike, { key });
 
 // ------------------------------------------------------------ the passing of time
 //
@@ -1187,7 +1246,7 @@ function shelterHere(s, g) {
   const d = deciduousShare(S.world);
   return naturalShelter(S.L.veg[cellOf(s.x, s.y)], 1 - d + d * g.leaf, s.micro);
 }
-function sleep(forced = false) {
+function sleepNow(forced = false) {
   const s = site(), c = cellOf(s.x, s.y);
   const banked = fireHere() && takeWood(2) === 2;
   const wakeDay = S.t >= dawnAt(S.world, S.day) ? S.day + 1 : S.day, wake = clamp(dawnAt(S.world, wakeDay) + 0.25, 4, 8.5); // up once there's light to see by
@@ -1480,21 +1539,21 @@ function pickSlot(recipe, slot, list) {
 
 const flakeItem = (f, label) => addItem(label, 'edge', f.props, { id: f.provenance?.source, name: f.provenance?.name ?? '', part: label, site: site().key });
 
+// Crafting (acts.js): the things chosen for each slot are bound to the process by slot name; then
+// everything handled shares its germs (HANDLE), unless it was a rinse.
+const KILL = { roast: 0.05, stoneboil: 0.01, harden: 0.2, scorch: 0.05 }; // heat: the share of germs left
 function craft(id, mode) {
-  const r = S.rng, ch = S.body;
   const R = RECIPES.find(x => x.id === id);
   const pickd = Object.fromEntries(R.slots.map(([k, , list]) => [k, pickSlot(id, k, list())]));
-  const prov = it => ({ name: it.from?.name ?? it.name, source: it.from?.id, site: it.from?.site });
-  const asEdge = it => ({ props: it.props, name: 'flake' });
   if (isNight()) return log('Too dark to work. Time to sleep.', 'warn');
   const uid0 = S.uid;
-  if (craftSwitch(id, mode, r, ch, R, pickd, prov, asEdge) === 'rinsed') return;
+  const fx = craftSwitch(id, mode, pickd);
+  if (!fx || CRAFTS[id]?.rinse) return;
   // everything handled together shares what's on it: the inputs still carried, what was made, my hands
-  touch([...Object.values(pickd).filter(i => i && S.inv.includes(i)), ...S.inv.filter(i => i.uid >= uid0)], 0.4);
-  const kill = { roast: 0.05, stoneboil: 0.01, harden: 0.2, scorch: 0.05 }[id];
-  if (kill) for (const i of [...Object.values(pickd), ...S.inv.filter(x => x.uid >= uid0)]) if (i && S.inv.includes(i)) i.props.germs = Math.round(i.props.germs * kill * 1000) / 1000;
+  const handled = [...Object.values(pickd).filter(i => i && S.inv.includes(i)), ...S.inv.filter(i => i.uid >= uid0)].map(i => i.uid);
+  perform(HANDLE, { handled, kill: KILL[id] ?? null }, { quiet: true });
 }
-function craftSwitch(id, mode, r, ch, R, pickd, prov, asEdge) {
+function craftSwitch(id, mode, pickd) {
   switch (id) {
     case 'knap': {
       let { core, hammer } = pickd;
@@ -1505,127 +1564,14 @@ function craftSwitch(id, mode, r, ch, R, pickd, prov, asEdge) {
         log(`Can’t strike a stone with itself; used the ${other.from.name} stone as the hammer.`);
       }
       const slab = ofKind('slab')[0];
-      perform(KNAP, { core, hammer, anvil: { props: { mass: slab ? 6000 : 1500 }, slab: !!slab } });
-      break;
-    }
-    case 'notch': {
-      const { wood, edge } = pickd;
-      const hours = mode === 'careful' ? 1.0 : 0.4;
-      const res = notchHearth(r, ch, { props: wood.props, provenance: prov(wood) }, asEdge(edge), hours);
-      pass(hours, 160);
-      remove(wood);
-      addItem(`hearth board, ${wood.from.name}`, 'board', res.board.props, wood.from);
-      log(`${mode === 'careful' ? 'Took my time and' : 'Quickly'} split and notched a hearth board from the ${wood.from.name} wood.`);
-      dullCheck(edge);
-      break;
-    }
-    case 'refine': {
-      const { board, edge } = pickd;
-      const res = refineNotch(r, ch, board, asEdge(edge));
-      pass(0.6, 150);
-      delete board.notes['Inspect the notch'];
-      log(res.after > res.before ? 'Worked the notch slowly; it’s cleaner now.' : 'The edge slipped and tore the notch a little.');
-      dullCheck(edge);
-      break;
-    }
-    case 'carve': {
-      const { shoot, edge } = pickd;
-      const res = carveSpindle(r, ch, { props: shoot.props, provenance: prov(shoot) }, asEdge(edge));
-      pass(0.5, 160);
-      remove(shoot);
-      addItem(`spindle, ${shoot.from.name}`, 'spindle', res.spindle.props, shoot.from);
-      log(`Carved a spindle from the ${shoot.from.name} ${shoot.kind === 'shoot' && shoot.props.moisture > 0.3 ? 'shoot. It’s green; it will need to dry' : 'shoot'}.`);
-      dullCheck(edge);
-      break;
-    }
-    case 'trim': {
-      const { stalk } = pickd;
-      pass(0.15, 130);
-      remove(stalk);
-      addItem(`spindle, ${stalk.from.name}`, 'spindle', { ...stalk.props, length: 70 }, stalk.from);
-      log(`Snapped a ${stalk.from.name} stalk to length and rubbed it smooth: a spindle.`);
-      break;
-    }
-    case 'digstick': {
-      // hardness of the point: wood density, plus a little for a clean shape; green wood is softer until dried
-      const { stick, tool } = pickd;
-      const cut = tool.kind === 'edge';
-      const hours = cut ? 0.5 : 1.0; // grinding a point on rough stone is slow
-      pass(hours, 200);
-      const d = stick.props.density ?? 0.45;
-      const finish = clamp((cut ? 0.6 + 0.4 * (tool.props.sharpness ?? 0.5) : 0.5) * (0.8 + 0.4 * ch.focus) + S.rng.normal(0, 0.08));
-      const green = (stick.props.moisture ?? 0.15) > 0.3;
-      const hardness = clamp(d * (0.75 + 0.25 * finish) - (green ? 0.08 : 0), 0.1, 0.95);
-      remove(stick);
-      addItem(`digging stick, ${stick.from.name}`, 'diggingstick', { density: d, moisture: stick.props.moisture, hardness, finish, hardened: 0 }, stick.from);
-      if (cut) { tool.props.sharpness = Math.max(0, tool.props.sharpness - 0.04); dullCheck(tool); }
-      log(`Shaped a digging stick from the ${stick.from.name} ${stick.kind === 'shoot' ? 'shoot' : 'wood'}, ${cut ? 'whittling' : 'grinding'} the end to a chisel point on ${cut ? 'the edge' : 'a rough stone'}.`);
-      if (!S.milestones.stick) { S.milestones.stick = true; log('A digging stick.', 'milestone'); }
-      break;
-    }
-    case 'harden': {
-      const { stick } = pickd;
-      const careful = mode === 'careful';
-      pass(careful ? 0.75 : 0.3, 140);
-      const p = stick.props;
-      const room = 1 - p.hardness;
-      const charred = !careful && S.rng.chance(0.35);
-      p.hardness = clamp(p.hardness + room * (careful ? 0.3 : 0.18) * (p.hardened ? 0.4 : 1) - (charred ? 0.08 : 0));
-      p.moisture = Math.min(p.moisture ?? 0.2, ambient() + 0.02);
-      p.hardened++;
-      log(charred ? 'Hurried the stick over the fire and charred the tip; scraped off the black. Harder underneath, but the point is thinner.' : `Turned the point over the coals until it browned${careful ? ', slowly, a little at a time' : ''}. It rings harder when tapped.`);
-      break;
+      return perform(KNAP, { core, hammer, anvil: { props: { mass: slab ? 6000 : 1500 }, slab: !!slab } });
     }
     case 'pound': case 'grind': case 'chop': case 'roast': case 'leach': case 'soak': case 'dryfood': case 'stoneboil':
-      perform(PREPARE(id), { food: pickd.food, mode, stone: pickd.stone, edge: pickd.edge, stones: ofKind('stone') });
-      break;
-    case 'basin': { // a hollow in rock, or a pit lined with clay, that holds water for hot-stone cooking
-      const s = site();
-      if (s.micro === 'claybank') { pass(1.5, 320); s.basin = { kind: 'clay-lined pit' }; log('Dug a pit beside the water and lined it with clay, smoothed wet. It holds water.'); }
-      else { pass(0.5, 180); if (S.rng.chance(0.6)) { s.basin = { kind: 'rock hollow' }; log('Found a hollow in the rock that holds water: good enough to boil in with hot stones.'); } else log('Looked for a rock hollow that would hold water; nothing that doesn’t drain.'); }
-      break;
-    }
-    case 'wash': { // rinsing helps, but leaves the water's own germs behind
-      const { thing } = pickd; pass(0.1, 120);
-      thing.props.germs = Math.round((thing.props.germs * 0.3 + 0.4 * waterGerms()) * 1000) / 1000;
-      S.body.germs = S.body.germs * 0.5 + 0.3 * waterGerms();
-      log(`Washed the ${thing.name} in the water.`);
-      return 'rinsed'; // hands and thing are rinsed, not mixed
-    }
-    case 'scorch': { const { thing } = pickd; pass(0.1, 120); log(`Passed the ${thing.name} through the flames.`); break; }
-    case 'tinder': {
-      const { mat } = pickd;
-      const res = makeTinder(r, ch, { props: mat.props, provenance: prov(mat) });
-      pass(0.2, 140);
-      remove(mat);
-      addItem(`tinder bundle, ${mat.from.name}`, 'tinder', res.tinder.props, mat.from);
-      log(`Shredded the ${mat.from.name} ${mat.from.part} into a tinder nest.`);
-      break;
-    }
-    case 'bone': {
-      const { bone, hammer } = pickd;
-      const res = splinterBone(r, ch, bone, { props: hammer.props });
-      pass(0.2, 160);
-      remove(bone);
-      res.flakes.forEach(f => addItem('bone splinter', 'edge', f.props, bone.from));
-      log(res.flakes.length ? `Cracked the bone: ${res.flakes.length} sharp splinter${res.flakes.length > 1 ? 's' : ''}.` : 'The bone shattered into useless bits.');
-      if (res.flakes.length && !S.milestones.edge) { S.milestones.edge = true; log('My first cutting edge.', 'milestone'); }
-      break;
-    }
-    case 'drill': drill(pickd.board, pickd.spindle, mode === 'until'); break;
+      return perform(PREPARE(id), { food: pickd.food, mode, stone: pickd.stone, edge: pickd.edge, stones: ofKind('stone') });
+    case 'drill': return drill(pickd.board, pickd.spindle, mode === 'until');
+    default: return perform(CRAFTS[id], { ...pickd, mode });
   }
 }
-
-function dullCheck(edge) {
-  if (edge.props.sharpness < 0.35 && !edge.toldDull) { edge.toldDull = true; log(`The ${edge.name} has gone dull.`, 'act'); }
-}
-
-const DRILL_LINES = [
-  [r => r.success, 'smoke thickened and a mound of dark dust began to glow'],
-  [r => r.margin > -0.6, 'thick smoke and dark dust, but no glow'],
-  [r => r.margin > -1.6, 'some smoke; the dust stayed coarse and pale'],
-  [() => true, 'barely warm; the spindle just polished the socket'],
-];
 
 // What a person would notice going wrong at the drill: the largest penalty in the performance score.
 function drillTrouble(board, spindle) {
@@ -1642,51 +1588,28 @@ function drillTrouble(board, spindle) {
   return pen[0][0] > 0.35 ? pen[0][1] : null;
 }
 
+// At the drill: one go after another (DRILL_ATTEMPT, acts.js) until an ember, a reason to stop, or
+// (asked for one go) after the first; then one line for the lot, and the ember to the tinder (EMBER).
 function drill(board, spindle, keepGoing) {
   const tally = {};
-  let n = 0, stop = '';
+  let n = 0, stop = '', fx = null, glow = null;
   while (true) {
-    if (S.body.hands > 0.85) { stop = 'my palms are raw; I have to stop'; break; }
-    if (S.body.fatigue > 0.88) { stop = 'too tired to keep going'; break; }
-    if (isNight()) { stop = 'too dark'; break; }
-    if (board.props.life <= 0.05) { stop = 'the board has burned through'; remove(board); break; }
-    if (spindle.props.length < 40) { stop = 'the spindle is worn too short'; remove(spindle); break; }
-    const res = handDrill(S.rng, S.body, board, spindle);
-    pass(0.25, 400);
+    if (!S.inv.includes(board)) { stop = 'the board has burned through'; break; }
+    if (!S.inv.includes(spindle)) { stop = 'the spindle is worn too short'; break; }
+    fx = perform(DRILL_ATTEMPT, { board, spindle }, { refusal: true });
+    if (fx.refused) { stop = fx.refused; break; }
     n++;
-    const line = DRILL_LINES.find(([f]) => f(res))[1];
-    tally[line] = (tally[line] ?? 0) + 1;
-    if (res.ember) {
-      summarize();
-      ember(res.ember);
-      return;
-    }
+    tally[fx.report.line] = (tally[fx.report.line] ?? 0) + 1;
+    if (fx.report.ember != null) { glow = fx.report.ember; break; }
     if (!keepGoing) break;
   }
-  summarize();
-  function summarize() {
-    const parts = Object.entries(tally).map(([k, v]) => (n > 1 ? `${v}× ${k}` : k));
-    const trouble = n && !tally[DRILL_LINES[0][1]] && S.inv.includes(board) ? drillTrouble(board, spindle) : null;
-    const tools = `with the ${spindle.from?.name ?? ''} spindle (${impressions(spindle).slice(0, 1).join('')}) on the ${board.from?.name ?? ''} board`;
-    if (n) log(`${n > 1 ? `${n} attempts at the drill` : 'One attempt at the drill'} ${tools}: ${parts.join('; ')}.${trouble ? ` As far as I can tell, ${trouble}.` : ''}${stop ? ` Stopped: ${stop}.` : ''}`);
-    else if (stop) log(`Can’t drill: ${stop}.`, 'warn');
-  }
-}
-
-function ember(e) {
-  if (!S.milestones.ember) { S.milestones.ember = true; log('An ember!', 'milestone'); }
-  const tinder = ofKind('tinder')[0];
-  if (!tinder) return log('An ember, but no tinder bundle ready. It faded in the notch.', 'warn');
-  if (!has('wood')) return log('An ember, but no wood to feed a flame. It faded.', 'warn');
-  const res = lightFire(S.rng, S.body, e, tinder);
-  pass(0.15, 180);
-  remove(tinder);
-  if (res.success) {
-    takeWood(1);
-    site().fireUntil = now() + 3;
-    log('Tipped the ember into the tinder and blew. Smoke, then a flicker, then flame. Fire.', 'act');
-    if (!S.milestones.fire) { S.milestones.fire = true; log(`Fire, on day ${S.day}.`, 'milestone'); }
-  } else log('Tipped the ember into the tinder and blew, but it smothered and died.', 'warn');
+  const parts = Object.entries(tally).map(([k, v]) => (n > 1 ? `${v}× ${k}` : k));
+  const trouble = n && glow == null && S.inv.includes(board) ? drillTrouble(board, spindle) : null;
+  const tools = `with the ${spindle.from?.name ?? ''} spindle (${impressions(spindle).slice(0, 1).join('')}) on the ${board.from?.name ?? ''} board`;
+  if (n) log(`${n > 1 ? `${n} attempts at the drill` : 'One attempt at the drill'} ${tools}: ${parts.join('; ')}.${trouble ? ` As far as I can tell, ${trouble}.` : ''}${stop ? ` Stopped: ${stop}.` : ''}`);
+  else if (stop) log(`Can’t drill: ${stop}.`, 'warn');
+  if (glow != null) return perform(EMBER, { ember: { props: { vigor: glow } }, tinder: ofKind('tinder')[0] ?? null, wood: ofKind('wood')[0] ?? null });
+  return fx;
 }
 
 // ------------------------------------------------------------ survey: a formal count of what's in eyeshot
@@ -1800,7 +1723,6 @@ function startLooking(spec) {
   const [type, key] = spec.split(':');
   const label = type === 'focus' ? FOCI[key].label : type === 'entity' ? pluralize(entity(key).name) : key === 'water' ? 'water' : 'high ground';
   S.looking = { type, key, label };
-  pass(0.5, 180);
   S.body.focus = clamp(S.body.focus - 0.03);
   lookHere(site(), false);
 }
@@ -1916,7 +1838,6 @@ function learnedAbout(e) {
   return [...new Set(out)];
 }
 function inspect(e) {
-  pass(0.25, 130);
   const parts = e.kind === 'plant' ? e.parts.map(p => p.part) : e.kind === 'stone' ? [] : e.products;
   const learned = learnedAbout(e);
   log(`Looked closely at the ${e.name}: ${e.cues.filter(c => !/^active:/.test(c)).join('; ')}.${parts.length ? ` Parts worth noting: ${parts.join(', ')}.` : ''}${learned.length ? ` What I’ve learned: ${learned.join('; ')}.` : ''}`, 'note');
@@ -1926,7 +1847,6 @@ function inspect(e) {
 function assess(e) {
   if (S.body.focus < 0.25) return log('Too foggy to think it through. I need rest, water or food first.', 'warn');
   S.body.focus = clamp(S.body.focus - 0.08);
-  pass(0.15, 110);
   const cues = e.cues.join(' | ');
   const uses = [], risks = [], tests = [];
   const on = (re, list, text) => { if (re.test(cues)) list.push(text); };
@@ -2034,12 +1954,7 @@ function restOptions() {
 }
 function restFor(choice) {
   if (choice === 'morning') return sleep();
-  const hours = choice === 'dusk' ? sunsetAt(S.day) - S.t : Number(choice);
-  pass(hours, 90);
-  S.body.fatigue *= Math.pow(0.15, hours / 9);
-  S.body.hands *= Math.pow(0.55, hours / 12);
-  S.body.focus = clamp(S.body.focus + 0.12 * hours);
-  log(choice === 'dusk' ? 'Rested in the shade until dusk.' : `Rested for ${hours === 1 ? 'an hour' : `${hours} hours`}.`);
+  perform(REST, { hours: choice === 'dusk' ? sunsetAt(S.day) - S.t : Number(choice), dusk: choice === 'dusk' });
 }
 // ------------------------------------------------------------ the land under the map
 //
@@ -2247,7 +2162,7 @@ function scaleBar(span) {
 }
 function mapHTML() {
   const M = mentalMap();
-  const hi = M.nodes.findIndex(v => v.site === S.here), here = M.nodes[hi];
+  const hi = M.nodes.findIndex(v => v.site === S.at), here = M.nodes[hi];
   const xs = M.nodes.map(v => v.x), ys = M.nodes.map(v => v.y);
   let x0 = Math.min(...xs) - 4, y0 = Math.min(...ys) - 4, span = Math.max(Math.max(...xs) - x0 + 4, Math.max(...ys) - y0 + 4, 16);
   x0 -= (span - (Math.max(...xs) + 4 - x0)) / 2; y0 -= (span - (Math.max(...ys) + 4 - y0)) / 2; // centre the narrower way
@@ -2431,7 +2346,7 @@ function mapHTML() {
   return `${svg}${tools}<p class="hint">North is up. Tap a place, landmark, stream, lake or cliff to head for it; tap anywhere else to drop a pin, then tap the pin to go there. Drag to pan; pinch or scroll to zoom. Filled dots: places I’ve been; rings: things I’ve seen or heard (“?”: heard only). Blue: lakes as I picture them, springs, and streams, solid where I’ve walked along them, chevrons pointing downstream. Lines with ticks: cliffs, ticks on the low side. At a stream, the white arrows by me follow it a stretch. Not every name is shown when the map is crowded; zoom in for more.</p>`;
 }
 // A tap on the map: hike straight to that node.
-function hike(key) {
+function hikeNow(key) {
   if (key.startsWith('stream:')) return headForStream(key.slice(7));
   if (key.startsWith('lake:') || key.startsWith('cliff:')) return headForFeature(key);
   if (key.startsWith('go:')) { // a spot I picked on the map
@@ -2443,7 +2358,7 @@ function hike(key) {
   if (key.startsWith('shore:')) return walkShore(key.slice(6));
   if (key.startsWith('follow:')) { const [, dir, b] = key.split(':'); return followStream(dir, b ? { x: +b.split('_')[0], y: +b.split('_')[1] } : null); }
   const M = mentalMap(), v = M.nodes.find(n => n.key === key);
-  if (!v || v.site === S.here) return;
+  if (!v || v.site === S.at) return;
   if (v.sus) { const u = S.suspects.find(x => x.id === v.sus); travelTo({ ...u.est, suspect: u.id }, `toward ${u.label}`); }
   else travelTo({ x: v.x, y: v.y, site: v.site }, `back to ${v.name}`);
 }
@@ -2478,11 +2393,11 @@ function doHere(id) {
   const s = site();
   switch (id) {
     case 'survey': perform(SURVEY); break;
-    case 'poke': pass(0.5, 230); pokeAround(s); break;
+    case 'poke': perform(GAME.poke); break;
     case 'collect': case 'inspect': case 'make': case 'rest': picker = { kind: id, step: 'root' }; break;
-    case 'look': if (S.looking) { log(`Stopped looking for ${S.looking.label}.`, 'thought'); S.looking = null; } else picker = { kind: 'look', step: 'root' }; break;
-    case 'scan': pass(0.5, 120); S.body.focus = clamp(S.body.focus - 0.04); sense(s, false, { scan: true }); break;
-    case 'lookout': pass(0.5, 200); sense(s, true); markSeen(s.x, s.y, 50, { eye: lookoutEye(S.L, s) }); noteSeenFeatures(); if (!S.milestones.lookout) { S.milestones.lookout = true; log('A view at last.', 'milestone'); } break;
+    case 'look': if (S.looking) perform(GAME.stopLooking); else picker = { kind: 'look', step: 'root' }; break;
+    case 'scan': perform(GAME.scan); break;
+    case 'lookout': perform(GAME.lookout); break;
     case 'washhands': perform(WASH_HANDS); break;
     case 'drink': perform(DRINK); break;
     case 'feed': perform(FEED_FIRE, { wood: ofKind('wood')[0] }); break;
@@ -2503,10 +2418,8 @@ function nodeLabel(n) {
   return n.slot.role;
 }
 function think(path) {
-  if (S.body.focus < 0.25) return log('Too foggy to think it through. I need rest, water or food first.', 'warn');
   const n = nodeAt(path);
   S.body.focus = clamp(S.body.focus - 0.06);
-  pass(0.1, 110);
   S.revealed[S.goal].add(path);
   if (n.type === 'material') { const h = lookHint(n.slot); log(h ? `For the ${n.slot.role}: look for ${h}.` : thought(n), 'thought'); }
   else if (n.type === 'any') log(`Any of these would do: ${n.options.map(nodeLabel).join(', or ')}.`, 'thought');
@@ -2690,7 +2603,7 @@ if (typeof document !== 'undefined') {
 // Everything that happens follows from the world seed and the player's choices, so a record of the
 // seed and each choice reproduces a game exactly. Each action is the data of what was tapped (or
 // the value chosen); `act` applies one, and replaying a record runs them in order on a fresh game.
-const BUILD = 'hk-2026-10-26a'; // game logic version: a record replays faithfully only on the build that made it
+const BUILD = 'hk-2026-10-26b'; // game logic version: a record replays faithfully only on the build that made it
 function record(d) {
   S.record ??= [];
   S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
@@ -2753,12 +2666,12 @@ document.addEventListener('click', ev => {
 
 // Apply one player action (the data of what was tapped). Returns false if it wasn't an action.
 function act(d) {
-  if (d.originOf) { const t = S.sites.find(x => x.key === d.originOf); if (!t) return false; log(`Decided to call ${t === site() ? 'this place' : 'the place I got that from'} ${d.nameTo}. It goes on my map.`); t.name = d.nameTo; t.renamed = true; return true; }
-  if (d.renameTo) { log(`Decided to call this place ${d.renameTo}.`); site().name = d.renameTo; site().renamed = true; return true; }
+  if (d.originOf) { if (!S.sites.some(x => x.key === d.originOf)) return false; perform(GAME.rename, { place: d.originOf, name: d.nameTo, origin: true }); return true; }
+  if (d.renameTo) { perform(GAME.rename, { place: site().key, name: d.renameTo, origin: false }); return true; }
   if (d.goalPick !== undefined) { S.goal = d.goalPick; S.revealed[S.goal] ??= new Set(); return true; }
   if (d.slotPick) { sel[d.slotPick] = Number(d.value); return true; }
   if (d.here) doHere(d.here);
-  else if (d.gather !== undefined) { const g = gatherOptions(site())[Number(d.gather)]; pass(g.hours, g.kcal); site().gathered = true; const it = g.fn(); touch([it], 0.5); log(`Gathered ${it.name}.`); }
+  else if (d.gather !== undefined) { const g = gatherOptions(site())[Number(d.gather)]; perform(GAME.gather, { index: Number(d.gather), option: { hours: g.hours, kcal: g.kcal } }); }
   else if (d.pk) {
     if (d.pk === 'close') picker = null;
     else if (d.pk === 'back') picker = { kind: picker.kind, step: 'root' };
@@ -2766,13 +2679,13 @@ function act(d) {
   }
   else if (d.rest) { picker = null; restFor(d.rest); }
   else if (d.hike) { picker = null; hike(d.hike); }
-  else if (d.inspect) { const e = entity(d.inspect); inspect(e); assess(e); }
-  else if (d.look) { picker = null; startLooking(d.look); }
+  else if (d.inspect) perform(GAME.inspect, { entity: d.inspect });
+  else if (d.look) { picker = null; perform(GAME.look, { spec: d.look }); }
   else if (d.craft) craft(d.craft, d.mode);
-  else if (d.test) { const it = byUid(d.test); const T = testsFor(it).find(([k]) => k === d.name); pass(0.1, 120); it.notes[d.name] = T[1](); log(`${d.name} on the ${it.name}: ${it.notes[d.name]}.`); }
+  else if (d.test) perform(GAME.test, { thing: byUid(d.test), name: d.name });
   else if (d.eat) eat(byUid(d.eat));
-  else if (d.drop) { const it = byUid(d.drop); remove(it); log(`Left the ${it.name} behind.`); }
-  else if (d.think) think(d.think);
+  else if (d.drop) perform(GAME.drop, { thing: byUid(d.drop) });
+  else if (d.think) perform(GAME.think, { path: d.think });
   else return false;
   return true;
 }

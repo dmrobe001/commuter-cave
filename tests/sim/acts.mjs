@@ -9,6 +9,13 @@
 // - eating fills the gut and feeds me, and is refused when I'm full;
 // - a survey finds things that live here, and the same site always holds the same;
 // - an hour asleep at -5 °C chills me and at 25 °C doesn't;
+// - the crafts: a notched board, a carved spindle, a trimmed one, a digging stick, a hardened point, a
+//   basin, a washed thing, a tinder bundle, bone splinters, each from its inputs; edges dull;
+// - drilling burns the board and shortens the spindle, an ember comes now and then, and is refused
+//   with raw palms; an ember with tinder and wood can light a fire; handling mixes germs and heat
+//   kills them; resting eases tiredness;
+// - a walking step: run again with other dice from where it began, it goes to a neighbouring cell,
+//   the one taken among them; how often the step taken was the likely one, and a walk's surprisal;
 // - every tick runs on its own;
 // - a process that reads or writes past its contract is stopped.
 // Usage: node tests/sim/acts.mjs
@@ -21,7 +28,9 @@ import { skyAt } from '../../src/sky.js';
 import { groundAt } from '../../src/ground.js';
 import { SHELTERS } from '../../src/body.js';
 import { viewOf, rehearse, apply, stateOver } from '../../src/act.js';
-import { DRINK, WASH_HANDS, MAKE_BED, BUILD_HUT, KNAP, PREPARE, EAT, SURVEY, SLEEP_HOUR, TICKS, POPULATION, GUT_KG } from '../../src/acts.js';
+import { DRINK, WASH_HANDS, MAKE_BED, BUILD_HUT, KNAP, PREPARE, EAT, SURVEY, SLEEP_HOUR, TICKS, POPULATION, GUT_KG, CRAFTS, DRILL_ATTEMPT, EMBER, HANDLE, REST } from '../../src/acts.js';
+import { generateLandscape } from '../../src/landscape.js';
+import { walk, chooseSpawn, stepView, WALK_STEP } from '../../src/geo.js';
 const fails = [], say = [];
 
 const world = generateWorld('acts', { preset: 'temperate-woodland' });
@@ -116,6 +125,72 @@ const food = (mass = 0.3) => ({ uid: 9, name: `${part.part} to eat`, base: `${pa
 for (const tick of TICKS) {
   const G = game({ S: { inv: [food()] } });
   try { run(G, tick, { tick: { dt: 0.5, kcal: 150 }, was: skyAt(world, 1, 9.5) }); } catch (e) { fails.push(`tick ${tick.id}: ${e.message}`); }
+}
+// crafts
+{
+  const from = { id: world.plants[0].id, name: 'test', part: 'dead wood' };
+  const item = (uid, kind, props, extra = {}) => ({ uid, name: kind, kind, props: { germs: 0.05, ...props }, from, notes: {}, ...extra });
+  const edge = () => item(50, 'edge', { sharpness: 0.8, hardness: 7 });
+  const wood = item(51, 'wood', { density: 0.3, resin: 0.1, moisture: 0.12 }), shoot = item(52, 'shoot', { density: 0.5, moisture: 0.15, straightness: 0.9 });
+  const cases = [
+    ['notch', { wood, edge: edge(), mode: 'careful' }, fx => fx.make[0]?.kind === 'board'],
+    ['carve', { shoot, edge: edge() }, fx => fx.make[0]?.kind === 'spindle'],
+    ['trim', { stalk: item(53, 'stalk', { density: 0.3, straightness: 0.95 }) }, fx => fx.make[0]?.props.length === 70],
+    ['digstick', { stick: shoot, tool: edge() }, fx => fx.make[0]?.kind === 'diggingstick'],
+    ['tinder', { mat: item(54, 'tindermat', { moisture: 0.1 }, { from: { ...from, part: 'grass' } }) }, fx => fx.make[0]?.kind === 'tinder'],
+    ['bone', { bone: item(55, 'bone', { hardness: 3 }), hammer: item(56, 'stone', { hardness: 7, mass: 700 }) }, fx => fx.use.length === 1],
+    ['wash', { thing: item(57, 'stone', { germs: 0.6 }) }, fx => fx.changes.some(c => c.path === 'thing.props.germs' && c.to < 0.6)],
+  ];
+  for (const [id, b, ok] of cases) {
+    let fx = null;
+    try { fx = run(game(), CRAFTS[id], b); } catch (e) { fails.push(`${id}: ${e.message}`); continue; }
+    if (!ok(fx)) fails.push(`${id} didn't do what it says`);
+  }
+  const G = game({ here: { fire: true } }), stick = item(58, 'diggingstick', { hardness: 0.4, moisture: 0.3, hardened: 0 });
+  run(G, CRAFTS.harden, { stick, mode: 'careful' });
+  if (!(stick.props.hardness > 0.4 && stick.props.hardened === 1)) fails.push('hardening doesn\'t harden the point');
+  const B = game({ S: { site: { key: 's1', micro: 'claybank', known: new Set() } } }); run(B, CRAFTS.basin);
+  if (B.S.site.basin?.kind !== 'clay-lined pit') fails.push('no basin dug in a clay bank');
+  const e = edge(); let n = 0; while (e.props.sharpness >= 0.35 && n++ < 40) run(game(), CRAFTS.carve, { shoot: { ...shoot, props: { ...shoot.props, density: 0.9 } }, edge: e }, n);
+  if (!e.toldDull) fails.push('an edge carving hard wood never goes dull');
+}
+// the drill, the ember, handling, rest
+{
+  const board = { uid: 60, name: 'board', kind: 'board', props: { density: 0.3, resin: 0.1, moisture: 0.1, notch: 0.8, life: 1, socket: 0 }, from: { name: 'test' }, provenance: { name: 'test' } };
+  const spindle = { uid: 61, name: 'spindle', kind: 'spindle', props: { density: 0.3, moisture: 0.1, straightness: 0.95, length: 70 }, from: { name: 'test' } };
+  let embers = 0;
+  for (let i = 0; i < 40; i++) { const G = game({ S: { body: { ...game().S.body, skills: { knapping: 0.5, woodwork: 0.5, firecraft: 0.6 } } } }); const fx = run(G, DRILL_ATTEMPT, { board: structuredClone(board), spindle: structuredClone(spindle) }, i); if (fx.report.ember != null) embers++; }
+  const G = game(), b = structuredClone(board), sp = structuredClone(spindle); run(G, DRILL_ATTEMPT, { board: b, spindle: sp });
+  say.push(`drill: ${embers} embers in 40 goes for a fair hand on a good board; one go takes the board's life to ${b.props.life.toFixed(2)} and the spindle to ${sp.props.length} cm`);
+  if (!(b.props.life < 1 && sp.props.length < 70)) fails.push('drilling doesn\'t wear the board and spindle');
+  if (!embers) fails.push('no ember in 40 goes for a fair hand');
+  const raw = game({ S: { body: { ...game().S.body, hands: 0.9 } } });
+  if (DRILL_ATTEMPT.ready(viewOf(DRILL_ATTEMPT, raw.state({ board, spindle }))) === true) fails.push('drilling with raw palms isn\'t refused');
+  let fires = 0;
+  for (let i = 0; i < 40; i++) { const F = game(); const fx = run(F, EMBER, { ember: { props: { vigor: 0.8 } }, tinder: { uid: 62, props: { moisture: 0.05, fineness: 0.9 } }, wood: { uid: 63, props: {} } }, i); if (fx.report?.fire) { fires++; if (!(F.S.site.fireUntil > 10)) fails.push('a fire lit, but not burning'); } }
+  if (!fires) fails.push('a strong ember in fine dry tinder never lights a fire');
+  const H = game({ S: { inv: [{ uid: 70, props: { germs: 0.8 } }, { uid: 71, props: { germs: 0 } }] } });
+  run(H, HANDLE, { handled: [70, 71], kill: 0.05 });
+  if (!(H.S.inv[0].props.germs < 0.1 && H.S.body.germs !== 0.3)) fails.push('handling doesn\'t mix germs, or heat doesn\'t kill them');
+  const R = game({ S: { body: { ...game().S.body, fatigue: 0.8 } } }); run(R, REST, { hours: 2, dusk: false });
+  if (!(R.S.body.fatigue < 0.8)) fails.push('resting doesn\'t ease tiredness');
+}
+// a walking step, run again with other dice from where it began
+{
+  const L = generateLandscape(world), from = chooseSpawn(L, world.seed), rng = makeRng('acts/walk');
+  const trip = walk(L, from, { x: Math.min(120, from.x + 25), y: Math.max(5, from.y - 20) }, { rng, maxHours: 3 });
+  let likely = 0, forced = 0, surprisal = 0;
+  for (let i = 0; i < trip.steps.length; i++) {
+    const v0 = stepView(L, trip, i), counts = {};
+    for (let k = 0; k < 200; k++) { const fx = rehearse(WALK_STEP, v0, { act: makeRng(`acts/step/${i}/${k}`) }); const to = fx.report.to; counts[`${to.x},${to.y}`] = (counts[`${to.x},${to.y}`] ?? 0) + 1; }
+    const took = trip.path[trip.steps[i].at], p = (counts[`${took.x},${took.y}`] ?? 0) / 200;
+    if (Object.keys(counts).some(k => { const [x, y] = k.split(',').map(Number); return Math.max(Math.abs(x - trip.steps[i].p.x), Math.abs(y - trip.steps[i].p.y)) !== 1; })) fails.push(`walk step ${i}: an outcome that isn't a neighbouring cell`);
+    if (!p) fails.push(`walk step ${i}: the cell taken never comes up again from where the step began`);
+    if (p >= 0.5) likely++;
+    if (p >= 0.9) forced++;
+    surprisal += -Math.log2(Math.max(p, 1 / 200));
+  }
+  say.push(`walk: ${trip.steps.length} steps; the cell taken was the likelier one ${likely} times and near-forced (≥ 90%) ${forced} times; the walk's surprisal ${surprisal.toFixed(1)} bits`);
 }
 // the contract holds
 {

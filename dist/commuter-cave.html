@@ -3631,37 +3631,73 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     D.onLake = !!L.lake[idx2(ax, ay)];
     return D;
   }
+  function stepOnce(L, w, o, rng) {
+    w.drift += rng.normal(0, o.driftSd);
+    if (o.sensed)
+      w.drift *= 0.3;
+    const p = w.p, field = o.field, want = (bearing(p, o.aim) + w.drift) * Math.PI / 180;
+    let best = null, bestScore = Infinity;
+    for (const [dx, dy] of NB2) {
+      const nx = p.x + dx, ny = p.y + dy;
+      if (!inside(nx, ny) || blocks(L, idx2(nx, ny)))
+        continue;
+      const along = dx * Math.sin(want) - dy * Math.cos(want);
+      const len = Math.hypot(dx, dy), fd = field[idx2(nx, ny)] - field[idx2(p.x, p.y)], gain = Number.isFinite(fd) ? fd / len : -along / len;
+      const score = -0.5 * along / len + 0.5 * gain + 0.15 * rng.next() + 0.9 * (w.trod.get(idx2(nx, ny)) ?? 0);
+      if (score < bestScore) {
+        bestScore = score;
+        best = { x: nx, y: ny };
+      }
+    }
+    if (!best)
+      return { stuck: true, cells: [] };
+    w.hours += stepHours(L, p, best);
+    w.p = best;
+    const cells = [best];
+    w.trod.set(idx2(best.x, best.y), (w.trod.get(idx2(best.x, best.y)) ?? 0) + 1);
+    let sweep = null;
+    const swept = L.chan[idx2(best.x, best.y)] ? L.dyn?.cross(idx2(best.x, best.y)).swept ?? 0 : 0;
+    if (swept) {
+      let q = best;
+      for (let k = 0; k < swept; k++) {
+        const dn = L.down[idx2(q.x, q.y)];
+        if (dn < 0 || L.lake[dn])
+          break;
+        q = { x: dn % N, y: dn / N | 0 };
+        cells.push(q);
+        w.hours += 0.02;
+      }
+      w.p = q;
+      sweep = { from: best, to: { ...q } };
+    }
+    return { to: best, cells, sweep };
+  }
   function walk(L, from, target, { maxHours = 3, rng, resense = null, arrived = null, stopAtWater = false, driftSd = 2.5, toWater = false } = {}) {
-    let p = { ...from }, hours = 0, drift = 0;
-    const path = [p], crossings = [], sweeps = [];
+    const w = { p: { ...from }, drift: 0, trod: /* @__PURE__ */ new Map([[idx2(from.x, from.y), 1]]), hours: 0 };
+    const path = [w.p], crossings = [], sweeps = [], steps = [];
     let aim = { ...target };
-    const trod = /* @__PURE__ */ new Map([[idx2(p.x, p.y), 1]]);
     const shoreWeight = toWater ? 0.2 : 3;
-    let field = goalField(L, aim, p, 25, shoreWeight), fieldFor = `${Math.round(aim.x)},${Math.round(aim.y)}`;
-    for (let steps = 0; steps < 400 && hours < maxHours; steps++) {
+    let field = goalField(L, aim, w.p, 25, shoreWeight), fieldFor = `${Math.round(aim.x)},${Math.round(aim.y)}`;
+    for (let n = 0; n < 400 && w.hours < maxHours; n++) {
+      const p = w.p;
       if (Math.hypot(aim.x - p.x, aim.y - p.y) <= 1.5) {
-        const fresh = resense ? resense(p, true) : null;
-        if (fresh && Math.hypot(fresh.x - p.x, fresh.y - p.y) > 1.5) {
-          aim = fresh;
-          drift = 0;
+        const fresh2 = resense ? resense(p, true) : null;
+        if (fresh2 && Math.hypot(fresh2.x - p.x, fresh2.y - p.y) > 1.5) {
+          aim = fresh2;
+          w.drift = 0;
         } else {
-          const spot = fresh ?? aim;
+          const spot = fresh2 ?? aim;
           if ((spot.x !== p.x || spot.y !== p.y) && !blocks(L, idx2(spot.x, spot.y))) {
-            hours += stepHours(L, p, spot);
-            p = { x: spot.x, y: spot.y };
-            path.push(p);
+            w.hours += stepHours(L, p, spot);
+            w.p = { x: spot.x, y: spot.y };
+            path.push(w.p);
           }
           break;
         }
       }
-      drift += rng.normal(0, driftSd);
-      if (resense) {
-        const fresh = resense(p);
-        if (fresh) {
-          aim = fresh;
-          drift *= 0.3;
-        }
-      }
+      const fresh = resense ? resense(p) : null;
+      if (fresh)
+        aim = fresh;
       if (`${Math.round(aim.x)},${Math.round(aim.y)}` !== fieldFor) {
         field = goalField(L, aim, p, 25, shoreWeight);
         fieldFor = `${Math.round(aim.x)},${Math.round(aim.y)}`;
@@ -3669,49 +3705,23 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       const better = NB2.some(([dx, dy]) => inside(p.x + dx, p.y + dy) && field[idx2(p.x + dx, p.y + dy)] < field[idx2(p.x, p.y)] - (toWater ? 0.5 : 0.05));
       if (blocks(L, idx2(Math.round(aim.x), Math.round(aim.y))) && !better && (!toWater || NB2.some(([dx, dy]) => inside(p.x + dx, p.y + dy) && L.lake[idx2(p.x + dx, p.y + dy)])))
         break;
-      const want = (bearing(p, aim) + drift) * Math.PI / 180;
-      let best = null, bestScore = Infinity;
-      for (const [dx, dy] of NB2) {
-        const nx = p.x + dx, ny = p.y + dy;
-        if (!inside(nx, ny) || blocks(L, idx2(nx, ny)))
-          continue;
-        const along = dx * Math.sin(want) - dy * Math.cos(want);
-        const len = Math.hypot(dx, dy), fd = field[idx2(nx, ny)] - field[idx2(p.x, p.y)], gain = Number.isFinite(fd) ? fd / len : -along / len;
-        const score = -0.5 * along / len + 0.5 * gain + 0.15 * rng.next() + 0.9 * (trod.get(idx2(nx, ny)) ?? 0);
-        if (score < bestScore) {
-          bestScore = score;
-          best = { x: nx, y: ny };
-        }
-      }
-      if (!best)
+      steps.push({ p, drift: w.drift, aim: { ...aim }, sensed: !!fresh, at: path.length, hours: w.hours });
+      const r = stepOnce(L, w, { field, aim, sensed: !!fresh, driftSd }, rng);
+      if (r.stuck)
         break;
-      hours += stepHours(L, p, best);
-      p = best;
-      path.push(p);
-      trod.set(idx2(p.x, p.y), (trod.get(idx2(p.x, p.y)) ?? 0) + 1);
-      const swept = L.chan[idx2(p.x, p.y)] ? L.dyn?.cross(idx2(p.x, p.y)).swept ?? 0 : 0;
-      if (swept) {
-        const from2 = { ...p };
-        for (let k = 0; k < swept; k++) {
-          const d = L.down[idx2(p.x, p.y)];
-          if (d < 0 || L.lake[d])
-            break;
-          p = { x: d % N, y: d / N | 0 };
-          path.push(p);
-          hours += 0.02;
-        }
-        sweeps.push({ from: from2, to: { ...p } });
-      }
-      const ch = L.chan[idx2(p.x, p.y)];
-      if (ch && (!crossings.length || Math.hypot(crossings[crossings.length - 1].x - p.x, crossings[crossings.length - 1].y - p.y) > 3)) {
-        crossings.push({ ...p, size: ch });
-        if (stopAtWater && L.dyn?.cross(idx2(p.x, p.y)).how !== "dry")
+      path.push(...r.cells);
+      if (r.sweep)
+        sweeps.push(r.sweep);
+      const q = w.p, ch = L.chan[idx2(q.x, q.y)];
+      if (ch && (!crossings.length || Math.hypot(crossings[crossings.length - 1].x - q.x, crossings[crossings.length - 1].y - q.y) > 3)) {
+        crossings.push({ ...q, size: ch });
+        if (stopAtWater && L.dyn?.cross(idx2(q.x, q.y)).how !== "dry")
           break;
       }
-      if (arrived && arrived(p))
+      if (arrived && arrived(q))
         break;
     }
-    return { end: p, hours, path, crossings, sweeps };
+    return { end: w.p, hours: w.hours, path, crossings, sweeps, steps, driftSd, toWater };
   }
   function followStage(L, from, dir, { branch = null, maxHours = 0.25 } = {}) {
     let p = { ...from }, hours = 0;
@@ -4211,9 +4221,9 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     if (!size || L.lake[c])
       return null;
     const frozen = g.frozen && size < 3, dry2 = !frozen && g.flow < DRY[size];
-    const depth = dry2 ? 0 : DEPTH[size] * Math.pow(g.flow, 0.4);
+    const depth2 = dry2 ? 0 : DEPTH[size] * Math.pow(g.flow, 0.4);
     const speed = dry2 ? 0 : clamp(0.3 + 3.5 * L.slope[c], 0.2, 2.2) * SPEED[size] * Math.pow(g.flow, 0.25);
-    return { size, depth, speed, dry: dry2, frozen, flood: g.flow > 2.2 };
+    return { size, depth: depth2, speed, dry: dry2, frozen, flood: g.flow > 2.2 };
   }
   function crossingNow(L, g, c, crossing = null) {
     const w = waterAt(L, g, c);
@@ -5599,30 +5609,30 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   var candidatesFor = (slot, mats) => mats.filter((m) => matches(slot, m));
   function expandGoal(item2, world, maxDepth = 6) {
     const mats = world ? materialsOf(world) : [];
-    function expandItem(id, path, depth) {
+    function expandItem(id, path, depth2) {
       const producers = PROCESSES.filter((p) => p.makes.some((m) => m.item === id));
       const node = { type: "item", item: id, name: ITEMS[id]?.name ?? id, options: [] };
-      if (path.has(id) || depth > maxDepth) {
+      if (path.has(id) || depth2 > maxDepth) {
         node.truncated = true;
         return node;
       }
       const next = new Set(path).add(id);
       for (const p of producers)
-        node.options.push(expandProcess(p, next, depth + 1));
+        node.options.push(expandProcess(p, next, depth2 + 1));
       return node;
     }
-    function expandReq(req, path, depth) {
+    function expandReq(req, path, depth2) {
       if (req.any)
-        return { type: "any", options: req.any.map((r) => expandReq(r, path, depth)) };
+        return { type: "any", options: req.any.map((r) => expandReq(r, path, depth2)) };
       if (req.anyTool)
-        return { type: "any", options: req.anyTool.map((t) => expandItem(t, path, depth)) };
+        return { type: "any", options: req.anyTool.map((t) => expandItem(t, path, depth2)) };
       if (req.item)
-        return expandItem(req.item, path, depth);
+        return expandItem(req.item, path, depth2);
       const cands = candidatesFor(req, mats);
       return { type: "material", slot: req, candidates: cands, collectWith: [...new Set(cands.map((c) => c.collect).filter(Boolean))] };
     }
-    function expandProcess(p, path, depth) {
-      return { type: "process", id: p.id, name: p.name, needs: [...p.uses, ...p.tools].map((req) => expandReq(req, path, depth)) };
+    function expandProcess(p, path, depth2) {
+      return { type: "process", id: p.id, name: p.name, needs: [...p.uses, ...p.tools].map((req) => expandReq(req, path, depth2)) };
     }
     return expandItem(item2, /* @__PURE__ */ new Set(), 0);
   }
@@ -5684,20 +5694,45 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
 
   // src/act.js
   var isPlain = (x) => x !== null && typeof x === "object" && Object.getPrototypeOf(x) === Object.prototype;
-  function copy(x) {
+  function copyWith(x, memo) {
     if (x === null || typeof x !== "object")
       return x;
-    if (Array.isArray(x))
-      return x.map(copy);
-    if (x instanceof Set)
-      return new Set([...x].map(copy));
-    if (x instanceof Map)
-      return new Map([...x].map(([k, y]) => [k, copy(y)]));
-    const o = {};
+    if (memo.has(x))
+      return memo.get(x);
+    let c;
+    if (ArrayBuffer.isView(x)) {
+      c = x.slice();
+      memo.set(x, c);
+      return c;
+    }
+    if (Array.isArray(x)) {
+      c = [];
+      memo.set(x, c);
+      for (const y of x)
+        c.push(copyWith(y, memo));
+      return c;
+    }
+    if (x instanceof Set) {
+      c = /* @__PURE__ */ new Set();
+      memo.set(x, c);
+      for (const y of x)
+        c.add(copyWith(y, memo));
+      return c;
+    }
+    if (x instanceof Map) {
+      c = /* @__PURE__ */ new Map();
+      memo.set(x, c);
+      for (const [k, y] of x)
+        c.set(k, copyWith(y, memo));
+      return c;
+    }
+    c = {};
+    memo.set(x, c);
     for (const k of Object.keys(x))
-      o[k] = copy(x[k]);
-    return o;
+      c[k] = copyWith(x[k], memo);
+    return c;
   }
+  var ORIGINALS = /* @__PURE__ */ new WeakMap();
   var keysOf = (p) => p.split(".");
   var get = (o, ks) => ks.reduce((a, k) => a == null ? void 0 : a[k], o);
   function put(o, ks, value) {
@@ -5707,21 +5742,30 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     a[ks[ks.length - 1]] = value;
   }
   var valueOf = (x, v) => typeof x === "function" ? x(v) : x ?? 0;
-  var isConstant = (p) => p === "world" || p.startsWith("world.");
+  var CONSTANT = /* @__PURE__ */ new Set(["world", "L"]);
+  var isConstant = (p) => CONSTANT.has(p.split(".")[0]);
+  var bare = (p) => p.replace(/^\+/, "");
   function pathsOf(proc) {
-    const all = [.../* @__PURE__ */ new Set([...proc.reads ?? [], ...proc.writes ?? []])].sort((a, b) => a.length - b.length);
+    const all = [...new Set([...proc.reads ?? [], ...proc.writes ?? []].map(bare))].sort((a, b) => a.length - b.length);
     return all.filter((p, i) => !all.slice(0, i).some((q) => p.startsWith(`${q}.`)));
   }
-  var declared = (proc, path) => (proc.writes ?? []).some((w) => path === w || path.startsWith(`${w}.`) || w.startsWith(`${path}.`));
+  var appendOnly = (proc) => new Set([...proc.writes ?? []].filter((p) => p.startsWith("+")).map(bare));
+  var declared = (proc, path) => (proc.writes ?? []).map(bare).some((w) => path === w || path.startsWith(`${w}.`) || w.startsWith(`${path}.`));
   function viewOf(proc, state) {
-    const v = {};
+    const v = {}, adds = appendOnly(proc), memo = /* @__PURE__ */ new Map();
     for (const p of pathsOf(proc))
-      put(v, keysOf(p), isConstant(p) ? state.get(p) : copy(state.get(p)));
+      put(v, keysOf(p), adds.has(p) ? [] : isConstant(p) ? state.get(p) : copyWith(state.get(p), memo));
+    ORIGINALS.set(v, memo);
     return v;
   }
   function diff(a, b, path = "", out = []) {
     if (Object.is(a, b))
       return out;
+    if (ArrayBuffer.isView(a) && ArrayBuffer.isView(b)) {
+      if (a.length !== b.length || a.some((x, i) => x !== b[i]))
+        out.push({ path, from: a, to: b });
+      return out;
+    }
     if (a instanceof Set && b instanceof Set) {
       const added = [...b].filter((x) => !a.has(x)), removed = [...a].filter((x) => !b.has(x));
       if (added.length || removed.length)
@@ -5746,55 +5790,126 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     out.push({ path, from: a, to: b });
     return out;
   }
-  function guard(node, path, paths, id) {
+  function guard(node, path, paths, partial, id, live) {
+    const seen = /* @__PURE__ */ new Map();
+    const how = (k) => {
+      let h = seen.get(k);
+      if (h)
+        return h;
+      const full = path ? `${path}.${k}` : k;
+      h = !path && live?.has(k) ? "live" : paths.has(full) || isConstant(full) ? "own" : partial.has(full) ? "deeper" : "none";
+      seen.set(k, h);
+      return h;
+    };
     return new Proxy(node, {
       get(o, k) {
         if (typeof k === "symbol" || k === "toJSON")
           return o[k];
-        const full = path ? `${path}.${k}` : k;
-        if (paths.has(full) || isConstant(full))
+        const h = how(k);
+        if (h === "own")
           return o[k];
-        if ([...paths].some((p) => p.startsWith(`${full}.`)))
-          return o[k] && typeof o[k] === "object" ? guard(o[k], full, paths, id) : o[k];
-        throw new Error(`${id} read ${full} without declaring it`);
+        if (h === "live")
+          return live.get(k);
+        if (h === "deeper")
+          return o[k] && typeof o[k] === "object" ? guard(o[k], path ? `${path}.${k}` : k, paths, partial, id) : o[k];
+        throw new Error(`${id} read ${path ? `${path}.${k}` : k} without declaring it`);
+      },
+      set(o, k, x) {
+        if (typeof k !== "symbol" && how(k) === "live")
+          live.set(k, x);
+        else
+          o[k] = x;
+        return true;
       }
     });
   }
-  function rehearse(proc, v0, dice2) {
-    const v = {};
+  function rehearse(proc, v0, dice2, { live = null } = {}) {
+    const v = {}, memo = /* @__PURE__ */ new Map();
     for (const [k, x] of Object.entries(v0))
-      v[k] = k === "world" ? x : copy(x);
-    const out = proc.run(guard(v, "", new Set(pathsOf(proc)), proc.id), dice2) ?? {};
+      v[k] = isConstant(k) ? x : copyWith(x, memo);
+    const back = /* @__PURE__ */ new Map();
+    for (const [orig, c0] of ORIGINALS.get(v0) ?? [])
+      if (memo.has(c0))
+        back.set(memo.get(c0), orig);
+    const paths = pathsOf(proc), partial = new Set(paths.flatMap((p) => keysOf(p).slice(0, -1).map((_, i, ks) => ks.slice(0, i + 1).join("."))));
+    const out = proc.run(guard(v, "", new Set(paths), partial, proc.id, live), dice2) ?? {};
     const changes = diff(v0, v);
     const stray = changes.filter((c) => !declared(proc, c.path));
     if (stray.length)
       throw new Error(`${proc.id} changed ${stray.map((c) => c.path).join(", ")} without declaring it`);
     const say = (out.say ?? []).map((l) => Array.isArray(l) ? l : [l, "act"]);
-    return { id: proc.id, changes, make: out.make ?? [], use: out.use ?? [], say, report: out.report ?? null, after: v };
+    return { id: proc.id, changes, make: out.make ?? [], use: out.use ?? [], say, report: out.report ?? null, after: v, back, writes: (proc.writes ?? []).map(bare), adds: appendOnly(proc) };
   }
   function apply(fx, state) {
-    for (const c of fx.changes) {
-      if ("to" in c) {
-        state.set(c.path, copy(c.to));
+    const done = /* @__PURE__ */ new Map();
+    const own = (x) => {
+      if (x === null || typeof x !== "object")
+        return x;
+      if (done.has(x))
+        return done.get(x);
+      const r = fx.back.get(x);
+      if (ArrayBuffer.isView(x)) {
+        const t2 = r && r.length === x.length ? r : x.slice();
+        if (t2 === r)
+          t2.set(x);
+        done.set(x, t2);
+        return t2;
+      }
+      if (Array.isArray(x)) {
+        const t2 = r ?? [];
+        done.set(x, t2);
+        const items2 = x.map(own);
+        t2.length = 0;
+        t2.push(...items2);
+        return t2;
+      }
+      if (x instanceof Set) {
+        const t2 = r ?? /* @__PURE__ */ new Set();
+        done.set(x, t2);
+        const items2 = [...x].map(own);
+        t2.clear();
+        for (const y of items2)
+          t2.add(y);
+        return t2;
+      }
+      if (x instanceof Map) {
+        const t2 = r ?? /* @__PURE__ */ new Map();
+        done.set(x, t2);
+        const items2 = [...x].map(([k, y]) => [k, own(y)]);
+        t2.clear();
+        for (const [k, y] of items2)
+          t2.set(k, y);
+        return t2;
+      }
+      const t = r ?? {};
+      done.set(x, t);
+      const items = Object.keys(x).map((k) => [k, own(x[k])]);
+      for (const k of Object.keys(t))
+        if (!(k in x))
+          delete t[k];
+      for (const [k, y] of items)
+        t[k] = y;
+      return t;
+    };
+    const touched = (w) => fx.changes.some((c) => c.path === w || c.path.startsWith(`${w}.`) || w.startsWith(`${c.path}.`));
+    for (const w of fx.writes) {
+      if (!touched(w))
+        continue;
+      const x = get(fx.after, keysOf(w));
+      if (fx.adds.has(w)) {
+        const cur = state.get(w);
+        for (const y of x)
+          cur.push(own(y));
         continue;
       }
-      const cur = state.get(c.path);
-      if (cur instanceof Set) {
-        for (const x of c.added)
-          cur.add(x);
-        for (const x of c.removed)
-          cur.delete(x);
-      } else if (Array.isArray(cur))
-        cur.push(...copy(c.added));
-      else
-        state.set(c.path, copy(get(fx.after, keysOf(c.path))));
+      state.set(w, own(x));
     }
   }
   var hoursOf = (proc, v) => valueOf(proc.hours, v);
   var kcalOf = (proc, v) => valueOf(proc.kcal, v) || 150;
   var readyFor = (proc, v) => proc.ready ? proc.ready(v) : true;
-  function stateOver(namespaces, derived = {}) {
-    const root = (ns) => typeof namespaces[ns] === "function" ? namespaces[ns]() : namespaces[ns];
+  function stateOver(namespaces, derived = {}, base = null) {
+    const root = (ns) => ns in namespaces ? typeof namespaces[ns] === "function" ? namespaces[ns]() : namespaces[ns] : base?.[ns];
     return {
       get(path) {
         const [ns, ...ks] = keysOf(path);
@@ -5810,8 +5925,17 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         const [ns, ...ks] = keysOf(path);
         if (derived[ns])
           throw new Error(`${path} is worked out from other state; it can't be set`);
-        if (!ks.length)
-          throw new Error(`can't replace the whole of ${ns}`);
+        if (!ks.length) {
+          if (root(ns) === value)
+            return;
+          if (base && !(ns in namespaces))
+            base[ns] = value;
+          else if (typeof namespaces[ns] !== "function")
+            namespaces[ns] = value;
+          else
+            throw new Error(`can't replace the whole of ${ns}`);
+          return;
+        }
         put(root(ns), ks, value);
       }
     };
@@ -5957,12 +6081,12 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       out.push(item("bone splinter", { sharpness: clamp(0.6 + r.normal(0, 0.12)), hardness: 3, fracture: 0.3, mass: Math.round(r.uniform(4, 12)) }, bone.provenance));
     return { ...res, flakes: out };
   }
-  function lightFire(r, ch, ember2, tinder) {
+  function lightFire(r, ch, ember, tinder) {
     const res = attempt(
       r,
       ch,
       { skill: "firecraft", kSkill: 1.5, theta: -0.6, kEffort: 0.3, median: 0.15, learn: 0.05, handLoad: 0.3, kcal: 180 },
-      [[1, ROLES.tinder(tinder.props, ch.skills.firecraft)], [0.8, ember2.props.vigor]]
+      [[1, ROLES.tinder(tinder.props, ch.skills.firecraft)], [0.8, ember.props.vigor]]
     );
     return res;
   }
@@ -6310,6 +6434,288 @@ ${lines.join("\n")}`, "survey"]],
       return { make, use: rng.chance(0.25) ? [core] : [], say, report: { success: res.success, margin: res.margin, flakes: make.length } };
     }
   };
+  var dark = (v) => v.here.dark ? "Too dark to work. Time to sleep." : true;
+  var provOf = (it) => ({ name: it.from?.name ?? it.name, source: it.from?.id, site: it.from?.site });
+  function dulled(edge, say) {
+    if (edge.props.sharpness < 0.35 && !edge.toldDull) {
+      edge.toldDull = true;
+      say.push(`The ${edge.name} has gone dull.`);
+    }
+  }
+  var EDGE = (slot) => [`${slot}.props`, `${slot}.toldDull`];
+  var CRAFTS = {
+    notch: {
+      id: "notch",
+      name: "Notch a hearth board",
+      reads: ["mode", "wood", "edge.name", "here.dark"],
+      writes: [...SKILL_STATE, ...EDGE("edge")],
+      hours: (v) => v.mode === "careful" ? 1 : 0.4,
+      kcal: 160,
+      ready: dark,
+      run(v, d) {
+        const { wood, edge } = v, hours = v.mode === "careful" ? 1 : 0.4, say = [];
+        const res = notchHearth(d.act, v.body, { props: wood.props, provenance: provOf(wood) }, { props: edge.props, name: "flake" }, hours);
+        say.push(`${v.mode === "careful" ? "Took my time and" : "Quickly"} split and notched a hearth board from the ${wood.from.name} wood.`);
+        dulled(edge, say);
+        return { make: [{ name: `hearth board, ${wood.from.name}`, kind: "board", props: res.board.props, from: wood.from }], use: [wood], say, report: { notch: res.board.props.notch, margin: res.margin } };
+      }
+    },
+    refine: {
+      id: "refine",
+      name: "Touch up a notch",
+      reads: ["board.from", "edge.name", "here.dark"],
+      writes: [...SKILL_STATE, "board.props", "board.notes", ...EDGE("edge")],
+      hours: 0.6,
+      kcal: 150,
+      ready: dark,
+      run(v, d) {
+        const say = [], res = refineNotch(d.act, v.body, v.board, { props: v.edge.props });
+        delete v.board.notes["Inspect the notch"];
+        say.push(res.after > res.before ? "Worked the notch slowly; it\u2019s cleaner now." : "The edge slipped and tore the notch a little.");
+        dulled(v.edge, say);
+        return { say, report: { before: res.before, after: res.after } };
+      }
+    },
+    carve: {
+      id: "carve",
+      name: "Carve a spindle",
+      reads: ["shoot", "edge.name", "here.dark"],
+      writes: [...SKILL_STATE, ...EDGE("edge")],
+      hours: 0.5,
+      kcal: 160,
+      ready: dark,
+      run(v, d) {
+        const { shoot } = v, say = [], res = carveSpindle(d.act, v.body, { props: shoot.props, provenance: provOf(shoot) }, { props: v.edge.props });
+        say.push(`Carved a spindle from the ${shoot.from.name} ${shoot.kind === "shoot" && shoot.props.moisture > 0.3 ? "shoot. It\u2019s green; it will need to dry" : "shoot"}.`);
+        dulled(v.edge, say);
+        return { make: [{ name: `spindle, ${shoot.from.name}`, kind: "spindle", props: res.spindle.props, from: shoot.from }], use: [shoot], say };
+      }
+    },
+    trim: {
+      id: "trim",
+      name: "Trim a spindle from a stalk",
+      reads: ["stalk", "here.dark"],
+      writes: [],
+      hours: 0.15,
+      kcal: 130,
+      ready: dark,
+      run: (v) => ({ make: [{ name: `spindle, ${v.stalk.from.name}`, kind: "spindle", props: { ...v.stalk.props, length: 70 }, from: v.stalk.from }], use: [v.stalk], say: [`Snapped a ${v.stalk.from.name} stalk to length and rubbed it smooth: a spindle.`] })
+    },
+    // hardness of the point: wood density, plus a little for a clean shape; green wood is softer until dried
+    digstick: {
+      id: "digstick",
+      name: "Make a digging stick",
+      reads: ["stick", "tool.kind", "tool.name", "body.focus", "here.dark"],
+      writes: [...EDGE("tool"), "milestones.stick"],
+      hours: (v) => v.tool.kind === "edge" ? 0.5 : 1,
+      kcal: 200,
+      ready: dark,
+      // grinding a point on rough stone is slow
+      run(v, d) {
+        const { stick, tool } = v, cut = tool.kind === "edge", say = [];
+        const dens = stick.props.density ?? 0.45;
+        const finish = clamp((cut ? 0.6 + 0.4 * (tool.props.sharpness ?? 0.5) : 0.5) * (0.8 + 0.4 * v.body.focus) + d.act.normal(0, 0.08));
+        const green = (stick.props.moisture ?? 0.15) > 0.3;
+        const hardness = clamp(dens * (0.75 + 0.25 * finish) - (green ? 0.08 : 0), 0.1, 0.95);
+        if (cut) {
+          tool.props.sharpness = Math.max(0, tool.props.sharpness - 0.04);
+          dulled(tool, say);
+        }
+        say.unshift(`Shaped a digging stick from the ${stick.from.name} ${stick.kind === "shoot" ? "shoot" : "wood"}, ${cut ? "whittling" : "grinding"} the end to a chisel point on ${cut ? "the edge" : "a rough stone"}.`);
+        if (!v.milestones.stick) {
+          v.milestones.stick = true;
+          say.push(["A digging stick.", "milestone"]);
+        }
+        return { make: [{ name: `digging stick, ${stick.from.name}`, kind: "diggingstick", props: { density: dens, moisture: stick.props.moisture, hardness, finish, hardened: 0 }, from: stick.from }], use: [stick], say };
+      }
+    },
+    harden: {
+      id: "harden",
+      name: "Fire-harden the digging stick",
+      reads: ["mode", "here.ambient", "here.fire", "here.dark"],
+      writes: ["stick.props"],
+      hours: (v) => v.mode === "careful" ? 0.75 : 0.3,
+      kcal: 140,
+      ready: (v) => v.here.dark ? "Too dark to work. Time to sleep." : v.here.fire ? true : "There\u2019s no fire here.",
+      run(v, d) {
+        const careful = v.mode === "careful", p = v.stick.props, room = 1 - p.hardness;
+        const charred = !careful && d.act.chance(0.35);
+        p.hardness = clamp(p.hardness + room * (careful ? 0.3 : 0.18) * (p.hardened ? 0.4 : 1) - (charred ? 0.08 : 0));
+        p.moisture = Math.min(p.moisture ?? 0.2, v.here.ambient + 0.02);
+        p.hardened++;
+        return { say: [charred ? "Hurried the stick over the fire and charred the tip; scraped off the black. Harder underneath, but the point is thinner." : `Turned the point over the coals until it browned${careful ? ", slowly, a little at a time" : ""}. It rings harder when tapped.`], report: { charred } };
+      }
+    },
+    // a hollow in rock, or a pit lined with clay, that holds water for hot-stone cooking
+    basin: {
+      id: "basin",
+      name: "Make a cooking basin",
+      reads: ["site.micro", "here.dark"],
+      writes: ["site.basin"],
+      hours: (v) => v.site.micro === "claybank" ? 1.5 : 0.5,
+      kcal: (v) => v.site.micro === "claybank" ? 320 : 180,
+      ready: dark,
+      run(v, d) {
+        if (v.site.micro === "claybank") {
+          v.site.basin = { kind: "clay-lined pit" };
+          return { say: ["Dug a pit beside the water and lined it with clay, smoothed wet. It holds water."] };
+        }
+        if (d.act.chance(0.6)) {
+          v.site.basin = { kind: "rock hollow" };
+          return { say: ["Found a hollow in the rock that holds water: good enough to boil in with hot stones."] };
+        }
+        return { say: ["Looked for a rock hollow that would hold water; nothing that doesn\u2019t drain."] };
+      }
+    },
+    // rinsing helps, but leaves the water's own germs behind: hands and thing are rinsed, not mixed
+    wash: {
+      id: "wash",
+      name: "Wash something",
+      rinse: true,
+      reads: ["thing.name", "here.water", "here.dark"],
+      writes: ["thing.props.germs", "body.germs"],
+      hours: 0.1,
+      kcal: 120,
+      ready: (v) => !v.here.water ? "There\u2019s no water here." : dark(v),
+      run(v) {
+        const w = v.here.water.pathogen;
+        v.thing.props.germs = r3(v.thing.props.germs * 0.3 + 0.4 * w);
+        v.body.germs = v.body.germs * 0.5 + 0.3 * w;
+        return { say: [`Washed the ${v.thing.name} in the water.`] };
+      }
+    },
+    scorch: {
+      id: "scorch",
+      name: "Scorch a tool clean",
+      reads: ["thing.name", "here.fire", "here.dark"],
+      writes: [],
+      hours: 0.1,
+      kcal: 120,
+      ready: (v) => v.here.fire ? dark(v) : "There\u2019s no fire here.",
+      run: (v) => ({ say: [`Passed the ${v.thing.name} through the flames.`] })
+    },
+    tinder: {
+      id: "tinder",
+      name: "Make a tinder bundle",
+      reads: ["mat", "here.dark"],
+      writes: SKILL_STATE,
+      hours: 0.2,
+      kcal: 140,
+      ready: dark,
+      run(v, d) {
+        const res = makeTinder(d.act, v.body, { props: v.mat.props, provenance: provOf(v.mat) });
+        return { make: [{ name: `tinder bundle, ${v.mat.from.name}`, kind: "tinder", props: res.tinder.props, from: v.mat.from }], use: [v.mat], say: [`Shredded the ${v.mat.from.name} ${v.mat.from.part} into a tinder nest.`], report: { fineness: res.tinder.props.fineness } };
+      }
+    },
+    bone: {
+      id: "bone",
+      name: "Smash a bone for splinters",
+      reads: ["bone", "hammer.props", "here.dark"],
+      writes: [...SKILL_STATE, "milestones.edge"],
+      hours: 0.2,
+      kcal: 160,
+      ready: dark,
+      run(v, d) {
+        const res = splinterBone(d.act, v.body, v.bone, { props: v.hammer.props });
+        const make = res.flakes.map((f) => ({ name: "bone splinter", kind: "edge", props: f.props, from: v.bone.from }));
+        const say = [make.length ? `Cracked the bone: ${make.length} sharp splinter${make.length > 1 ? "s" : ""}.` : "The bone shattered into useless bits."];
+        if (make.length && !v.milestones.edge) {
+          v.milestones.edge = true;
+          say.push(["My first cutting edge.", "milestone"]);
+        }
+        return { make, use: [v.bone], say, report: { splinters: make.length } };
+      }
+    }
+  };
+  var DRILL_LINES = [
+    [(r) => r.success, "smoke thickened and a mound of dark dust began to glow"],
+    [(r) => r.margin > -0.6, "thick smoke and dark dust, but no glow"],
+    [(r) => r.margin > -1.6, "some smoke; the dust stayed coarse and pale"],
+    [() => true, "barely warm; the spindle just polished the socket"]
+  ];
+  var DRILL_ATTEMPT = {
+    id: "drill",
+    name: "Drill for an ember",
+    reads: ["board", "spindle", "here.dark"],
+    writes: [...SKILL_STATE, "board.props", "spindle.props"],
+    hours: 0.25,
+    kcal: 400,
+    ready(v) {
+      if (v.body.hands > 0.85)
+        return "my palms are raw; I have to stop";
+      if (v.body.fatigue > 0.88)
+        return "too tired to keep going";
+      if (v.here.dark)
+        return "too dark";
+      return true;
+    },
+    run(v, d) {
+      const res = handDrill(d.act, v.body, v.board, v.spindle), use = [];
+      if (v.board.props.life <= 0.05)
+        use.push(v.board);
+      if (v.spindle.props.length < 40)
+        use.push(v.spindle);
+      return { use, report: { success: res.success, margin: res.margin, line: DRILL_LINES.find(([f]) => f(res))[1], ember: res.ember ? res.ember.props.vigor : null, burnedThrough: v.board.props.life <= 0.05, wornShort: v.spindle.props.length < 40 } };
+    }
+  };
+  var EMBER = {
+    id: "ember",
+    name: "Light a fire from an ember",
+    reads: ["ember", "tinder", "wood", "clock"],
+    writes: [...SKILL_STATE, "site.fireUntil", "milestones.ember", "milestones.fire"],
+    hours: (v) => v.tinder && v.wood ? 0.15 : 0,
+    kcal: 180,
+    run(v, d) {
+      const say = [];
+      if (!v.milestones.ember) {
+        v.milestones.ember = true;
+        say.push(["An ember!", "milestone"]);
+      }
+      if (!v.tinder)
+        return { say: [...say, ["An ember, but no tinder bundle ready. It faded in the notch.", "warn"]] };
+      if (!v.wood)
+        return { say: [...say, ["An ember, but no wood to feed a flame. It faded.", "warn"]] };
+      const res = lightFire(d.act, v.body, v.ember, v.tinder), use = [v.tinder];
+      if (!res.success)
+        return { use, say: [...say, ["Tipped the ember into the tinder and blew, but it smothered and died.", "warn"]], report: { fire: false } };
+      use.push(v.wood);
+      v.site.fireUntil = v.clock.now + 3;
+      say.push(["Tipped the ember into the tinder and blew. Smoke, then a flicker, then flame. Fire.", "act"]);
+      if (!v.milestones.fire) {
+        v.milestones.fire = true;
+        say.push([`Fire, on day ${v.clock.day}.`, "milestone"]);
+      }
+      return { use, say, report: { fire: true } };
+    }
+  };
+  var HANDLE = {
+    id: "handle",
+    name: "Handling",
+    reads: ["handled", "kill"],
+    writes: ["inv", "body.germs"],
+    run(v) {
+      const xs = v.inv.filter((i) => v.handled.includes(i.uid));
+      mix(xs, v.body, 0.4);
+      if (v.kill != null)
+        for (const i of xs)
+          i.props.germs = r3(i.props.germs * v.kill);
+    }
+  };
+  var REST = {
+    id: "rest",
+    name: "Rest",
+    reads: ["hours", "dusk"],
+    writes: ["body.fatigue", "body.hands", "body.focus"],
+    hours: (v) => v.hours,
+    kcal: 90,
+    run(v) {
+      const b = v.body, h = v.hours;
+      b.fatigue *= Math.pow(0.15, h / 9);
+      b.hands *= Math.pow(0.55, h / 12);
+      b.focus = clamp(b.focus + 0.12 * h);
+      return { say: [v.dusk ? "Rested in the shade until dusk." : `Rested for ${h === 1 ? "an hour" : `${h} hours`}.`] };
+    }
+  };
   var PREP_WORDS = { pound: "Pounded", grind: "Ground", chop: "Chopped up", roast: "Roasted", leach: "Left", soak: "Soaked", dryfood: "Dried", stoneboil: "Stone-boiled" };
   function PREPARE(id) {
     return {
@@ -6613,7 +7019,7 @@ ${lines.join("\n")}`, "survey"]],
     const k = skyNow();
     return clamp(S.ambient + ({ rain: 0.15, storm: 0.25, fog: 0.12, snow: 0.08, blizzard: 0.12 }[k.weather] ?? (k.weather === "clear" && k.sunAlt > 20 ? -0.03 : 0)), 0.03, 0.6);
   };
-  var site = () => S.sites[S.here];
+  var site = () => S.sites[S.at];
   var entity = (id) => [...S.world.stones, ...S.world.plants, ...S.world.animals].find((e) => e.id === id);
   var fireHere = () => (site().fireUntil ?? -1) > now();
   function log(text, kind = "act") {
@@ -6660,7 +7066,7 @@ ${lines.join("\n")}`, "survey"]],
       t: 6.5,
       showProps: false,
       sites: [],
-      here: 0,
+      at: 0,
       inv: [],
       log: [],
       uid: 1,
@@ -6687,7 +7093,7 @@ ${lines.join("\n")}`, "survey"]],
     }
     const first = newSite(checked2.spawn.x, checked2.spawn.y);
     first.name = "where I woke";
-    S.here = 0;
+    S.at = 0;
     look(first, 0.5);
     markSeen(first.x, first.y, 20, { eye: 1.7 });
     noteSeenFeatures();
@@ -7093,8 +7499,8 @@ ${lines.join("\n")}`, "survey"]],
     const key = `${from.x},${from.y}/${S.seenVer ?? 0}/${S.day}`;
     if (S.routeMemo?.key === key)
       return S.routeMemo.D;
-    const esc2 = cliffIndex(), known = (c) => (S.seenLand?.[c] ?? 0) >= SEEN;
-    const blocked = (c) => known(c) && !!S.L.lake[c];
+    const esc2 = cliffIndex(), seen = S.seenLand, land = S.L, lake = land.lake, known = (c) => (seen?.[c] ?? 0) >= SEEN;
+    const blocked = (c) => known(c) && !!lake[c];
     const D = new Float64Array(N * N).fill(Infinity), heap = [], start = cellOf(from.x, from.y);
     const push = (c, d) => {
       heap.push([d, c]);
@@ -7138,7 +7544,7 @@ ${lines.join("\n")}`, "survey"]],
         const nx = x + dx, ny = y + dy;
         if (nx < 0 || ny < 0 || nx >= N || ny >= N)
           continue;
-        const n = cellOf(nx, ny), nd = d + (blocked(n) ? 0 : stepHours(S.L, { x, y }, { x: nx, y: ny }) * (S.L.lake[n] ? 1.6 : known(n) && esc2[n] >= 0 ? CLIFF_COST : 1));
+        const n = cellOf(nx, ny), nd = d + (blocked(n) ? 0 : stepHours(land, { x, y }, { x: nx, y: ny }) * (lake[n] ? 1.6 : known(n) && esc2[n] >= 0 ? CLIFF_COST : 1));
         if (nd < D[n]) {
           D[n] = nd;
           push(n, nd);
@@ -7347,7 +7753,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       addFix({ x, y }, "stood", S.travelHint);
     noteSeenFeatures();
     noteTrail(S.mem, s.key);
-    S.here = S.sites.indexOf(s);
+    S.at = S.sites.indexOf(s);
     if (how)
       log(how);
     {
@@ -7924,24 +8330,60 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     seeing: () => senseLimits(true) || null
   };
   var stateFor = (binding = {}) => stateOver({
-    body: S.body,
-    site: site(),
+    site,
     sky: skyNow,
     ground: groundNow,
-    world: S.world,
-    mem: S.mem,
-    lore: S.lore,
-    mind: S.mind,
-    milestones: S.milestones,
-    inv: S.inv,
     clock: () => ({ day: S.day, t: S.t, now: now() }),
     ...binding
-  }, { here: HERE });
+  }, { here: HERE }, S);
   var dice = () => ({ act: S.rng, place: (key) => makeRng(`${S.world.seed}/${key}`) });
-  function perform(proc, binding = {}, { quiet = false } = {}) {
+  var LIVE = /* @__PURE__ */ new Set([
+    "world",
+    "L",
+    "seed",
+    "preset",
+    "mats",
+    "ambient",
+    "_sky",
+    "_smells",
+    "_smellDay",
+    "landMemo",
+    "routeMemo",
+    "pieceMemo",
+    "linkMemo",
+    "lakeMemo",
+    "segMemo",
+    "seenVer",
+    "streamVer",
+    "namedVer",
+    "mapRoutes",
+    "mapView",
+    "mapPin",
+    "mapLand",
+    "showProps",
+    "record",
+    "lastTag",
+    "lastAct",
+    "goal",
+    "revealed"
+  ]);
+  var MEMOS = /* @__PURE__ */ new Set(["treeMemo"]);
+  var hosted = (fn) => Object.assign((v, d) => {
+    const real = S;
+    S = v;
+    try {
+      return fn(v, d) ?? {};
+    } finally {
+      S = real;
+    }
+  }, { hosted: true });
+  var depth = 0;
+  function perform(proc, binding = {}, { quiet = false, refusal = false } = {}) {
     let v = viewOf(proc, stateFor(binding));
     const ok = readyFor(proc, v);
     if (ok !== true) {
+      if (refusal)
+        return { refused: ok };
       log(ok, "warn");
       return null;
     }
@@ -7950,7 +8392,24 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       pass(hours, kcalOf(proc, v));
       v = viewOf(proc, stateFor(binding));
     }
-    const fx = rehearse(proc, v, dice());
+    const real = S, d = dice(), memo = {};
+    const live = { has: (k) => k === "rng" || LIVE.has(k) || MEMOS.has(k), get: (k) => k === "rng" ? d.act : MEMOS.has(k) ? memo[k] : real[k], set: (k, x) => {
+      if (MEMOS.has(k))
+        memo[k] = x;
+      else
+        real[k] = x;
+    } };
+    depth++;
+    let fx;
+    try {
+      fx = rehearse(proc, v, d, { live });
+    } catch (e) {
+      if (/without declaring/.test(e.message) && !depth)
+        console.error(`contract: ${e.message}`);
+      throw e;
+    } finally {
+      depth--;
+    }
     apply(fx, stateFor(binding));
     for (const it of fx.use)
       remove(S.inv.find((i) => i.uid === it.uid));
@@ -7958,10 +8417,117 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     if (!quiet)
       for (const [text, kind] of fx.say)
         log(text, kind);
-    if (!quiet && !TICKS.includes(proc))
+    if (!quiet && !depth && !TICKS.includes(proc))
       S.lastAct = { id: proc.id, binding: Object.keys(binding), view: v, fx };
     return fx;
   }
+  var TIME = ["day", "t", "body", "inv", "sites", "at", "mind", "lore", "collapsed", "uid", "milestones", "+log"];
+  var KNOW = ["mem", "sites", "at"];
+  var MAP = ["suspects", "streams", "seenLand", "waterNames", "segNames", "cliffNames", "walked", "travelHint", "trod", "crossingsKnown", "streamGaps", "crossedWater", "landNamed", "recentNotice", "fruitNoted", "looking"];
+  var foggy = (v) => v.body.focus < 0.25 ? "Too foggy to think it through. I need rest, water or food first." : true;
+  var GAME = {
+    poke: { id: "poke", name: "Poke around", reads: ["day", "t"], writes: ["body.germs", ...KNOW, "inv", "+log"], hours: 0.5, kcal: 230, run: hosted(() => pokeAround(site())) },
+    scan: {
+      id: "scan",
+      name: "Scan",
+      reads: ["day", "t", "inv"],
+      writes: [...KNOW, ...MAP, "body.focus", "+log"],
+      hours: 0.5,
+      kcal: 120,
+      run: hosted(() => {
+        S.body.focus = clamp(S.body.focus - 0.04);
+        sense(site(), false, { scan: true });
+      })
+    },
+    lookout: {
+      id: "lookout",
+      name: "Look out from up here",
+      reads: ["day", "t", "inv"],
+      writes: [...KNOW, ...MAP, "milestones.lookout", "+log"],
+      hours: 0.5,
+      kcal: 200,
+      run: hosted(() => {
+        const s = site();
+        sense(s, true);
+        markSeen(s.x, s.y, 50, { eye: lookoutEye(S.L, s) });
+        noteSeenFeatures();
+        if (!S.milestones.lookout) {
+          S.milestones.lookout = true;
+          log("A view at last.", "milestone");
+        }
+      })
+    },
+    look: { id: "look", name: "Look for something", reads: ["spec", "day", "t", "lore"], writes: [...KNOW, ...MAP, "body", "inv", "uid", "milestones", "+log"], hours: 0.5, kcal: 180, run: hosted((v) => startLooking(v.spec)) },
+    stopLooking: { id: "stop-looking", name: "Stop looking", reads: [], writes: ["looking", "+log"], run: hosted(() => {
+      log(`Stopped looking for ${S.looking.label}.`, "thought");
+      S.looking = null;
+    }) },
+    inspect: {
+      id: "inspect",
+      name: "Inspect and assess",
+      reads: ["entity", "lore", "inv", "day", "t"],
+      writes: [...KNOW, "body.focus", "+log"],
+      hours: (v) => 0.25 + (v.body.focus >= 0.25 ? 0.15 : 0),
+      kcal: 130,
+      run: hosted((v) => {
+        const e = entity(v.entity);
+        inspect(e);
+        assess(e);
+      })
+    },
+    test: {
+      id: "test",
+      name: "Test something",
+      reads: ["thing.uid", "name"],
+      writes: ["inv", "+log"],
+      hours: 0.1,
+      kcal: 120,
+      run: hosted((v) => {
+        const it = byUid(v.thing.uid), T2 = testsFor(it).find(([k]) => k === v.name);
+        it.notes[v.name] = T2[1]();
+        log(`${v.name} on the ${it.name}: ${it.notes[v.name]}.`);
+      })
+    },
+    gather: {
+      id: "gather",
+      name: "Collect",
+      reads: ["index", "option", "day", "t", "lore"],
+      writes: [...KNOW, "inv", "uid", "body", "+log"],
+      hours: (v) => v.option.hours,
+      kcal: (v) => v.option.kcal,
+      run: hosted((v) => {
+        const g = gatherOptions(site())[v.index];
+        site().gathered = true;
+        const it = g.fn();
+        touch([it], 0.5);
+        log(`Gathered ${it.name}.`);
+      })
+    },
+    drop: { id: "drop", name: "Leave something behind", reads: ["thing.uid"], writes: ["inv", "+log"], run: hosted((v) => {
+      const it = byUid(v.thing.uid);
+      remove(it);
+      log(`Left the ${it.name} behind.`);
+    }) },
+    rename: {
+      id: "rename",
+      name: "Name a place",
+      reads: ["place", "name", "origin"],
+      writes: ["sites", "at", "+log"],
+      run: hosted((v) => {
+        const t = S.sites.find((x) => x.key === v.place);
+        log(v.origin ? `Decided to call ${t === site() ? "this place" : "the place I got that from"} ${v.name}. It goes on my map.` : `Decided to call this place ${v.name}.`);
+        t.name = v.name;
+        t.renamed = true;
+      })
+    },
+    think: { id: "think", name: "Think it through", reads: ["path"], writes: ["body.focus", "+log"], hours: 0.1, kcal: 110, ready: foggy, run: hosted((v) => think(v.path)) },
+    sleep: { id: "sleep", name: "Sleep till morning", reads: ["forced", "ambientNow"], writes: TIME, run: hosted((v) => sleepNow(v.forced)) },
+    hike: { id: "hike", name: "Walk", reads: ["key"], writes: [...TIME, ...KNOW, ...MAP], run: hosted((v) => hikeNow(v.key)) }
+  };
+  for (const p of Object.values(GAME))
+    p.reads = [.../* @__PURE__ */ new Set([...p.reads, "day", "t"])];
+  var sleep = (forced = false) => perform(GAME.sleep, { forced, ambientNow: ambient() });
+  var hike = (key) => perform(GAME.hike, { key });
   function pass(hours, kcal = 150) {
     const steps = Math.max(1, Math.ceil(hours / 0.5));
     const dt = hours / steps;
@@ -7997,7 +8563,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const d = deciduousShare(S.world);
     return naturalShelter(S.L.veg[cellOf(s.x, s.y)], 1 - d + d * g.leaf, s.micro);
   }
-  function sleep(forced = false) {
+  function sleepNow(forced = false) {
     const s = site(), c = cellOf(s.x, s.y);
     const banked = fireHere() && takeWood(2) === 2;
     const wakeDay = S.t >= dawnAt(S.world, S.day) ? S.day + 1 : S.day, wake = clamp(dawnAt(S.world, wakeDay) + 0.25, 4, 8.5);
@@ -8143,7 +8709,6 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     spindle: 0.03
   };
   var touch = (items, k = 0.4, hands = true) => mix(items, S.body, k, hands);
-  var waterGerms = () => waterSource(site()).hidden?.pathogen ?? 0.25;
   var waterTempC = (still) => {
     const e = S.world.environment.meanTempC;
     return site().micro === "spring" ? e : still ? e + 3 : Math.max(2, e - 1);
@@ -8426,26 +8991,20 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       return [...list].sort((a, b) => b.props.life - a.props.life)[0];
     return list[0];
   }
+  var KILL = { roast: 0.05, stoneboil: 0.01, harden: 0.2, scorch: 0.05 };
   function craft(id, mode) {
-    const r = S.rng, ch = S.body;
     const R2 = RECIPES.find((x) => x.id === id);
     const pickd = Object.fromEntries(R2.slots.map(([k, , list]) => [k, pickSlot(id, k, list())]));
-    const prov = (it) => ({ name: it.from?.name ?? it.name, source: it.from?.id, site: it.from?.site });
-    const asEdge = (it) => ({ props: it.props, name: "flake" });
     if (isNight())
       return log("Too dark to work. Time to sleep.", "warn");
     const uid0 = S.uid;
-    if (craftSwitch(id, mode, r, ch, R2, pickd, prov, asEdge) === "rinsed")
+    const fx = craftSwitch(id, mode, pickd);
+    if (!fx || CRAFTS[id]?.rinse)
       return;
-    touch([...Object.values(pickd).filter((i) => i && S.inv.includes(i)), ...S.inv.filter((i) => i.uid >= uid0)], 0.4);
-    const kill = { roast: 0.05, stoneboil: 0.01, harden: 0.2, scorch: 0.05 }[id];
-    if (kill) {
-      for (const i of [...Object.values(pickd), ...S.inv.filter((x) => x.uid >= uid0)])
-        if (i && S.inv.includes(i))
-          i.props.germs = Math.round(i.props.germs * kill * 1e3) / 1e3;
-    }
+    const handled = [...Object.values(pickd).filter((i) => i && S.inv.includes(i)), ...S.inv.filter((i) => i.uid >= uid0)].map((i) => i.uid);
+    perform(HANDLE, { handled, kill: KILL[id] ?? null }, { quiet: true });
   }
-  function craftSwitch(id, mode, r, ch, R2, pickd, prov, asEdge) {
+  function craftSwitch(id, mode, pickd) {
     switch (id) {
       case "knap": {
         let { core, hammer } = pickd;
@@ -8457,81 +9016,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
           log(`Can\u2019t strike a stone with itself; used the ${other.from.name} stone as the hammer.`);
         }
         const slab = ofKind("slab")[0];
-        perform(KNAP, { core, hammer, anvil: { props: { mass: slab ? 6e3 : 1500 }, slab: !!slab } });
-        break;
-      }
-      case "notch": {
-        const { wood, edge } = pickd;
-        const hours = mode === "careful" ? 1 : 0.4;
-        const res = notchHearth(r, ch, { props: wood.props, provenance: prov(wood) }, asEdge(edge), hours);
-        pass(hours, 160);
-        remove(wood);
-        addItem(`hearth board, ${wood.from.name}`, "board", res.board.props, wood.from);
-        log(`${mode === "careful" ? "Took my time and" : "Quickly"} split and notched a hearth board from the ${wood.from.name} wood.`);
-        dullCheck(edge);
-        break;
-      }
-      case "refine": {
-        const { board, edge } = pickd;
-        const res = refineNotch(r, ch, board, asEdge(edge));
-        pass(0.6, 150);
-        delete board.notes["Inspect the notch"];
-        log(res.after > res.before ? "Worked the notch slowly; it\u2019s cleaner now." : "The edge slipped and tore the notch a little.");
-        dullCheck(edge);
-        break;
-      }
-      case "carve": {
-        const { shoot, edge } = pickd;
-        const res = carveSpindle(r, ch, { props: shoot.props, provenance: prov(shoot) }, asEdge(edge));
-        pass(0.5, 160);
-        remove(shoot);
-        addItem(`spindle, ${shoot.from.name}`, "spindle", res.spindle.props, shoot.from);
-        log(`Carved a spindle from the ${shoot.from.name} ${shoot.kind === "shoot" && shoot.props.moisture > 0.3 ? "shoot. It\u2019s green; it will need to dry" : "shoot"}.`);
-        dullCheck(edge);
-        break;
-      }
-      case "trim": {
-        const { stalk } = pickd;
-        pass(0.15, 130);
-        remove(stalk);
-        addItem(`spindle, ${stalk.from.name}`, "spindle", { ...stalk.props, length: 70 }, stalk.from);
-        log(`Snapped a ${stalk.from.name} stalk to length and rubbed it smooth: a spindle.`);
-        break;
-      }
-      case "digstick": {
-        const { stick, tool } = pickd;
-        const cut = tool.kind === "edge";
-        const hours = cut ? 0.5 : 1;
-        pass(hours, 200);
-        const d = stick.props.density ?? 0.45;
-        const finish = clamp((cut ? 0.6 + 0.4 * (tool.props.sharpness ?? 0.5) : 0.5) * (0.8 + 0.4 * ch.focus) + S.rng.normal(0, 0.08));
-        const green = (stick.props.moisture ?? 0.15) > 0.3;
-        const hardness = clamp(d * (0.75 + 0.25 * finish) - (green ? 0.08 : 0), 0.1, 0.95);
-        remove(stick);
-        addItem(`digging stick, ${stick.from.name}`, "diggingstick", { density: d, moisture: stick.props.moisture, hardness, finish, hardened: 0 }, stick.from);
-        if (cut) {
-          tool.props.sharpness = Math.max(0, tool.props.sharpness - 0.04);
-          dullCheck(tool);
-        }
-        log(`Shaped a digging stick from the ${stick.from.name} ${stick.kind === "shoot" ? "shoot" : "wood"}, ${cut ? "whittling" : "grinding"} the end to a chisel point on ${cut ? "the edge" : "a rough stone"}.`);
-        if (!S.milestones.stick) {
-          S.milestones.stick = true;
-          log("A digging stick.", "milestone");
-        }
-        break;
-      }
-      case "harden": {
-        const { stick } = pickd;
-        const careful = mode === "careful";
-        pass(careful ? 0.75 : 0.3, 140);
-        const p = stick.props;
-        const room = 1 - p.hardness;
-        const charred = !careful && S.rng.chance(0.35);
-        p.hardness = clamp(p.hardness + room * (careful ? 0.3 : 0.18) * (p.hardened ? 0.4 : 1) - (charred ? 0.08 : 0));
-        p.moisture = Math.min(p.moisture ?? 0.2, ambient() + 0.02);
-        p.hardened++;
-        log(charred ? "Hurried the stick over the fire and charred the tip; scraped off the black. Harder underneath, but the point is thinner." : `Turned the point over the coals until it browned${careful ? ", slowly, a little at a time" : ""}. It rings harder when tapped.`);
-        break;
+        return perform(KNAP, { core, hammer, anvil: { props: { mass: slab ? 6e3 : 1500 }, slab: !!slab } });
       }
       case "pound":
       case "grind":
@@ -8541,77 +9026,13 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       case "soak":
       case "dryfood":
       case "stoneboil":
-        perform(PREPARE(id), { food: pickd.food, mode, stone: pickd.stone, edge: pickd.edge, stones: ofKind("stone") });
-        break;
-      case "basin": {
-        const s = site();
-        if (s.micro === "claybank") {
-          pass(1.5, 320);
-          s.basin = { kind: "clay-lined pit" };
-          log("Dug a pit beside the water and lined it with clay, smoothed wet. It holds water.");
-        } else {
-          pass(0.5, 180);
-          if (S.rng.chance(0.6)) {
-            s.basin = { kind: "rock hollow" };
-            log("Found a hollow in the rock that holds water: good enough to boil in with hot stones.");
-          } else
-            log("Looked for a rock hollow that would hold water; nothing that doesn\u2019t drain.");
-        }
-        break;
-      }
-      case "wash": {
-        const { thing } = pickd;
-        pass(0.1, 120);
-        thing.props.germs = Math.round((thing.props.germs * 0.3 + 0.4 * waterGerms()) * 1e3) / 1e3;
-        S.body.germs = S.body.germs * 0.5 + 0.3 * waterGerms();
-        log(`Washed the ${thing.name} in the water.`);
-        return "rinsed";
-      }
-      case "scorch": {
-        const { thing } = pickd;
-        pass(0.1, 120);
-        log(`Passed the ${thing.name} through the flames.`);
-        break;
-      }
-      case "tinder": {
-        const { mat } = pickd;
-        const res = makeTinder(r, ch, { props: mat.props, provenance: prov(mat) });
-        pass(0.2, 140);
-        remove(mat);
-        addItem(`tinder bundle, ${mat.from.name}`, "tinder", res.tinder.props, mat.from);
-        log(`Shredded the ${mat.from.name} ${mat.from.part} into a tinder nest.`);
-        break;
-      }
-      case "bone": {
-        const { bone, hammer } = pickd;
-        const res = splinterBone(r, ch, bone, { props: hammer.props });
-        pass(0.2, 160);
-        remove(bone);
-        res.flakes.forEach((f) => addItem("bone splinter", "edge", f.props, bone.from));
-        log(res.flakes.length ? `Cracked the bone: ${res.flakes.length} sharp splinter${res.flakes.length > 1 ? "s" : ""}.` : "The bone shattered into useless bits.");
-        if (res.flakes.length && !S.milestones.edge) {
-          S.milestones.edge = true;
-          log("My first cutting edge.", "milestone");
-        }
-        break;
-      }
+        return perform(PREPARE(id), { food: pickd.food, mode, stone: pickd.stone, edge: pickd.edge, stones: ofKind("stone") });
       case "drill":
-        drill(pickd.board, pickd.spindle, mode === "until");
-        break;
+        return drill(pickd.board, pickd.spindle, mode === "until");
+      default:
+        return perform(CRAFTS[id], { ...pickd, mode });
     }
   }
-  function dullCheck(edge) {
-    if (edge.props.sharpness < 0.35 && !edge.toldDull) {
-      edge.toldDull = true;
-      log(`The ${edge.name} has gone dull.`, "act");
-    }
-  }
-  var DRILL_LINES = [
-    [(r) => r.success, "smoke thickened and a mound of dark dust began to glow"],
-    [(r) => r.margin > -0.6, "thick smoke and dark dust, but no glow"],
-    [(r) => r.margin > -1.6, "some smoke; the dust stayed coarse and pale"],
-    [() => true, "barely warm; the spindle just polished the socket"]
-  ];
   function drillTrouble(board, spindle) {
     const sk = S.body.skills.firecraft, b = board.props, sp = spindle.props;
     const pen = [
@@ -8627,77 +9048,40 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
   }
   function drill(board, spindle, keepGoing) {
     const tally = {};
-    let n = 0, stop = "";
+    let n = 0, stop = "", fx = null, glow = null;
     while (true) {
-      if (S.body.hands > 0.85) {
-        stop = "my palms are raw; I have to stop";
-        break;
-      }
-      if (S.body.fatigue > 0.88) {
-        stop = "too tired to keep going";
-        break;
-      }
-      if (isNight()) {
-        stop = "too dark";
-        break;
-      }
-      if (board.props.life <= 0.05) {
+      if (!S.inv.includes(board)) {
         stop = "the board has burned through";
-        remove(board);
         break;
       }
-      if (spindle.props.length < 40) {
+      if (!S.inv.includes(spindle)) {
         stop = "the spindle is worn too short";
-        remove(spindle);
         break;
       }
-      const res = handDrill(S.rng, S.body, board, spindle);
-      pass(0.25, 400);
+      fx = perform(DRILL_ATTEMPT, { board, spindle }, { refusal: true });
+      if (fx.refused) {
+        stop = fx.refused;
+        break;
+      }
       n++;
-      const line = DRILL_LINES.find(([f]) => f(res))[1];
-      tally[line] = (tally[line] ?? 0) + 1;
-      if (res.ember) {
-        summarize2();
-        ember(res.ember);
-        return;
+      tally[fx.report.line] = (tally[fx.report.line] ?? 0) + 1;
+      if (fx.report.ember != null) {
+        glow = fx.report.ember;
+        break;
       }
       if (!keepGoing)
         break;
     }
-    summarize2();
-    function summarize2() {
-      const parts = Object.entries(tally).map(([k, v]) => n > 1 ? `${v}\xD7 ${k}` : k);
-      const trouble = n && !tally[DRILL_LINES[0][1]] && S.inv.includes(board) ? drillTrouble(board, spindle) : null;
-      const tools = `with the ${spindle.from?.name ?? ""} spindle (${impressions(spindle).slice(0, 1).join("")}) on the ${board.from?.name ?? ""} board`;
-      if (n)
-        log(`${n > 1 ? `${n} attempts at the drill` : "One attempt at the drill"} ${tools}: ${parts.join("; ")}.${trouble ? ` As far as I can tell, ${trouble}.` : ""}${stop ? ` Stopped: ${stop}.` : ""}`);
-      else if (stop)
-        log(`Can\u2019t drill: ${stop}.`, "warn");
-    }
-  }
-  function ember(e) {
-    if (!S.milestones.ember) {
-      S.milestones.ember = true;
-      log("An ember!", "milestone");
-    }
-    const tinder = ofKind("tinder")[0];
-    if (!tinder)
-      return log("An ember, but no tinder bundle ready. It faded in the notch.", "warn");
-    if (!has("wood"))
-      return log("An ember, but no wood to feed a flame. It faded.", "warn");
-    const res = lightFire(S.rng, S.body, e, tinder);
-    pass(0.15, 180);
-    remove(tinder);
-    if (res.success) {
-      takeWood(1);
-      site().fireUntil = now() + 3;
-      log("Tipped the ember into the tinder and blew. Smoke, then a flicker, then flame. Fire.", "act");
-      if (!S.milestones.fire) {
-        S.milestones.fire = true;
-        log(`Fire, on day ${S.day}.`, "milestone");
-      }
-    } else
-      log("Tipped the ember into the tinder and blew, but it smothered and died.", "warn");
+    const parts = Object.entries(tally).map(([k, v]) => n > 1 ? `${v}\xD7 ${k}` : k);
+    const trouble = n && glow == null && S.inv.includes(board) ? drillTrouble(board, spindle) : null;
+    const tools = `with the ${spindle.from?.name ?? ""} spindle (${impressions(spindle).slice(0, 1).join("")}) on the ${board.from?.name ?? ""} board`;
+    if (n)
+      log(`${n > 1 ? `${n} attempts at the drill` : "One attempt at the drill"} ${tools}: ${parts.join("; ")}.${trouble ? ` As far as I can tell, ${trouble}.` : ""}${stop ? ` Stopped: ${stop}.` : ""}`);
+    else if (stop)
+      log(`Can\u2019t drill: ${stop}.`, "warn");
+    if (glow != null)
+      return perform(EMBER, { ember: { props: { vigor: glow } }, tinder: ofKind("tinder")[0] ?? null, wood: ofKind("wood")[0] ?? null });
+    return fx;
   }
   function shortDesc(e) {
     if (e.kind === "stone")
@@ -8841,7 +9225,6 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
     const [type, key] = spec.split(":");
     const label = type === "focus" ? FOCI[key].label : type === "entity" ? pluralize(entity(key).name) : key === "water" ? "water" : "high ground";
     S.looking = { type, key, label };
-    pass(0.5, 180);
     S.body.focus = clamp(S.body.focus - 0.03);
     lookHere(site(), false);
   }
@@ -8993,7 +9376,6 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     return [...new Set(out)];
   }
   function inspect(e) {
-    pass(0.25, 130);
     const parts = e.kind === "plant" ? e.parts.map((p) => p.part) : e.kind === "stone" ? [] : e.products;
     const learned = learnedAbout(e);
     log(`Looked closely at the ${e.name}: ${e.cues.filter((c) => !/^active:/.test(c)).join("; ")}.${parts.length ? ` Parts worth noting: ${parts.join(", ")}.` : ""}${learned.length ? ` What I\u2019ve learned: ${learned.join("; ")}.` : ""}`, "note");
@@ -9002,7 +9384,6 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     if (S.body.focus < 0.25)
       return log("Too foggy to think it through. I need rest, water or food first.", "warn");
     S.body.focus = clamp(S.body.focus - 0.08);
-    pass(0.15, 110);
     const cues = e.cues.join(" | ");
     const uses = [], risks = [], tests = [];
     const on = (re, list, text) => {
@@ -9126,12 +9507,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
   function restFor(choice) {
     if (choice === "morning")
       return sleep();
-    const hours = choice === "dusk" ? sunsetAt(S.day) - S.t : Number(choice);
-    pass(hours, 90);
-    S.body.fatigue *= Math.pow(0.15, hours / 9);
-    S.body.hands *= Math.pow(0.55, hours / 12);
-    S.body.focus = clamp(S.body.focus + 0.12 * hours);
-    log(choice === "dusk" ? "Rested in the shade until dusk." : `Rested for ${hours === 1 ? "an hour" : `${hours} hours`}.`);
+    perform(REST, { hours: choice === "dusk" ? sunsetAt(S.day) - S.t : Number(choice), dusk: choice === "dusk" });
   }
   var waterUp = (x, y) => {
     const c = cellOf(x, y);
@@ -9394,7 +9770,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
   }
   function mapHTML() {
     const M2 = mentalMap();
-    const hi = M2.nodes.findIndex((v) => v.site === S.here), here = M2.nodes[hi];
+    const hi = M2.nodes.findIndex((v) => v.site === S.at), here = M2.nodes[hi];
     const xs = M2.nodes.map((v) => v.x), ys = M2.nodes.map((v) => v.y);
     let x0 = Math.min(...xs) - 4, y0 = Math.min(...ys) - 4, span = Math.max(Math.max(...xs) - x0 + 4, Math.max(...ys) - y0 + 4, 16);
     x0 -= (span - (Math.max(...xs) + 4 - x0)) / 2;
@@ -9643,7 +10019,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     const tools = `<div class="map-tools">${scaleBar(span)}${S.mapView ? '<button class="ghost" data-mapfit="1">Fit</button>' : ""}<button class="ghost" data-maproutes="1">${routes ? "Routes: shown" : "Routes: hidden"}</button><button class="ghost" data-mapland="1">${LAND_MODES[S.mapLand ?? "seen"]}</button></div>`;
     return `${svg}${tools}<p class="hint">North is up. Tap a place, landmark, stream, lake or cliff to head for it; tap anywhere else to drop a pin, then tap the pin to go there. Drag to pan; pinch or scroll to zoom. Filled dots: places I\u2019ve been; rings: things I\u2019ve seen or heard (\u201C?\u201D: heard only). Blue: lakes as I picture them, springs, and streams, solid where I\u2019ve walked along them, chevrons pointing downstream. Lines with ticks: cliffs, ticks on the low side. At a stream, the white arrows by me follow it a stretch. Not every name is shown when the map is crowded; zoom in for more.</p>`;
   }
-  function hike(key) {
+  function hikeNow(key) {
     if (key.startsWith("stream:"))
       return headForStream(key.slice(7));
     if (key.startsWith("lake:") || key.startsWith("cliff:"))
@@ -9663,7 +10039,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       return followStream(dir, b ? { x: +b.split("_")[0], y: +b.split("_")[1] } : null);
     }
     const M2 = mentalMap(), v = M2.nodes.find((n) => n.key === key);
-    if (!v || v.site === S.here)
+    if (!v || v.site === S.at)
       return;
     if (v.sus) {
       const u = S.suspects.find((x) => x.id === v.sus);
@@ -9707,8 +10083,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         perform(SURVEY);
         break;
       case "poke":
-        pass(0.5, 230);
-        pokeAround(s);
+        perform(GAME.poke);
         break;
       case "collect":
       case "inspect":
@@ -9717,26 +10092,16 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         picker = { kind: id, step: "root" };
         break;
       case "look":
-        if (S.looking) {
-          log(`Stopped looking for ${S.looking.label}.`, "thought");
-          S.looking = null;
-        } else
+        if (S.looking)
+          perform(GAME.stopLooking);
+        else
           picker = { kind: "look", step: "root" };
         break;
       case "scan":
-        pass(0.5, 120);
-        S.body.focus = clamp(S.body.focus - 0.04);
-        sense(s, false, { scan: true });
+        perform(GAME.scan);
         break;
       case "lookout":
-        pass(0.5, 200);
-        sense(s, true);
-        markSeen(s.x, s.y, 50, { eye: lookoutEye(S.L, s) });
-        noteSeenFeatures();
-        if (!S.milestones.lookout) {
-          S.milestones.lookout = true;
-          log("A view at last.", "milestone");
-        }
+        perform(GAME.lookout);
         break;
       case "washhands":
         perform(WASH_HANDS);
@@ -9766,11 +10131,8 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     return n.slot.role;
   }
   function think(path) {
-    if (S.body.focus < 0.25)
-      return log("Too foggy to think it through. I need rest, water or food first.", "warn");
     const n = nodeAt(path);
     S.body.focus = clamp(S.body.focus - 0.06);
-    pass(0.1, 110);
     S.revealed[S.goal].add(path);
     if (n.type === "material") {
       const h = lookHint(n.slot);
@@ -9800,16 +10162,16 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       n = children(n)[Number(i)];
     return n;
   }
-  function planHTML(n = tree(), path = "root", depth = 0) {
+  function planHTML(n = tree(), path = "root", depth2 = 0) {
     const open = S.revealed[S.goal].has(path);
     const kids = children(n);
     const isLeaf = n.type === "material" || n.type === "item" && (!kids.length || n.truncated);
-    const label = depth === 0 ? n.type === "process" ? n.name : `To get ${n.name}` : nodeLabel(n);
+    const label = depth2 === 0 ? n.type === "process" ? n.name : `To get ${n.name}` : nodeLabel(n);
     let h = `<li class="plan-node ${n.type}"><span class="plan-label">${esc(typo(cap4(label)))}</span>`;
     if (!open && !(n.type === "item" && n.truncated))
       h += ` <button class="think" data-think="${path}">Think it through</button>`;
     if (open && !isLeaf && kids.length)
-      h += `<ul>${kids.map((k, i) => planHTML(k, `${path}/${i}`, depth + 1)).join("")}</ul>`;
+      h += `<ul>${kids.map((k, i) => planHTML(k, `${path}/${i}`, depth2 + 1)).join("")}</ul>`;
     return h + "</li>";
   }
   var journalShown = 0;
@@ -9985,7 +10347,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       }).observe(box);
     }
   }
-  var BUILD = "hk-2026-10-26a";
+  var BUILD = "hk-2026-10-26b";
   function record(d) {
     S.record ?? (S.record = []);
     S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
@@ -10115,18 +10477,13 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
   function act(d) {
     var _a, _b;
     if (d.originOf) {
-      const t = S.sites.find((x) => x.key === d.originOf);
-      if (!t)
+      if (!S.sites.some((x) => x.key === d.originOf))
         return false;
-      log(`Decided to call ${t === site() ? "this place" : "the place I got that from"} ${d.nameTo}. It goes on my map.`);
-      t.name = d.nameTo;
-      t.renamed = true;
+      perform(GAME.rename, { place: d.originOf, name: d.nameTo, origin: true });
       return true;
     }
     if (d.renameTo) {
-      log(`Decided to call this place ${d.renameTo}.`);
-      site().name = d.renameTo;
-      site().renamed = true;
+      perform(GAME.rename, { place: site().key, name: d.renameTo, origin: false });
       return true;
     }
     if (d.goalPick !== void 0) {
@@ -10142,11 +10499,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       doHere(d.here);
     else if (d.gather !== void 0) {
       const g = gatherOptions(site())[Number(d.gather)];
-      pass(g.hours, g.kcal);
-      site().gathered = true;
-      const it = g.fn();
-      touch([it], 0.5);
-      log(`Gathered ${it.name}.`);
+      perform(GAME.gather, { index: Number(d.gather), option: { hours: g.hours, kcal: g.kcal } });
     } else if (d.pk) {
       if (d.pk === "close")
         picker = null;
@@ -10160,29 +10513,21 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     } else if (d.hike) {
       picker = null;
       hike(d.hike);
-    } else if (d.inspect) {
-      const e = entity(d.inspect);
-      inspect(e);
-      assess(e);
-    } else if (d.look) {
+    } else if (d.inspect)
+      perform(GAME.inspect, { entity: d.inspect });
+    else if (d.look) {
       picker = null;
-      startLooking(d.look);
+      perform(GAME.look, { spec: d.look });
     } else if (d.craft)
       craft(d.craft, d.mode);
-    else if (d.test) {
-      const it = byUid(d.test);
-      const T2 = testsFor(it).find(([k]) => k === d.name);
-      pass(0.1, 120);
-      it.notes[d.name] = T2[1]();
-      log(`${d.name} on the ${it.name}: ${it.notes[d.name]}.`);
-    } else if (d.eat)
+    else if (d.test)
+      perform(GAME.test, { thing: byUid(d.test), name: d.name });
+    else if (d.eat)
       eat(byUid(d.eat));
-    else if (d.drop) {
-      const it = byUid(d.drop);
-      remove(it);
-      log(`Left the ${it.name} behind.`);
-    } else if (d.think)
-      think(d.think);
+    else if (d.drop)
+      perform(GAME.drop, { thing: byUid(d.drop) });
+    else if (d.think)
+      perform(GAME.think, { path: d.think });
     else
       return false;
     return true;

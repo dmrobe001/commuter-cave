@@ -285,65 +285,99 @@ function goalField(L, aim, from, M = 25, shoreWeight = 0.2) {
   return D;
 }
 
+// One step of a walk toward an aim, in the common shape of a process (act.js). The walker's heading
+// drifts (a normal draw each step, sd driftSd degrees: smaller with a known landmark in view, and cut
+// back when the target is sensed again); each of the eight neighbours is scored half by heading (with
+// its drift) and half by walking distance to the aim through passable ground (the goal field), plus a
+// little jitter to break near-ties and a penalty for cells already trodden on this walk (so a walker
+// works its way round the shore of a lake's bay instead of shuttling); the lowest score is the step.
+// If the current has me there, it carries me downstream until I can claw out.
+// walker: { p, drift, trod (cell → times), hours }; reads: the land (L), the goal field, the aim,
+// whether the target was just sensed again, driftSd. Report: the cells passed through, and a sweep.
+export const WALK_STEP = {
+  id: 'walk-step', name: 'A step',
+  reads: ['L', 'field', 'aim', 'sensed', 'driftSd'], writes: ['walker'],
+  run: (v, d) => ({ report: stepOnce(v.L, v.walker, v, d.act) }),
+};
+export function stepOnce(L, w, o, rng) {
+  w.drift += rng.normal(0, o.driftSd);
+  if (o.sensed) w.drift *= 0.3;
+  const p = w.p, field = o.field, want = ((bearing(p, o.aim) + w.drift) * Math.PI) / 180;
+  let best = null, bestScore = Infinity;
+  for (const [dx, dy] of NB) {
+    const nx = p.x + dx, ny = p.y + dy;
+    if (!inside(nx, ny) || blocks(L, idx(nx, ny))) continue;
+    const along = dx * Math.sin(want) - dy * Math.cos(want);
+    const len = Math.hypot(dx, dy), fd = field[idx(nx, ny)] - field[idx(p.x, p.y)], gain = Number.isFinite(fd) ? fd / len : -along / len; // -1 straight toward the aim
+    const score = -0.5 * along / len + 0.5 * gain + 0.15 * rng.next() + 0.9 * (w.trod.get(idx(nx, ny)) ?? 0);
+    if (score < bestScore) { bestScore = score; best = { x: nx, y: ny }; }
+  }
+  if (!best) return { stuck: true, cells: [] };
+  w.hours += stepHours(L, p, best);
+  w.p = best;
+  const cells = [best];
+  w.trod.set(idx(best.x, best.y), (w.trod.get(idx(best.x, best.y)) ?? 0) + 1);
+  let sweep = null;
+  const swept = L.chan[idx(best.x, best.y)] ? L.dyn?.cross(idx(best.x, best.y)).swept ?? 0 : 0;
+  if (swept) { // the current has me: carried downstream until I can claw out (or the water ends)
+    let q = best;
+    for (let k = 0; k < swept; k++) { const dn = L.down[idx(q.x, q.y)]; if (dn < 0 || L.lake[dn]) break; q = { x: dn % N, y: (dn / N) | 0 }; cells.push(q); w.hours += 0.02; }
+    w.p = q;
+    sweep = { from: best, to: { ...q } };
+  }
+  return { to: best, cells, sweep };
+}
+
 // `toWater`: the lake an aim lies on is where I'm going (stop at its nearest shore); otherwise a lake in
 // the way is skirted, to the far side nearest the aim. Cliffs are skirted where possible (goalField).
+// The walk is WALK_STEP over and over (run directly here, for speed), between which I check whether
+// I'm at the believed spot, sense the target again if I'm homing on one, and stop at water if thirsty
+// or on arriving. steps keeps what each step began from (where, the drift, the aim, whether the target
+// was just sensed, and how far along the path), so any step can be looked at again (stepView).
 export function walk(L, from, target, { maxHours = 3, rng, resense = null, arrived = null, stopAtWater = false, driftSd = 2.5, toWater = false } = {}) {
-  let p = { ...from }, hours = 0, drift = 0;
-  const path = [p], crossings = [], sweeps = [];
+  const w = { p: { ...from }, drift: 0, trod: new Map([[idx(from.x, from.y), 1]]), hours: 0 };
+  const path = [w.p], crossings = [], sweeps = [], steps = [];
   let aim = { ...target };
-  // Cells already trodden on this walk count against stepping there again. Without this, greedy
-  // steps get trapped in a bay of a lake (or any concave obstacle), shuttling between two cells until
-  // the time runs out; with it, the walker works its way round the shore.
-  const trod = new Map([[idx(p.x, p.y), 1]]);
-  // The way round what can be seen to be in the way: steps are scored half by heading (with its
-  // drift) and half by walking distance to the aim through passable ground.
   const shoreWeight = toWater ? 0.2 : 3;
-  let field = goalField(L, aim, p, 25, shoreWeight), fieldFor = `${Math.round(aim.x)},${Math.round(aim.y)}`;
-  for (let steps = 0; steps < 400 && hours < maxHours; steps++) {
+  let field = goalField(L, aim, w.p, 25, shoreWeight), fieldFor = `${Math.round(aim.x)},${Math.round(aim.y)}`;
+  for (let n = 0; n < 400 && w.hours < maxHours; n++) {
+    const p = w.p;
     if (Math.hypot(aim.x - p.x, aim.y - p.y) <= 1.5) { // at the believed spot: still sensing it further on? then home in on that
       const fresh = resense ? resense(p, true) : null;
-      if (fresh && Math.hypot(fresh.x - p.x, fresh.y - p.y) > 1.5) { aim = fresh; drift = 0; }
+      if (fresh && Math.hypot(fresh.x - p.x, fresh.y - p.y) > 1.5) { aim = fresh; w.drift = 0; }
       else { // finish on the spot itself: where I now sense it, if I do (close by, that's exact), else where I thought
         const spot = fresh ?? aim;
-        if ((spot.x !== p.x || spot.y !== p.y) && !blocks(L, idx(spot.x, spot.y))) { hours += stepHours(L, p, spot); p = { x: spot.x, y: spot.y }; path.push(p); }
+        if ((spot.x !== p.x || spot.y !== p.y) && !blocks(L, idx(spot.x, spot.y))) { w.hours += stepHours(L, p, spot); w.p = { x: spot.x, y: spot.y }; path.push(w.p); }
         break;
       }
     }
-    drift += rng.normal(0, driftSd); // a known landmark in view keeps the heading true (small driftSd)
-    if (resense) { const fresh = resense(p); if (fresh) { aim = fresh; drift *= 0.3; } }
+    const fresh = resense ? resense(p) : null;
+    if (fresh) aim = fresh;
     if (`${Math.round(aim.x)},${Math.round(aim.y)}` !== fieldFor) { field = goalField(L, aim, p, 25, shoreWeight); fieldFor = `${Math.round(aim.x)},${Math.round(aim.y)}`; }
     // the aim is in a lake: stop where no step gets nearer (any shore will do when the lake is where I'm going)
     const better = NB.some(([dx, dy]) => inside(p.x + dx, p.y + dy) && field[idx(p.x + dx, p.y + dy)] < field[idx(p.x, p.y)] - (toWater ? 0.5 : 0.05));
     if (blocks(L, idx(Math.round(aim.x), Math.round(aim.y))) && !better && (!toWater || NB.some(([dx, dy]) => inside(p.x + dx, p.y + dy) && L.lake[idx(p.x + dx, p.y + dy)]))) break;
-    const want = ((bearing(p, aim) + drift) * Math.PI) / 180;
-    let best = null, bestScore = Infinity;
-    for (const [dx, dy] of NB) {
-      const nx = p.x + dx, ny = p.y + dy;
-      if (!inside(nx, ny) || blocks(L, idx(nx, ny))) continue;
-      const along = dx * Math.sin(want) - dy * Math.cos(want);
-      const len = Math.hypot(dx, dy), fd = field[idx(nx, ny)] - field[idx(p.x, p.y)], gain = Number.isFinite(fd) ? fd / len : -along / len; // -1 straight toward the aim
-      const score = -0.5 * along / len + 0.5 * gain + 0.15 * rng.next() + 0.9 * (trod.get(idx(nx, ny)) ?? 0);
-      if (score < bestScore) { bestScore = score; best = { x: nx, y: ny }; }
+    steps.push({ p, drift: w.drift, aim: { ...aim }, sensed: !!fresh, at: path.length, hours: w.hours });
+    const r = stepOnce(L, w, { field, aim, sensed: !!fresh, driftSd }, rng);
+    if (r.stuck) break;
+    path.push(...r.cells);
+    if (r.sweep) sweeps.push(r.sweep);
+    const q = w.p, ch = L.chan[idx(q.x, q.y)];
+    if (ch && (!crossings.length || Math.hypot(crossings[crossings.length - 1].x - q.x, crossings[crossings.length - 1].y - q.y) > 3)) {
+      crossings.push({ ...q, size: ch });
+      if (stopAtWater && L.dyn?.cross(idx(q.x, q.y)).how !== 'dry') break; // a dry bed won't slake thirst
     }
-    if (!best) break;
-    hours += stepHours(L, p, best);
-    p = best;
-    path.push(p);
-    trod.set(idx(p.x, p.y), (trod.get(idx(p.x, p.y)) ?? 0) + 1);
-    const swept = L.chan[idx(p.x, p.y)] ? L.dyn?.cross(idx(p.x, p.y)).swept ?? 0 : 0;
-    if (swept) { // the current has me: carried downstream until I can claw out (or the water ends)
-      const from = { ...p };
-      for (let k = 0; k < swept; k++) { const d = L.down[idx(p.x, p.y)]; if (d < 0 || L.lake[d]) break; p = { x: d % N, y: (d / N) | 0 }; path.push(p); hours += 0.02; }
-      sweeps.push({ from, to: { ...p } });
-    }
-    const ch = L.chan[idx(p.x, p.y)];
-    if (ch && (!crossings.length || Math.hypot(crossings[crossings.length - 1].x - p.x, crossings[crossings.length - 1].y - p.y) > 3)) {
-      crossings.push({ ...p, size: ch });
-      if (stopAtWater && L.dyn?.cross(idx(p.x, p.y)).how !== 'dry') break; // a dry bed won't slake thirst
-    }
-    if (arrived && arrived(p)) break;
+    if (arrived && arrived(q)) break;
   }
-  return { end: p, hours, path, crossings, sweeps };
+  return { end: w.p, hours: w.hours, path, crossings, sweeps, steps, driftSd, toWater };
+}
+// The view a walk's step i began from, to run it again with other dice (act.js rehearse): where I was,
+// the drift so far, the cells trodden before it, the aim and its goal field.
+export function stepView(L, trip, i) {
+  const s = trip.steps[i], trod = new Map(), tread = q => trod.set(idx(q.x, q.y), (trod.get(idx(q.x, q.y)) ?? 0) + 1);
+  tread(trip.path[0]);
+  for (const t of trip.steps.slice(0, i)) tread(trip.path[t.at]); // where each earlier step put me (not where the current swept me)
+  return { L, field: goalField(L, s.aim, s.p, 25, trip.toWater ? 0.2 : 3), aim: s.aim, sensed: s.sensed, driftSd: trip.driftSd, walker: { p: { ...s.p }, drift: s.drift, trod, hours: s.hours } };
 }
 
 // Follow water downstream or up the largest feeder (from a lake shore, up an inflowing stream).

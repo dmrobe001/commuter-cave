@@ -13,7 +13,7 @@
 //   mind (what I've already remarked on), milestones, inv (all I carry), world (constant)
 //   and slots: the things bound to this job (core, hammer, food, edge, stones, ...), and mode.
 import { clamp } from './rng.js';
-import { knapFlakes } from './craft.js';
+import { knapFlakes, notchHearth, refineNotch, carveSpindle, makeTinder, splinterBone, handDrill, lightFire } from './craft.js';
 import { hazard as harmBand, animalNow } from './life.js';
 import { expose, nutrients, harm, textureWords, COMPOUNDS, PREP } from './food.js';
 import { plantNow } from './phenology.js';
@@ -265,6 +265,175 @@ export const KNAP = {
     const say = [make.length ? `Smashed the ${core.from.name} stone ${v.anvil.slab ? 'on the slab' : 'against a rock'}: ${make.length} usable flake${make.length > 1 ? 's' : ''}.` : `Smashed the ${core.from.name} stone; nothing but crumbs and blunt chunks.`];
     if (make.length && !v.milestones.edge) { v.milestones.edge = true; say.push(['My first cutting edge.', 'milestone']); }
     return { make, use: rng.chance(0.25) ? [core] : [], say, report: { success: res.success, margin: res.margin, flakes: make.length } };
+  },
+};
+
+// ------------------------------------------------------------ wood, fibre, bone, fire
+//
+// Each a process over the things bound to it by slot (wood, edge, board, shoot, stalk, stick, tool,
+// thing, mat, bone, hammer, spindle) and my crafting skill and wear (craft.js's attempt: a performance
+// score from how well the tools suit their roles, skill and effort, with luck). Edges dull as they
+// work (Archard's law, in craft.js); the first time one goes dull, I say so.
+const dark = v => (v.here.dark ? 'Too dark to work. Time to sleep.' : true);
+const provOf = it => ({ name: it.from?.name ?? it.name, source: it.from?.id, site: it.from?.site });
+function dulled(edge, say) {
+  if (edge.props.sharpness < 0.35 && !edge.toldDull) { edge.toldDull = true; say.push(`The ${edge.name} has gone dull.`); }
+}
+const EDGE = slot => [`${slot}.props`, `${slot}.toldDull`];
+export const CRAFTS = {
+  notch: { id: 'notch', name: 'Notch a hearth board', reads: ['mode', 'wood', 'edge.name', 'here.dark'], writes: [...SKILL_STATE, ...EDGE('edge')],
+    hours: v => (v.mode === 'careful' ? 1.0 : 0.4), kcal: 160, ready: dark,
+    run(v, d) {
+      const { wood, edge } = v, hours = v.mode === 'careful' ? 1.0 : 0.4, say = [];
+      const res = notchHearth(d.act, v.body, { props: wood.props, provenance: provOf(wood) }, { props: edge.props, name: 'flake' }, hours);
+      say.push(`${v.mode === 'careful' ? 'Took my time and' : 'Quickly'} split and notched a hearth board from the ${wood.from.name} wood.`);
+      dulled(edge, say);
+      return { make: [{ name: `hearth board, ${wood.from.name}`, kind: 'board', props: res.board.props, from: wood.from }], use: [wood], say, report: { notch: res.board.props.notch, margin: res.margin } };
+    } },
+  refine: { id: 'refine', name: 'Touch up a notch', reads: ['board.from', 'edge.name', 'here.dark'], writes: [...SKILL_STATE, 'board.props', 'board.notes', ...EDGE('edge')],
+    hours: 0.6, kcal: 150, ready: dark,
+    run(v, d) {
+      const say = [], res = refineNotch(d.act, v.body, v.board, { props: v.edge.props });
+      delete v.board.notes['Inspect the notch'];
+      say.push(res.after > res.before ? 'Worked the notch slowly; it’s cleaner now.' : 'The edge slipped and tore the notch a little.');
+      dulled(v.edge, say);
+      return { say, report: { before: res.before, after: res.after } };
+    } },
+  carve: { id: 'carve', name: 'Carve a spindle', reads: ['shoot', 'edge.name', 'here.dark'], writes: [...SKILL_STATE, ...EDGE('edge')],
+    hours: 0.5, kcal: 160, ready: dark,
+    run(v, d) {
+      const { shoot } = v, say = [], res = carveSpindle(d.act, v.body, { props: shoot.props, provenance: provOf(shoot) }, { props: v.edge.props });
+      say.push(`Carved a spindle from the ${shoot.from.name} ${shoot.kind === 'shoot' && shoot.props.moisture > 0.3 ? 'shoot. It’s green; it will need to dry' : 'shoot'}.`);
+      dulled(v.edge, say);
+      return { make: [{ name: `spindle, ${shoot.from.name}`, kind: 'spindle', props: res.spindle.props, from: shoot.from }], use: [shoot], say };
+    } },
+  trim: { id: 'trim', name: 'Trim a spindle from a stalk', reads: ['stalk', 'here.dark'], writes: [], hours: 0.15, kcal: 130, ready: dark,
+    run: v => ({ make: [{ name: `spindle, ${v.stalk.from.name}`, kind: 'spindle', props: { ...v.stalk.props, length: 70 }, from: v.stalk.from }], use: [v.stalk], say: [`Snapped a ${v.stalk.from.name} stalk to length and rubbed it smooth: a spindle.`] }) },
+  // hardness of the point: wood density, plus a little for a clean shape; green wood is softer until dried
+  digstick: { id: 'digstick', name: 'Make a digging stick', reads: ['stick', 'tool.kind', 'tool.name', 'body.focus', 'here.dark'], writes: [...EDGE('tool'), 'milestones.stick'],
+    hours: v => (v.tool.kind === 'edge' ? 0.5 : 1.0), kcal: 200, ready: dark, // grinding a point on rough stone is slow
+    run(v, d) {
+      const { stick, tool } = v, cut = tool.kind === 'edge', say = [];
+      const dens = stick.props.density ?? 0.45;
+      const finish = clamp((cut ? 0.6 + 0.4 * (tool.props.sharpness ?? 0.5) : 0.5) * (0.8 + 0.4 * v.body.focus) + d.act.normal(0, 0.08));
+      const green = (stick.props.moisture ?? 0.15) > 0.3;
+      const hardness = clamp(dens * (0.75 + 0.25 * finish) - (green ? 0.08 : 0), 0.1, 0.95);
+      if (cut) { tool.props.sharpness = Math.max(0, tool.props.sharpness - 0.04); dulled(tool, say); }
+      say.unshift(`Shaped a digging stick from the ${stick.from.name} ${stick.kind === 'shoot' ? 'shoot' : 'wood'}, ${cut ? 'whittling' : 'grinding'} the end to a chisel point on ${cut ? 'the edge' : 'a rough stone'}.`);
+      if (!v.milestones.stick) { v.milestones.stick = true; say.push(['A digging stick.', 'milestone']); }
+      return { make: [{ name: `digging stick, ${stick.from.name}`, kind: 'diggingstick', props: { density: dens, moisture: stick.props.moisture, hardness, finish, hardened: 0 }, from: stick.from }], use: [stick], say };
+    } },
+  harden: { id: 'harden', name: 'Fire-harden the digging stick', reads: ['mode', 'here.ambient', 'here.fire', 'here.dark'], writes: ['stick.props'],
+    hours: v => (v.mode === 'careful' ? 0.75 : 0.3), kcal: 140,
+    ready: v => (v.here.dark ? 'Too dark to work. Time to sleep.' : v.here.fire ? true : 'There’s no fire here.'),
+    run(v, d) {
+      const careful = v.mode === 'careful', p = v.stick.props, room = 1 - p.hardness;
+      const charred = !careful && d.act.chance(0.35);
+      p.hardness = clamp(p.hardness + room * (careful ? 0.3 : 0.18) * (p.hardened ? 0.4 : 1) - (charred ? 0.08 : 0));
+      p.moisture = Math.min(p.moisture ?? 0.2, v.here.ambient + 0.02);
+      p.hardened++;
+      return { say: [charred ? 'Hurried the stick over the fire and charred the tip; scraped off the black. Harder underneath, but the point is thinner.' : `Turned the point over the coals until it browned${careful ? ', slowly, a little at a time' : ''}. It rings harder when tapped.`], report: { charred } };
+    } },
+  // a hollow in rock, or a pit lined with clay, that holds water for hot-stone cooking
+  basin: { id: 'basin', name: 'Make a cooking basin', reads: ['site.micro', 'here.dark'], writes: ['site.basin'],
+    hours: v => (v.site.micro === 'claybank' ? 1.5 : 0.5), kcal: v => (v.site.micro === 'claybank' ? 320 : 180), ready: dark,
+    run(v, d) {
+      if (v.site.micro === 'claybank') { v.site.basin = { kind: 'clay-lined pit' }; return { say: ['Dug a pit beside the water and lined it with clay, smoothed wet. It holds water.'] }; }
+      if (d.act.chance(0.6)) { v.site.basin = { kind: 'rock hollow' }; return { say: ['Found a hollow in the rock that holds water: good enough to boil in with hot stones.'] }; }
+      return { say: ['Looked for a rock hollow that would hold water; nothing that doesn’t drain.'] };
+    } },
+  // rinsing helps, but leaves the water's own germs behind: hands and thing are rinsed, not mixed
+  wash: { id: 'wash', name: 'Wash something', rinse: true, reads: ['thing.name', 'here.water', 'here.dark'], writes: ['thing.props.germs', 'body.germs'], hours: 0.1, kcal: 120,
+    ready: v => (!v.here.water ? 'There’s no water here.' : dark(v)),
+    run(v) {
+      const w = v.here.water.pathogen;
+      v.thing.props.germs = r3(v.thing.props.germs * 0.3 + 0.4 * w);
+      v.body.germs = v.body.germs * 0.5 + 0.3 * w;
+      return { say: [`Washed the ${v.thing.name} in the water.`] };
+    } },
+  scorch: { id: 'scorch', name: 'Scorch a tool clean', reads: ['thing.name', 'here.fire', 'here.dark'], writes: [], hours: 0.1, kcal: 120,
+    ready: v => (v.here.fire ? dark(v) : 'There’s no fire here.'),
+    run: v => ({ say: [`Passed the ${v.thing.name} through the flames.`] }) },
+  tinder: { id: 'tinder', name: 'Make a tinder bundle', reads: ['mat', 'here.dark'], writes: SKILL_STATE, hours: 0.2, kcal: 140, ready: dark,
+    run(v, d) {
+      const res = makeTinder(d.act, v.body, { props: v.mat.props, provenance: provOf(v.mat) });
+      return { make: [{ name: `tinder bundle, ${v.mat.from.name}`, kind: 'tinder', props: res.tinder.props, from: v.mat.from }], use: [v.mat], say: [`Shredded the ${v.mat.from.name} ${v.mat.from.part} into a tinder nest.`], report: { fineness: res.tinder.props.fineness } };
+    } },
+  bone: { id: 'bone', name: 'Smash a bone for splinters', reads: ['bone', 'hammer.props', 'here.dark'], writes: [...SKILL_STATE, 'milestones.edge'], hours: 0.2, kcal: 160, ready: dark,
+    run(v, d) {
+      const res = splinterBone(d.act, v.body, v.bone, { props: v.hammer.props });
+      const make = res.flakes.map(f => ({ name: 'bone splinter', kind: 'edge', props: f.props, from: v.bone.from }));
+      const say = [make.length ? `Cracked the bone: ${make.length} sharp splinter${make.length > 1 ? 's' : ''}.` : 'The bone shattered into useless bits.'];
+      if (make.length && !v.milestones.edge) { v.milestones.edge = true; say.push(['My first cutting edge.', 'milestone']); }
+      return { make, use: [v.bone], say, report: { splinters: make.length } };
+    } },
+};
+
+// One go at the hand drill: spin the spindle in the notch until an ember comes or I give up. The socket
+// burns in, the board burns through and the spindle shortens with each go; worn out, they're used up.
+// Not possible with raw palms, too tired, or in the dark (ready gives the reason for stopping).
+const DRILL_LINES = [
+  [r => r.success, 'smoke thickened and a mound of dark dust began to glow'],
+  [r => r.margin > -0.6, 'thick smoke and dark dust, but no glow'],
+  [r => r.margin > -1.6, 'some smoke; the dust stayed coarse and pale'],
+  [() => true, 'barely warm; the spindle just polished the socket'],
+];
+export const DRILL_ATTEMPT = {
+  id: 'drill', name: 'Drill for an ember', reads: ['board', 'spindle', 'here.dark'], writes: [...SKILL_STATE, 'board.props', 'spindle.props'],
+  hours: 0.25, kcal: 400,
+  ready(v) {
+    if (v.body.hands > 0.85) return 'my palms are raw; I have to stop';
+    if (v.body.fatigue > 0.88) return 'too tired to keep going';
+    if (v.here.dark) return 'too dark';
+    return true;
+  },
+  run(v, d) {
+    const res = handDrill(d.act, v.body, v.board, v.spindle), use = [];
+    if (v.board.props.life <= 0.05) use.push(v.board);
+    if (v.spindle.props.length < 40) use.push(v.spindle);
+    return { use, report: { success: res.success, margin: res.margin, line: DRILL_LINES.find(([f]) => f(res))[1], ember: res.ember ? res.ember.props.vigor : null, burnedThrough: v.board.props.life <= 0.05, wornShort: v.spindle.props.length < 40 } };
+  },
+};
+// Tip an ember into the tinder and blow: a flame if the tinder is fine and dry and the ember strong.
+export const EMBER = {
+  id: 'ember', name: 'Light a fire from an ember', reads: ['ember', 'tinder', 'wood', 'clock'], writes: [...SKILL_STATE, 'site.fireUntil', 'milestones.ember', 'milestones.fire'],
+  hours: v => (v.tinder && v.wood ? 0.15 : 0), kcal: 180,
+  run(v, d) {
+    const say = [];
+    if (!v.milestones.ember) { v.milestones.ember = true; say.push(['An ember!', 'milestone']); }
+    if (!v.tinder) return { say: [...say, ['An ember, but no tinder bundle ready. It faded in the notch.', 'warn']] };
+    if (!v.wood) return { say: [...say, ['An ember, but no wood to feed a flame. It faded.', 'warn']] };
+    const res = lightFire(d.act, v.body, v.ember, v.tinder), use = [v.tinder];
+    if (!res.success) return { use, say: [...say, ['Tipped the ember into the tinder and blew, but it smothered and died.', 'warn']], report: { fire: false } };
+    use.push(v.wood);
+    v.site.fireUntil = v.clock.now + 3;
+    say.push(['Tipped the ember into the tinder and blew. Smoke, then a flicker, then flame. Fire.', 'act']);
+    if (!v.milestones.fire) { v.milestones.fire = true; say.push([`Fire, on day ${v.clock.day}.`, 'milestone']); }
+    return { use, say, report: { fire: true } };
+  },
+};
+
+// Everything handled together in a job shares what's on it: the things still carried and my hands mix
+// toward a common germ load; heat (kill: the share left) kills most of it.
+export const HANDLE = {
+  id: 'handle', name: 'Handling', reads: ['handled', 'kill'], writes: ['inv', 'body.germs'],
+  run(v) {
+    const xs = v.inv.filter(i => v.handled.includes(i.uid));
+    mix(xs, v.body, 0.4);
+    if (v.kill != null) for (const i of xs) i.props.germs = r3(i.props.germs * v.kill);
+  },
+};
+
+// Rest for some hours: tiredness and sore hands ease, focus comes back.
+export const REST = {
+  id: 'rest', name: 'Rest', reads: ['hours', 'dusk'], writes: ['body.fatigue', 'body.hands', 'body.focus'],
+  hours: v => v.hours, kcal: 90,
+  run(v) {
+    const b = v.body, h = v.hours;
+    b.fatigue *= Math.pow(0.15, h / 9);
+    b.hands *= Math.pow(0.55, h / 12);
+    b.focus = clamp(b.focus + 0.12 * h);
+    return { say: [v.dusk ? 'Rested in the shade until dusk.' : `Rested for ${h === 1 ? 'an hour' : `${h} hours`}.`] };
   },
 };
 
