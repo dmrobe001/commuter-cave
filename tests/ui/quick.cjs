@@ -68,11 +68,11 @@ setTimeout(() => {
     tap(P, '[data-test]', /Staged taste/);
     const cb = P.d.querySelector('[data-toggle="props"]'); cb.checked = true; cb.dispatchEvent(new P.w.Event('change', { bubbles: true }));
     check(P.d.querySelectorAll('ul.exact li').length > 0 && /net -?\d+ kcal/.test(P.d.querySelector('ul.exact').textContent), 'exact properties shown');
-    check(typeof food.props.germs === 'number' && typeof S().ch.germs === 'number', 'germ loads tracked');
+    check(typeof food.props.germs === 'number' && typeof S().body.germs === 'number', 'germ loads tracked');
     if (tap(P, '[data-here="make"]')) { tap(P, '[data-craft="wash"]'); tap(P, '[data-pk="close"]'); }
     tap(P, '[data-here="washhands"]');
-    const e0 = S().energy; tap(P, `[data-eat="${food.uid}"]`);
-    check(S().energy !== e0 || S().gut > 0, 'eating digests');
+    const e0 = S().body.energy; tap(P, `[data-eat="${food.uid}"]`);
+    check(S().body.energy !== e0 || S().body.gut > 0, 'eating digests');
   }
 
   // 4. a short replay reproduces a game

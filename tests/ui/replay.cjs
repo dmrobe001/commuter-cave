@@ -25,7 +25,7 @@ const journal = S => S.log.map(e => `${e.day} ${e.t.toFixed(3)} ${e.text}`).join
   B.d.querySelector('#replay').click();
   const SB = B.w.__hk.state();
   const ja = journal(SA).split('\n').filter(l => !/Copied the game record/.test(l)).join('\n'), jb = journal(SB).split('\n').filter(l => !/Replayed a game record|Copied the game record/.test(l)).join('\n');
-  const same = ja === jb, state = JSON.stringify([SA.day, SA.t, SA.inv.map(i => i.name), SA.sites.length, SA.hyd]) === JSON.stringify([SB.day, SB.t, SB.inv.map(i => i.name), SB.sites.length, SB.hyd]);
+  const same = ja === jb, state = JSON.stringify([SA.day, SA.t, SA.inv.map(i => i.name), SA.sites.length, SA.body.hyd]) === JSON.stringify([SB.day, SB.t, SB.inv.map(i => i.name), SB.sites.length, SB.body.hyd]);
   console.log(`${seed}: ${JSON.parse(rec).actions.length} actions recorded; journals identical: ${same}; state identical: ${state}; day ${SA.day} ${SA.t.toFixed(2)}`);
   if (!same) { const a = ja.split('\n'), b = jb.split('\n'); const i = a.findIndex((l, k) => l !== b[k]); console.log('first difference at line', i, '\n A:', a[i], '\n B:', b[i]); }
 })();

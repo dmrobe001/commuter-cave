@@ -17,6 +17,8 @@ import { cloneChem, expose, nutrients, harm, tasteWords, smellWords, textureWord
 import { chooseSpawn, perceive, suspicionFrom, walk, followStage, shoreStage, stepHours, CLIFF_COST, sightline, lookoutEye, isLookout, bearingWord, bearing, distM, CUE_WORDS, loudWords, waterKeyAt, waterKeyOf, lineHours as rawLineHours } from './geo.js';
 import { trailGraph, firstClear, placeLabels, suspectedCrossings, timeWords, awayWords, explainTrip } from './mentalmap.js';
 import { materialsOf, expandGoal, thought, ITEMS, lookHint, PROCESSES } from './process.js';
+import { viewOf as viewFor, rehearse, apply, stateOver, hoursOf, kcalOf, readyFor } from './act.js';
+import { TICKS, SLEEP_HOUR, DRINK, WASH_HANDS, MAKE_BED, BUILD_HUT, FEED_FIRE, KNAP, PREPARE, EAT, SURVEY, GUT_KG, loreKey, populationAt, findBones, boneLines, noteKnown as knowIt, pluralize, lineFor, mix } from './acts.js';
 import { newCharacter, dry, ROLES, knapFlakes, notchHearth, refineNotch, carveSpindle, makeTinder, handDrill, lightFire, searchNaturalEdge, splinterBone, estimateFire } from './craft.js';
 
 // ------------------------------------------------------------ helpers
@@ -80,15 +82,16 @@ function newGame(seed, preset, checked) {
   const world = checked.world;
   S = {
     world, seed, preset, rng: makeRng(`${seed}/game`),
-    ch: { ...newCharacter(), germs: 0.1 }, mem: newMemory(), day: 1, t: 6.5,
-    hyd: 0.8, energy: 0.75, sick: 0, pendingSick: [], gut: 0, macro: { p: 0, f: 0, c: 0 }, showProps: false,
+    // the body: crafting skill and wear (craft.js), water, food reserves, sickness, warmth, hurts, and what I'm wearing
+    body: { ...newCharacter(), germs: 0.1, hyd: 0.8, energy: 0.75, sick: 0, pendingSick: [], gut: 0, macro: { p: 0, f: 0, c: 0 }, chill: 0, limp: 0, wound: null,
+      clothes: { clo: 1.0, wet: 0 } }, // what I came in: trousers, shirt and a light jacket, about 1 clo; wet 0 dry .. 1 soaked
+    mem: newMemory(), mind: { moonNoted: null }, day: 1, t: 6.5, showProps: false,
     sites: [], here: 0, inv: [], log: [], uid: 1,
     goal: 'fire', revealed: { fire: new Set() },
     milestones: {}, mats: materialsOf(world), lore: {},
     ambient: clamp(0.05 + 0.07 * world.environment.water, 0.05, 0.35),
     collapsed: 0, L: checked.L, suspects: [], attentive: false,
     waterNames: {}, streams: [], walked: {}, recentNotice: null,
-    clothes: { clo: 1.0, wet: 0 }, // what I came in: trousers, shirt and a light jacket, about 1 clo; wet 0 dry .. 1 soaked
   };
   S.L.dyn = landNow(S.L); // the land as it is each day, for walking, crossing and hearing
   { const k = skyNow(), tw = k.tempC < 5 ? 'cold' : k.tempC < 12 ? 'cool' : k.tempC < 22 ? 'mild' : 'warm';
@@ -716,7 +719,7 @@ function arrive(x, y, how, onTheWay = null) {
     }
   }
   if (S.looking) {
-    S.ch.focus = clamp(S.ch.focus - 0.03);
+    S.body.focus = clamp(S.body.focus - 0.03);
     lookHere(s);
     breakthroughs(s, S.looking.key);
     if (S.looking.type !== 'distant') sense(s, false, { focus: 'water' });
@@ -911,10 +914,10 @@ function followStream(dir, branch) {
 // times the time spent on it, and at most one happens per walk, on a cell picked in proportion. Ground I
 // have walked before is safer (S.trod: every cell I've walked through). A limp slows every walk until it
 // heals (about a tenth of its severity a day, faster asleep). Returns the hours the walk really took.
-const limpFactor = () => 1 + 1.5 * (S.limp ?? 0);
+const limpFactor = () => 1 + 1.5 * (S.body.limp ?? 0);
 function onTheMove(path, hours) {
   S.trod ??= new Set();
-  const k = skyNow(), g = groundNow(), body = { fatigue: S.ch.fatigue, energy: S.energy, sick: S.sick, limp: S.limp ?? 0 };
+  const k = skyNow(), g = groundNow(), body = { fatigue: S.body.fatigue, energy: S.body.energy, sick: S.body.sick, limp: S.body.limp ?? 0 };
   const parts = [];
   let total = 0;
   for (let i = 1; i < path.length; i++) {
@@ -946,32 +949,32 @@ function reasonWords(why, k, c) {
 }
 // Soaked: clothes and everything carried (a fall in the water, a stream that took me).
 function soakMe(level = 1) {
-  S.clothes.wet = Math.max(S.clothes.wet, level);
+  S.body.clothes.wet = Math.max(S.body.clothes.wet, level);
   for (const it of S.inv) if (it.props.moisture !== undefined && it.kind !== 'food') it.props.moisture = Math.min(0.6, it.props.moisture + 0.3 * level);
 }
 function hurt({ kind, sev }, k, ctx = {}) {
   const why = reasonWords(ctx.why ?? [], k, ctx.c ?? cellOf(site().x, site().y));
   if (kind === 'ankle') {
-    S.limp = Math.max(S.limp ?? 0, sev);
+    S.body.limp = Math.max(S.body.limp ?? 0, sev);
     log(`${sev < 0.3 ? 'Turned my ankle; it twinges, but it’ll carry me.' : sev < 0.6 ? 'Went over on my ankle. It’s swelling; I’ll be slow for a few days.' : 'Badly twisted my ankle. I can barely put weight on it.'}${why}`, 'warn');
     return 0.1 + 0.3 * sev;
   }
   if (kind === 'fall') {
-    S.ch.hands = clamp(S.ch.hands + 0.05 + 0.25 * sev); S.ch.fatigue = clamp(S.ch.fatigue + 0.1 + 0.2 * sev); S.ch.focus = clamp(S.ch.focus - 0.1);
+    S.body.hands = clamp(S.body.hands + 0.05 + 0.25 * sev); S.body.fatigue = clamp(S.body.fatigue + 0.1 + 0.2 * sev); S.body.focus = clamp(S.body.focus - 0.1);
     log(`Fell hard: ${sev < 0.4 ? 'scraped palms and a bruised knee' : 'skinned hands and a hip that will be black tomorrow'}.${why}`, 'warn');
     return 0.15;
   }
   if (kind === 'cut') {
-    S.ch.germs = clamp(S.ch.germs + 0.2);
-    S.wound = { at: now(), sev };
-    if (S.rng.chance(0.25 + 0.5 * sev)) S.pendingSick.push({ at: now() + 30, severity: 0.15 + 0.35 * sev, text: 'The cut on my shin is hot, swollen and weeping: it’s gone bad.', wound: true });
+    S.body.germs = clamp(S.body.germs + 0.2);
+    S.body.wound = { at: now(), sev };
+    if (S.rng.chance(0.25 + 0.5 * sev)) S.body.pendingSick.push({ at: now() + 30, severity: 0.15 + 0.35 * sev, text: 'The cut on my shin is hot, swollen and weeping: it’s gone bad.', wound: true });
     log(`A broken branch tore a gash in my shin.${why} I should wash it soon.`, 'warn');
     return 0.1;
   }
   // a slip into the water: soaked, and maybe a wrenched ankle too
   soakMe(0.8);
-  S.ch.fatigue = clamp(S.ch.fatigue + 0.05);
-  if (sev > 0.5) S.limp = Math.max(S.limp ?? 0, 0.4 * sev);
+  S.body.fatigue = clamp(S.body.fatigue + 0.05);
+  if (sev > 0.5) S.body.limp = Math.max(S.body.limp ?? 0, 0.4 * sev);
   log(`Slipped on a wet stone and went down in the water: soaked, everything I carry with me${sev > 0.5 ? ', and my ankle wrenched' : ''}.${why}`, 'warn');
   return 0.1;
 }
@@ -1020,7 +1023,7 @@ function travelTo(target, label) {
     if (g && (g.est.x !== from.x || g.est.y !== from.y)) { info.sus.est = g.est; return travelTo({ ...g.est, suspect: info.sus.id }, label); }
     return missedTarget(target, from);
   }
-  const thirsty = S.hyd < 0.55 && !waterHere(from); // standing at water, thirst is no reason to stop at the next
+  const thirsty = S.body.hyd < 0.55 && !waterHere(from); // standing at water, thirst is no reason to stop at the next
   let n = 0;
   const { sus, dest, st, area, truePos } = targetInfo(target);
   // Homing: every few steps (or when asked outright) a fresh fix on the target, if I can still see or hear it.
@@ -1038,13 +1041,13 @@ function travelTo(target, label) {
   const trip = walk(S.L, from, target, { rng: S.rng, maxHours: budget, resense, arrived, stopAtWater: thirsty, driftSd: dest ? 1.5 : 2.5, toWater });
   const knownBefore = S.sites.length;
   const hours = onTheMove(trip.path, trip.hours * (S.looking ? 1.25 : 1)); // looking as I go slows me down; a limp too
-  if (S.looking) S.ch.focus = clamp(S.ch.focus - 0.05);
+  if (S.looking) S.body.focus = clamp(S.body.focus - 0.05);
   pass(hours, 300);
   for (const sw of trip.sweeps ?? []) { // the current took me
     const m = Math.round(Math.hypot(sw.to.x - sw.from.x, sw.to.y - sw.from.y) * CELL / 10) * 10;
     log(`Mid-stream the current knocked my feet from under me and carried me ${m} m downstream before I could claw my way out. Soaked through, everything I carry with me.`, 'warn');
     soakMe(1);
-    S.ch.fatigue = clamp(S.ch.fatigue + 0.15);
+    S.body.fatigue = clamp(S.body.fatigue + 0.15);
     if (S.rng.chance(0.4)) { const c = cellOf(sw.to.x, sw.to.y); pass(hurt({ kind: S.rng.chance(0.5) ? 'fall' : 'ankle', sev: clamp(S.rng.logNormal(0.3, 0.5), 0.05, 0.9) }, skyNow(), { why: ['the current'], c }), 100); }
   }
   const reached = st || area ? arrived(trip.end) : atTarget(trip.end, targetInfo(target));
@@ -1106,69 +1109,50 @@ function look(s, skill) {
 
 // ------------------------------------------------------------ time, needs, body
 
-// What changes in the sky gets a line in the journal: rain starting or stopping, fog, a storm, nightfall.
-const WET_WORDS = { rain: 'Rain set in.', storm: 'Thunder, then a downpour: a storm.', snow: 'Snow began to fall.', blizzard: 'The snow thickened and the wind got up: hard to see anything.', fog: 'Fog crept in; I can hardly see a stone’s throw.' };
-function noteSky(a, b) {
-  if (a.weather !== b.weather) {
-    if (WET_WORDS[b.weather] && !(a.wet && b.wet)) log(WET_WORDS[b.weather], 'note');
-    else if (a.weather === 'fog' && b.weather !== 'fog') log('The fog lifted.', 'note');
-    else if (a.wet && !b.wet) log(`The ${a.weather === 'snow' || a.weather === 'blizzard' ? 'snow' : 'rain'} stopped.`, 'note');
-    if (b.wet && fireHere() && !site().hut && !a.wet) log('Rain on the fire: it won’t last long like this.', 'warn');
-  }
-  if (a.sunAlt >= -6 && b.sunAlt < -6) log('Night fell.', 'note');
+// ------------------------------------------------------------ processes
+//
+// Every process (acts.js) names the state it reads and may change, by namespace. Here are the
+// namespaces, bound to the game's state; 'here' is worked out from the place, the sky and the ground.
+const HERE = {
+  water: () => (waterHere(site()) ? (w => ({ name: w.name, pathogen: w.hidden?.pathogen ?? 0.2 }))(waterSource(site())) : null),
+  fire: () => fireHere(),
+  dark: () => isNight(),
+  shelter: () => shelterHere(site(), groundNow()),
+  wind: () => windAt(S.world, S.day, S.t),
+  ambient: () => ambient(),
+  waterTempC: () => ({ running: waterTempC(false), still: waterTempC(true) }),
+  cond: () => condNow(),
+  factors: () => siteFactors(S.world.seed, site().key, S.world.environment.microhabitats.find(x => x.id === site().micro)),
+  marsh: () => smellsToday().some(x => x.kind === 'marsh' && Math.hypot(x.x - site().x, x.y - site().y) < 15),
+  seeing: () => senseLimits(true) || null,
+};
+const stateFor = (binding = {}) => stateOver({
+  body: S.body, site: site(), sky: skyNow, ground: groundNow, world: S.world, mem: S.mem, lore: S.lore, mind: S.mind, milestones: S.milestones, inv: S.inv,
+  clock: () => ({ day: S.day, t: S.t, now: now() }), ...binding,
+}, { here: HERE });
+const dice = () => ({ act: S.rng, place: key => makeRng(`${S.world.seed}/${key}`) });
+// Do a process: check it can be done, let its time pass (as of when it's done, the state it reads),
+// run it on a copy of what it reads, put back what it changed, take what it used up, add what it made,
+// and say what it has to say. The last one done is kept (S.lastAct) for looking into.
+function perform(proc, binding = {}, { quiet = false } = {}) {
+  let v = viewFor(proc, stateFor(binding));
+  const ok = readyFor(proc, v);
+  if (ok !== true) { log(ok, 'warn'); return null; }
+  const hours = hoursOf(proc, v);
+  if (hours > 0) { pass(hours, kcalOf(proc, v)); v = viewFor(proc, stateFor(binding)); }
+  const fx = rehearse(proc, v, dice());
+  apply(fx, stateFor(binding));
+  for (const it of fx.use) remove(S.inv.find(i => i.uid === it.uid));
+  fx.made = fx.make.map(m => addItem(m.name, m.kind, m.props, m.from, m.extra));
+  if (!quiet) for (const [text, kind] of fx.say) log(text, kind);
+  if (!quiet && !TICKS.includes(proc)) S.lastAct = { id: proc.id, binding: Object.keys(binding), view: v, fx };
+  return fx;
 }
-// Once a night, while I'm awake in the dark: what the moon is doing (or that cloud hides the sky).
-function noteMoon(k) {
-  if (k.sunAlt >= -6) return;
-  const night = k.t < 12 ? S.day - 1 : S.day; // a night belongs to the day it began
-  if (S.moonNoted === night) return;
-  S.moonNoted = night;
-  log(moonLine(k), 'note');
-}
-function moonLine(k) {
-  const m = k.moon, up = m.alt > 0, cloud = ['overcast', 'rain', 'storm', 'snow', 'blizzard', 'fog'].includes(k.weather);
-  if (cloud) return 'Cloud over everything: a black night.';
-  if (!up || m.illum < 0.05) return m.illum < 0.05 ? 'No moon; only starlight.' : 'The moon isn’t up yet; only starlight.';
-  return `A ${moonWords(m.phase)}${m.illum > 0.9 ? ', bright enough to see by' : m.illum < 0.3 ? ', not much use' : ''}.`;
-}
+
 // ------------------------------------------------------------ the passing of time
 //
-// Time passes in half-hour ticks, and each tick runs every process in TICKS in turn. Each process
-// reads the state it cares about (the sky, the ground, the site, my body and kit) and changes only its
-// own: none calls another. A new system is a new entry here, reading whatever state it needs.
-// ctx: { dt (hours), kcal (the work's rate), was (the sky at the tick's start), k (the sky now), s (where I am) }
-const TICKS = [
-  { name: 'sky', run: ({ was, k }) => noteSky(was, k) },
-  { name: 'moon', run: ({ k }) => noteMoon(k) },
-  { name: 'metabolism', run: ({ dt, kcal }) => {
-    S.hyd -= dt * (0.032 + 0.02 * Math.max(0, kcal - 150) / 250 + 0.02 * S.sick + (skyNow().tempC > 28 ? 0.015 : 0)); // more in the heat
-    S.energy -= dt * kcal / 24000; // the stock holds about ten days of reserves
-    S.gut = Math.max(0, S.gut - 0.12 * dt); // a stomach-full clears in half a day or so
-    const fade = Math.exp(-dt / 24); for (const m of ['p', 'f', 'c']) S.macro[m] *= fade; // roughly the last day's diet
-  } },
-  { name: 'healing', run: ({ dt }) => { if (S.limp > 0) { S.limp = Math.max(0, S.limp - dt * 0.1 / 24); if (!S.limp) log('My ankle feels sound again.', 'note'); } } },
-  { name: 'warming', run: ({ dt, s }) => { if (S.chill > 0) S.chill = Math.max(0, S.chill - dt * (0.15 + (fireHere() ? 0.3 : 0)) * (S.clothes.wet > 0.5 ? 0.4 : 1)); } }, // moving, and a fire, warm me back up; wet clothes slow it
-  { name: 'clothes', run: ({ dt, k, s }) => { // rain soaks them out in the open; wind, sun and a fire dry them
-    const sh = s.hut ? SHELTERS.hut : shelterHere(s, groundNow()), pour = { storm: 2, blizzard: 1.5 }[k.weather] ?? 1;
-    if (k.wet) S.clothes.wet = clamp(S.clothes.wet + dt * 0.3 * pour * (1 - sh.rainBlock));
-    else S.clothes.wet = clamp(S.clothes.wet - dt * (0.06 + 0.1 * windAt(S.world, S.day, S.t).strength + (fireHere() ? 0.4 : 0) + (k.weather === 'clear' && k.sunAlt > 20 ? 0.1 : 0)));
-  } },
-  { name: 'germs', run: ({ dt }) => {
-    if (S.inv.length > 1) touch(S.inv, 0.01 * dt, false); // things carried together share what's on them
-    const warm = Math.pow(2, (skyNow().tempC - 20) / 10); // food spoils faster in the warm
-    for (const it of S.inv) if (it.kind === 'food' && it.props.chem.water > 0.5) it.props.germs = Math.min(1, it.props.germs + dt * 0.008 * warm * (1 - it.props.germs));
-  } },
-  { name: 'drying', run: ({ dt, k }) => { const nearFire = fireHere(); for (const it of S.inv) if (it.props.moisture !== undefined && it.kind !== 'food') dry(it, (dt / 24) * (nearFire ? 3 : 1) * (k.wet ? 4 : 1), ambient()); } },
-  { name: 'fire', run: ({ dt, k, s }) => { if (fireHere() && k.wet && !s.hut) s.fireUntil -= dt * ({ storm: 3, blizzard: 3, rain: 1, snow: 0.5 }[k.weather] ?? 0); } }, // rain eats a fire in the open
-  { name: 'illness', run: () => {
-    for (const p of [...S.pendingSick]) if (now() >= p.at) {
-      S.sick = clamp(S.sick + p.severity);
-      S.pendingSick.splice(S.pendingSick.indexOf(p), 1);
-      if (p.lore) S.lore[p.lore].sick++;
-      log(p.text, 'warn');
-    }
-  } },
-];
+// Time passes in half-hour ticks, and each tick runs every process in TICKS (acts.js) in turn: each
+// reads the state it cares about and changes only its own; none calls another.
 function pass(hours, kcal = 150) {
   const steps = Math.max(1, Math.ceil(hours / 0.5));
   const dt = hours / steps;
@@ -1176,20 +1160,19 @@ function pass(hours, kcal = 150) {
     const was = skyNow();
     S.t += dt;
     if (S.t >= 24) { S.t -= 24; S.day++; } // past midnight
-    const ctx = { dt, kcal, was, k: skyNow(), s: site() };
-    for (const tick of TICKS) tick.run(ctx);
+    for (const tick of TICKS) perform(tick, { tick: { dt, kcal }, was });
   }
-  S.hyd = clamp(S.hyd); S.energy = clamp(S.energy);
-  const cap = 1 - 0.6 * Math.max(0, 0.4 - S.hyd) / 0.4 - 0.4 * Math.max(0, 0.3 - S.energy) / 0.3 - 0.5 * S.sick - 0.3 * (S.chill ?? 0);
-  S.ch.focus = Math.min(S.ch.focus, clamp(cap, 0.1, 1));
-  if (S.hyd <= 0.02 || S.energy <= 0.02 || S.sick >= 0.95) collapse();
+  S.body.hyd = clamp(S.body.hyd); S.body.energy = clamp(S.body.energy);
+  const cap = 1 - 0.6 * Math.max(0, 0.4 - S.body.hyd) / 0.4 - 0.4 * Math.max(0, 0.3 - S.body.energy) / 0.3 - 0.5 * S.body.sick - 0.3 * (S.body.chill ?? 0);
+  S.body.focus = Math.min(S.body.focus, clamp(cap, 0.1, 1));
+  if (S.body.hyd <= 0.02 || S.body.energy <= 0.02 || S.body.sick >= 0.95) collapse();
 }
 
 function collapse() {
-  const why = S.hyd <= 0.02 ? 'thirst' : S.energy <= 0.02 ? 'hunger' : 'sickness';
+  const why = S.body.hyd <= 0.02 ? 'thirst' : S.body.energy <= 0.02 ? 'hunger' : 'sickness';
   log(`Everything went grey. I lay down where I was and lost the rest of the day to ${why}.`, 'warn');
   S.collapsed++;
-  S.hyd = Math.max(S.hyd, 0.35); S.energy = Math.max(S.energy, 0.12); S.sick = Math.min(S.sick, 0.6);
+  S.body.hyd = Math.max(S.body.hyd, 0.35); S.body.energy = Math.max(S.body.energy, 0.12); S.body.sick = Math.min(S.body.sick, 0.6);
   sleep(true);
 }
 
@@ -1211,21 +1194,13 @@ function sleep(forced = false) {
   const hours = (wakeDay - S.day) * 24 + wake - S.t;
   const biterKind = !banked && ['mosquito', 'gnat'].find(k => S.world.animals.some(a => a.traits.key === k && (waterHere(s) || a.habitats.some(h => h.micro === s.micro))));
   const meanSoak = (S.world.environment.precipMm / 365) / 0.15;
-  const tally = { q: 0, n: 0, loss: {}, cause: {}, lowC: Infinity }, limpBefore = S.limp ?? 0;
+  const tally = { q: 0, n: 0, loss: {}, cause: {}, lowC: Infinity }, limpBefore = S.body.limp ?? 0;
   let day = S.day, t = S.t;
   for (let h = 0; h < hours - 1e-9; h += 1) {
     const dt = Math.min(1, hours - h), k = skyAt(S.world, day, t), g = groundAt(S.world, day);
     const env = { tempC: k.tempC, windMs: windAt(S.world, day, t).ms, precip: k.wet ? k.weather : null, groundWet: clamp(g.soak / (2 * meanSoak)), snowCm: snowCm(S.L, g, c), biters: !!biterKind && k.tempC >= 10 };
     const fireC = banked ? (s.hut ? 7 : 5) * Math.max(0.2, 1 - h / hours) : 0; // the banked fire, burning down
-    const r = sleepHour({ env, shelter: shelterHere(s, g), bed: s.bed ?? null, clothes: S.clothes, fireC, body: { energy: S.energy, hyd: S.hyd, limp: S.limp ?? 0 } });
-    S.ch.fatigue = clamp(S.ch.fatigue - 0.12 * (0.35 + 0.65 * r.quality) * dt); // even broken sleep rests me some
-    S.chill = clamp((S.chill ?? 0) + r.chill * dt);
-    S.energy = clamp(S.energy - dt * (0.0045 + r.kcal / 24000)); // asleep, about a hundred kcal an hour, more shivering
-    S.hyd = clamp(S.hyd - dt * 0.015);
-    S.sick = clamp(S.sick - dt * 0.03 * r.quality);
-    if (S.limp > 0) S.limp = Math.max(0, S.limp - dt * 0.008 * r.quality);
-    S.clothes.wet = clamp(S.clothes.wet + dt * (r.wetting - r.drying));
-    if (s.bed && r.wetting) s.bed.wet = clamp(s.bed.wet + dt * 0.6 * r.wetting);
+    const r = perform(SLEEP_HOUR, { night: env, shelter: shelterHere(s, g), fireC, dt }, { quiet: true }).report;
     tally.q += r.quality * dt; tally.n += dt; tally.lowC = Math.min(tally.lowC, k.tempC);
     for (const [why, v] of Object.entries(r.loss)) tally.loss[why] = (tally.loss[why] ?? 0) + v * dt;
     if (r.loss.cold > 0) tally.cause[r.coldCause] = (tally.cause[r.coldCause] ?? 0) + r.loss.cold * dt;
@@ -1233,8 +1208,8 @@ function sleep(forced = false) {
   }
   const q = tally.n ? tally.q / tally.n : 1;
   for (const it of S.inv) if (it.props.moisture !== undefined && it.kind !== 'food') dry(it, hours / 24, s.hut ? ambient() - 0.03 : ambient());
-  S.ch.hands *= Math.pow(0.55, 0.4 + 0.6 * q); S.ch.callus *= 0.995; S.ch.focus = clamp(0.4 + 0.7 * q, 0.3, 1); // a good night mends; a bad one, less
-  if (limpBefore > 0 && !S.limp) log('My ankle feels sound again.', 'note');
+  S.body.hands *= Math.pow(0.55, 0.4 + 0.6 * q); S.body.callus *= 0.995; S.body.focus = clamp(0.4 + 0.7 * q, 0.3, 1); // a good night mends; a bad one, less
+  if (limpBefore > 0 && !S.body.limp) log('My ankle feels sound again.', 'note');
   const seasonBefore = seasonOf(S.world, dayOfYear(S.world, S.day));
   S.day = wakeDay; S.t = wake;
   const seasonNow = seasonOf(S.world, dayOfYear(S.world, S.day));
@@ -1250,32 +1225,32 @@ function sleep(forced = false) {
   };
   const reasons = Object.entries(per).filter(([, v]) => v >= 0.08).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k]) => say[k]);
   const words = q >= 0.8 ? 'Slept warm and deep.' : q >= 0.55 ? 'Slept well enough.' : q >= 0.35 ? `A ${per.cold >= 0.15 ? 'cold' : 'restless'}, broken night.` : per.cold >= 0.3 ? 'Barely slept; cold to the bone.' : 'Barely slept.';
-  const chill = S.chill >= 0.6 ? ' I woke shaking, stiff and grey with cold.' : S.chill >= 0.3 ? ' I woke chilled through.' : '';
+  const chill = S.body.chill >= 0.6 ? ' I woke shaking, stiff and grey with cold.' : S.body.chill >= 0.3 ? ' I woke chilled through.' : '';
   if (!forced) log(`${words}${reasons.length ? ` ${cap(reasons.join(', and '))}.` : ''}${chill}${banked ? ' Banked the fire with two pieces of wood; it was still glowing at dawn.' : ''}${s.hut && q >= 0.55 ? ' The hut kept the night out.' : ''}${s.bed && !s.hut && q >= 0.55 ? ' The bed of leaves helped.' : ''}`, 'act');
-  if (S.chill >= 0.6 && S.sick < 0.3 && !S.pendingSick.some(p => p.chill) && S.rng.chance(S.chill - 0.4)) S.pendingSick.push({ at: now() + 12, severity: 0.15 + 0.2 * (S.chill - 0.6), text: 'A chill has settled on my chest: aching, shivery, coughing.', chill: true }); // a night too cold can make me ill (once, not again while I'm ill)
-  for (const p of [...S.pendingSick]) if (now() >= p.at) { S.sick = clamp(S.sick + p.severity); S.pendingSick.splice(S.pendingSick.indexOf(p), 1); log(p.text, 'warn'); }
+  if (S.body.chill >= 0.6 && S.body.sick < 0.3 && !S.body.pendingSick.some(p => p.chill) && S.rng.chance(S.body.chill - 0.4)) S.body.pendingSick.push({ at: now() + 12, severity: 0.15 + 0.2 * (S.body.chill - 0.6), text: 'A chill has settled on my chest: aching, shivery, coughing.', chill: true }); // a night too cold can make me ill (once, not again while I'm ill)
+  for (const p of [...S.body.pendingSick]) if (now() >= p.at) { S.body.sick = clamp(S.body.sick + p.severity); S.body.pendingSick.splice(S.body.pendingSick.indexOf(p), 1); log(p.text, 'warn'); }
 }
 
 function bodyWords() {
   const w = [];
-  const ch = S.ch;
-  w.push(S.hyd > 0.7 ? 'Not thirsty.' : S.hyd > 0.45 ? 'Thirsty.' : S.hyd > 0.2 ? 'Very thirsty; my head aches.' : 'Parched. I need water now.');
-  w.push(S.energy > 0.68 ? 'Fed enough.' : S.energy > 0.45 ? 'Hungry.' : S.energy > 0.25 ? 'Very hungry; weak in the legs.' : 'Starving and shaky.');
+  const ch = S.body;
+  w.push(S.body.hyd > 0.7 ? 'Not thirsty.' : S.body.hyd > 0.45 ? 'Thirsty.' : S.body.hyd > 0.2 ? 'Very thirsty; my head aches.' : 'Parched. I need water now.');
+  w.push(S.body.energy > 0.68 ? 'Fed enough.' : S.body.energy > 0.45 ? 'Hungry.' : S.body.energy > 0.25 ? 'Very hungry; weak in the legs.' : 'Starving and shaky.');
   w.push(ch.fatigue < 0.3 ? 'Rested.' : ch.fatigue < 0.6 ? 'Getting tired.' : ch.fatigue < 0.85 ? 'Tired.' : 'Exhausted.');
   w.push(ch.hands < 0.25 ? 'Hands fine.' : ch.hands < 0.5 ? 'Palms sore.' : ch.hands < 0.8 ? 'Palms blistered.' : 'Blisters open; palms raw.');
   if (ch.callus > 0.25) w.push('Calluses forming.');
-  if (S.limp > 0.05) w.push(S.limp < 0.3 ? 'Ankle a little sore.' : S.limp < 0.6 ? 'Limping on a swollen ankle.' : 'Hobbling; the ankle can barely take my weight.');
-  if (S.wound && now() - S.wound.at < 48) w.push('A gash on my shin.');
-  if (S.clothes.wet > 0.15) w.push(S.clothes.wet > 0.6 ? 'Clothes soaked through.' : 'Clothes damp.');
-  if ((S.chill ?? 0) > 0.15) w.push(S.chill > 0.5 ? 'Chilled to the core; I can’t stop shivering.' : 'Still chilled.');
+  if (S.body.limp > 0.05) w.push(S.body.limp < 0.3 ? 'Ankle a little sore.' : S.body.limp < 0.6 ? 'Limping on a swollen ankle.' : 'Hobbling; the ankle can barely take my weight.');
+  if (S.body.wound && now() - S.body.wound.at < 48) w.push('A gash on my shin.');
+  if (S.body.clothes.wet > 0.15) w.push(S.body.clothes.wet > 0.6 ? 'Clothes soaked through.' : 'Clothes damp.');
+  if ((S.body.chill ?? 0) > 0.15) w.push(S.body.chill > 0.5 ? 'Chilled to the core; I can’t stop shivering.' : 'Still chilled.');
   w.push(ch.focus > 0.7 ? 'Thinking clearly.' : ch.focus > 0.4 ? 'Thinking feels slow.' : 'Thinking feels foggy.');
-  const mt = S.macro.p + S.macro.f + S.macro.c;
-  if (mt > 600 && S.macro.p / mt > 0.33) w.push('Too much lean food lately; I crave fat or starch.');
-  else if (mt > 900 && S.macro.f / mt < 0.08) w.push('Craving something fatty.');
-  if (S.gut > 1.1) w.push('Full.');
-  if (S.ch.germs > 0.35) w.push('Filthy hands.');
-  if (S.showProps) w.push(`(hands: germs ${S.ch.germs.toFixed(2)})`);
-  if (S.sick > 0.1) w.push(S.sick > 0.6 ? 'Badly sick.' : S.sick > 0.3 ? 'Sick to my stomach.' : 'A bit queasy.');
+  const mt = S.body.macro.p + S.body.macro.f + S.body.macro.c;
+  if (mt > 600 && S.body.macro.p / mt > 0.33) w.push('Too much lean food lately; I crave fat or starch.');
+  else if (mt > 900 && S.body.macro.f / mt < 0.08) w.push('Craving something fatty.');
+  if (S.body.gut > 1.1) w.push('Full.');
+  if (S.body.germs > 0.35) w.push('Filthy hands.');
+  if (S.showProps) w.push(`(hands: germs ${S.body.germs.toFixed(2)})`);
+  if (S.body.sick > 0.1) w.push(S.body.sick > 0.6 ? 'Badly sick.' : S.body.sick > 0.3 ? 'Sick to my stomach.' : 'A bit queasy.');
   const wd = windNow();
   w.push(`${wd.strength < 0.35 ? 'A light breeze' : wd.strength < 0.7 ? 'A steady breeze' : 'A strong wind'} from the ${bearingWord(wd.from)}.`);
   return w;
@@ -1298,14 +1273,7 @@ function addItem(name, kind, props, from, extra = {}) {
 // leaves the water's own germs behind. Eating germs risks a sour gut a day later. (Lye: later.)
 const GERMS = { egg: 0.15, fruit: 0.05, nut: 0.05, seed: 0.05, grain: 0.08, pod: 0.06, storage: 0.3, root: 0.3, leaf: 0.12, stem: 0.1, flower: 0.05, innerBark: 0.08, invertebrate: 0.3, fattyGrub: 0.3, shellfish: 0.45, mushroom: 0.15, lichen: 0.1, honey: 0.02,
   stone: 0.05, edge: 0.05, wood: 0.04, shoot: 0.03, stalk: 0.03, tindermat: 0.05, tinder: 0.05, bone: 0.4, finebone: 0.4, moss: 0.15, diggingstick: 0.15, board: 0.03, spindle: 0.03 };
-function touch(items, k = 0.4, hands = true) {
-  const xs = items.filter(Boolean);
-  const all = [...xs.map(i => i.props.germs ?? 0), ...(hands ? [S.ch.germs] : [])];
-  if (!all.length) return;
-  const m = all.reduce((a, b) => a + b, 0) / all.length;
-  for (const i of xs) i.props.germs = Math.round(((i.props.germs ?? 0) + k * (m - (i.props.germs ?? 0))) * 1000) / 1000;
-  if (hands) S.ch.germs += k * (m - S.ch.germs);
-}
+const touch = (items, k = 0.4, hands = true) => mix(items, S.body, k, hands);
 const waterGerms = () => waterSource(site()).hidden?.pathogen ?? 0.25;
 const waterTempC = still => { const e = S.world.environment.meanTempC; return site().micro === 'spring' ? e : still ? e + 3 : Math.max(2, e - 1); };
 
@@ -1340,7 +1308,6 @@ function impressions(it) {
 
 // ------------------------------------------------------------ food memory
 // Keyed the way the character perceives things: a lookalike shares its model's memory.
-const loreKey = (e, part) => `${e.lookalike?.mimics ?? e.id}:${part}`;
 const loreWords = l => (l.sick ? `made me sick ${l.sick > 1 ? `${l.sick} times` : 'once'}` : `ate fine ${l.ok > 1 ? `${l.ok} times` : 'once'}`);
 
 // ------------------------------------------------------------ gathering what has been noticed here
@@ -1432,7 +1399,7 @@ const NB_CELLS = s => { const out = []; for (let dy = -1; dy <= 1; dy++) for (le
 function stung(e) {
   if (!/stings/.test(e.defense ?? '')) return null;
   if (fireHere()) { log(`Smoke from the fire kept the ${pluralize(e.name)} sluggish; only a sting or two.`); return null; }
-  S.ch.hands = clamp(S.ch.hands + 0.2); S.sick = clamp(S.sick + 0.05);
+  S.body.hands = clamp(S.body.hands + 0.2); S.body.sick = clamp(S.body.sick + 0.05);
   log(`Stung again and again by the ${pluralize(e.name)}. Smoke would have calmed them.`, 'warn');
   return null;
 }
@@ -1514,7 +1481,7 @@ function pickSlot(recipe, slot, list) {
 const flakeItem = (f, label) => addItem(label, 'edge', f.props, { id: f.provenance?.source, name: f.provenance?.name ?? '', part: label, site: site().key });
 
 function craft(id, mode) {
-  const r = S.rng, ch = S.ch;
+  const r = S.rng, ch = S.body;
   const R = RECIPES.find(x => x.id === id);
   const pickd = Object.fromEntries(R.slots.map(([k, , list]) => [k, pickSlot(id, k, list())]));
   const prov = it => ({ name: it.from?.name ?? it.name, source: it.from?.id, site: it.from?.site });
@@ -1538,13 +1505,7 @@ function craftSwitch(id, mode, r, ch, R, pickd, prov, asEdge) {
         log(`Can’t strike a stone with itself; used the ${other.from.name} stone as the hammer.`);
       }
       const slab = ofKind('slab')[0];
-      const anvil = { props: { mass: slab ? 6000 : 1500 } };
-      const res = knapFlakes(r, ch, { props: core.props, provenance: prov(core) }, { props: hammer.props }, anvil);
-      pass(0.25, 200);
-      res.flakes.forEach(f => flakeItem(f, `flake, ${core.from.name}`));
-      log(res.flakes.length ? `Smashed the ${core.from.name} stone ${slab ? 'on the slab' : 'against a rock'}: ${res.flakes.length} usable flake${res.flakes.length > 1 ? 's' : ''}.` : `Smashed the ${core.from.name} stone; nothing but crumbs and blunt chunks.`);
-      if (res.flakes.length && !S.milestones.edge) { S.milestones.edge = true; log('My first cutting edge.', 'milestone'); }
-      if (S.rng.chance(0.25)) remove(core);
+      perform(KNAP, { core, hammer, anvil: { props: { mass: slab ? 6000 : 1500 }, slab: !!slab } });
       break;
     }
     case 'notch': {
@@ -1615,40 +1576,9 @@ function craftSwitch(id, mode, r, ch, R, pickd, prov, asEdge) {
       log(charred ? 'Hurried the stick over the fire and charred the tip; scraped off the black. Harder underneath, but the point is thinner.' : `Turned the point over the coals until it browned${careful ? ', slowly, a little at a time' : ''}. It rings harder when tapped.`);
       break;
     }
-    case 'pound': case 'grind': case 'chop': case 'roast': case 'leach': case 'soak': case 'dryfood': case 'stoneboil': {
-      const { food } = pickd;
-      const q = clamp(0.5 + 0.4 * ch.focus + S.rng.normal(0, 0.1));
-      let ex, hours, kcal = 180, tag, cond = {};
-      if (id === 'pound') { // a hard, heavy pounding stone does more per blow
-        const st = pickd.stone; cond.crushPower = clamp(st.props.hardness / 7, 0.3, 1) * clamp(Math.sqrt(st.props.mass / 800), 0.6, 1.2);
-        ex = { crush: 0.5 }; hours = 0.25; kcal = 260; tag = 'pounded';
-      } else if (id === 'grind') { // gritty stones grind; smooth ones polish
-        cond.rough = Math.max(...ofKind('stone').map(x => x.props.rough ?? 0.4));
-        ex = { grind: 0.9 }; hours = 0.75; kcal = 240; tag = 'ground';
-      } else if (id === 'chop') { const e = pickd.edge; cond.crushPower = 1; ex = { cut: 0.25 + 0.25 * (e.props.sharpness ?? 0.5) }; hours = 0.2; kcal = 150; tag = 'chopped'; e.props.sharpness = Math.max(0, e.props.sharpness - 0.01); }
-      else if (id === 'roast') { ex = { heat: { mode: 'roast', minutes: mode === 'careful' ? 25 : 10 } }; hours = mode === 'careful' ? 0.5 : 0.25; tag = 'roasted'; }
-      else if (id === 'leach' || id === 'soak') { hours = Number(mode); ex = { water: { mode: id === 'leach' ? 'running' : 'still', hours, tempC: waterTempC(id === 'soak') } }; kcal = 140; tag = `${id === 'leach' ? 'leached' : 'soaked'} ${hours} h`; }
-      else if (id === 'stoneboil') { // hot stones dropped into the basin; enough of them bring it to a boil, and some crack
-        const stones = ofKind('stone');
-        cond.heatPower = Math.min(1.2, 0.3 * stones.length + 0.1);
-        for (const st of stones) if (S.rng.chance((st.props.spall ?? 0.3) * 0.4)) { remove(st); log(`The ${st.name} burst with a crack in the fire.`, 'warn'); }
-        ex = { heat: { mode: 'boil', minutes: 20 } }; hours = 0.75; kcal = 220; tag = cond.heatPower >= 0.9 ? 'boiled' : 'simmered';
-        if (cond.heatPower < 0.9) log(`With only ${stones.length} stone${stones.length === 1 ? '' : 's'} the water never quite boiled.`);
-      } else { hours = mode === 'fire' ? 2 : 4; ex = { dry: mode === 'fire' ? 12 : 8 }; kcal = 140; tag = 'dried'; }
-      if (id === 'dryfood' && mode === 'fire' && !fireHere()) return log('There’s no fire here to dry it by.', 'warn');
-      if (id === 'dryfood' && mode === 'sun' && isNight()) return log('Not at night.', 'warn');
-      pass(hours, kcal);
-      const before = food.props.chem;
-      const after = expose(before, ex, q, cond);
-      if (id === 'roast' && mode === 'quick' && S.rng.chance(0.3)) { food.props.mass *= 0.85; log('Some of it charred black.'); }
-      food.props.mass = Math.round(food.props.mass * (1 - before.water) / Math.max(0.05, 1 - after.water) * 1000) / 1000; // water in or out changes the weight
-      food.props.chem = after;
-      food.notes = {}; // what I tasted before no longer holds
-      food.prep.push(tag);
-      food.name = `${food.base} (${food.prep.join(', ')})`;
-      log(`${{ pound: 'Pounded', grind: 'Ground', chop: 'Chopped up', roast: 'Roasted', leach: 'Left', soak: 'Soaked', dryfood: 'Dried', stoneboil: 'Stone-boiled' }[id]} the ${food.from.part} of the ${food.from.name}${id === 'leach' ? ` in the stream for ${hours} hours` : id === 'soak' ? ` for ${hours} hours` : id === 'dryfood' ? (mode === 'fire' ? ' by the fire' : ' in the sun') : id === 'stoneboil' ? ` in the ${site().basin.kind}` : ''}. ${cap(textureWords(after))} now.`);
+    case 'pound': case 'grind': case 'chop': case 'roast': case 'leach': case 'soak': case 'dryfood': case 'stoneboil':
+      perform(PREPARE(id), { food: pickd.food, mode, stone: pickd.stone, edge: pickd.edge, stones: ofKind('stone') });
       break;
-    }
     case 'basin': { // a hollow in rock, or a pit lined with clay, that holds water for hot-stone cooking
       const s = site();
       if (s.micro === 'claybank') { pass(1.5, 320); s.basin = { kind: 'clay-lined pit' }; log('Dug a pit beside the water and lined it with clay, smoothed wet. It holds water.'); }
@@ -1658,7 +1588,7 @@ function craftSwitch(id, mode, r, ch, R, pickd, prov, asEdge) {
     case 'wash': { // rinsing helps, but leaves the water's own germs behind
       const { thing } = pickd; pass(0.1, 120);
       thing.props.germs = Math.round((thing.props.germs * 0.3 + 0.4 * waterGerms()) * 1000) / 1000;
-      S.ch.germs = S.ch.germs * 0.5 + 0.3 * waterGerms();
+      S.body.germs = S.body.germs * 0.5 + 0.3 * waterGerms();
       log(`Washed the ${thing.name} in the water.`);
       return 'rinsed'; // hands and thing are rinsed, not mixed
     }
@@ -1699,7 +1629,7 @@ const DRILL_LINES = [
 
 // What a person would notice going wrong at the drill: the largest penalty in the performance score.
 function drillTrouble(board, spindle) {
-  const sk = S.ch.skills.firecraft, b = board.props, sp = spindle.props;
+  const sk = S.body.skills.firecraft, b = board.props, sp = spindle.props;
   const pen = [
     [0.6 * -Math.log(Math.max(b.notch, 1e-3)), 'dust spills out of the ragged notch instead of piling up'],
     [-Math.log(Math.max(ROLES.hearth({ ...b, moisture: 0, resin: 0 }, sk), 1e-3)), 'the board is too hard; the socket only polishes and barely chars'],
@@ -1716,12 +1646,12 @@ function drill(board, spindle, keepGoing) {
   const tally = {};
   let n = 0, stop = '';
   while (true) {
-    if (S.ch.hands > 0.85) { stop = 'my palms are raw; I have to stop'; break; }
-    if (S.ch.fatigue > 0.88) { stop = 'too tired to keep going'; break; }
+    if (S.body.hands > 0.85) { stop = 'my palms are raw; I have to stop'; break; }
+    if (S.body.fatigue > 0.88) { stop = 'too tired to keep going'; break; }
     if (isNight()) { stop = 'too dark'; break; }
     if (board.props.life <= 0.05) { stop = 'the board has burned through'; remove(board); break; }
     if (spindle.props.length < 40) { stop = 'the spindle is worn too short'; remove(spindle); break; }
-    const res = handDrill(S.rng, S.ch, board, spindle);
+    const res = handDrill(S.rng, S.body, board, spindle);
     pass(0.25, 400);
     n++;
     const line = DRILL_LINES.find(([f]) => f(res))[1];
@@ -1748,7 +1678,7 @@ function ember(e) {
   const tinder = ofKind('tinder')[0];
   if (!tinder) return log('An ember, but no tinder bundle ready. It faded in the notch.', 'warn');
   if (!has('wood')) return log('An ember, but no wood to feed a flame. It faded.', 'warn');
-  const res = lightFire(S.rng, S.ch, e, tinder);
+  const res = lightFire(S.rng, S.body, e, tinder);
   pass(0.15, 180);
   remove(tinder);
   if (res.success) {
@@ -1761,7 +1691,6 @@ function ember(e) {
 
 // ------------------------------------------------------------ survey: a formal count of what's in eyeshot
 
-const pluralize = n => (/fungus$/.test(n) ? n.replace(/fungus$/, 'fungi') : /louse$/.test(n) ? n.replace(/louse$/, 'lice') : /(s|sh|ch|x)$/.test(n) ? `${n}es` : /[^aeiou]y$/.test(n) ? `${n.slice(0, -1)}ies` : /(deer|fish|trout|elk|grouse|quail|boar)$/.test(n) ? n : `${n}s`);
 function shortDesc(e) {
   if (e.kind === 'stone') return e.cues.slice(0, 2).join('; ');
   if (e.kind === 'animal') return e.cues[0];
@@ -1780,86 +1709,10 @@ function shortDesc(e) {
   if (b.length < 3) b.push(t.pace > 0.3 ? 'soft leaves' : t.pace < -0.3 ? 'leathery leaves' : 'plain leaves');
   return b.slice(0, 4).join(', ');
 }
-function countWord(n) { return n < 10 ? String(Math.max(1, Math.round(n))) : `~${n < 30 ? Math.round(n / 5) * 5 : Math.round(n / 10) * 10}`; }
-function lineFor(e, n) {
-  const nm = e.name, c = countWord(n);
-  if (e.kind === 'stone') return `${c} heftable ${nm} cobbles`;
-  const colony = { ant: 'nest', termite: 'mound', wasp: 'nest' }[e.traits?.key];
-  if (colony) return `${c} ${nm} ${colony}${n > 1.5 ? 's' : ''}`;
-  if (e.kind === 'animal') return `${c} ${pluralize(nm)}`;
-  if (e.form === 'tree') return `${c} ${/tree$/.test(nm) ? pluralize(nm) : `${nm} trees`}`;
-  if (e.form === 'shrub') return `${c} ${/bush$/.test(nm) ? `${nm}es` : `${nm} bushes`}`;
-  if (e.form === 'grass') return `${c} tufts of ${nm}`;
-  if (e.form === 'mushroom') return `${c} ${pluralize(nm)}`;
-  if (e.form === 'moss' || e.form === 'lichen') return `${c} patches of ${nm}`;
-  return `${c} clumps of ${nm}`;
-}
-
 const memKeyE = e => e.lookalike?.mimics ?? e.id;
 // What is present at a site (same abundance the field notes use), as { e, n }.
-function presentAt(s) {
-  const m = S.world.environment.microhabitats.find(x => x.id === s.micro);
-  const f = siteFactors(S.world.seed, s.key, m);
-  const out = [];
-  for (const e of [...S.world.stones, ...S.world.plants, ...S.world.animals]) {
-    const h = e.habitats.find(x => x.micro === s.micro);
-    if (!h || (e.kind === 'animal' && e.cls !== 'invertebrate')) continue;
-    const ar = makeRng(`${S.world.seed}/abund/${e.id}/${s.key}`);
-    const count = (h.perInstance ?? h.pieces) * Math.exp((e.kind === 'stone' ? 0 : 0.35 * f.fertility) + 0.5 * ar.normal());
-    if (!ar.chance(1 - Math.exp(-count / 2))) continue;
-    out.push({ e, n: count });
-  }
-  return out;
-}
-function noteKnown(s, e) { s.known.add(e.id); (S.mem.entities[memKeyE(e)] ??= { seen: 0, traits: {} }).seen++; }
-
-// What the nose picks up close by, in a survey.
-function localSmells(s) {
-  const here = presentAt(s).map(r => r.e), out = [];
-  const nm = e => (S.mem.entities[memKeyE(e)] ? ` (${e.name})` : '');
-  const find = f => here.find(e => e.kind === 'plant' && f(e.traits ?? {}));
-  const resin = find(t => t.resin > 0.5); if (resin) out.push(`resin${nm(resin)}`);
-  const onion = find(t => t.defense === 'sulfur'); if (onion) out.push(`onion, underfoot${nm(onion)}`);
-  const mint = find(t => t.defense === 'aromatic'); if (mint) out.push(`something sharp and minty${nm(mint)}`);
-  const fruit = find(t => ['berry', 'drupe'].includes(t.fruit)); if (fruit) out.push(`ripe fruit${nm(fruit)}`);
-  if (here.some(e => e.form === 'mushroom')) out.push('damp, mushroomy earth');
-  if (here.some(e => e.traits?.key === 'bee')) out.push('a waxy sweetness where bees are working');
-  if (here.some(e => e.traits?.key === 'fly') && S.rng.chance(0.4)) out.push('droppings somewhere close, by the flies');
-  if (S.world.animals.some(a => a.traits.key === 'predator' && a.habitats.some(h => h.micro === s.micro)) && S.rng.chance(0.3)) out.push('a musky reek where something has marked its ground');
-  if (s.micro === 'pond' && smellsToday().some(x => x.kind === 'marsh' && Math.hypot(x.x - s.x, x.y - s.y) < 15)) out.push('stagnant water and rotting reeds');
-  return out;
-}
-
-function survey(s) {
-  const rows = [], fresh = [];
-  noteTrail(S.mem, s.key);
-  const memKey = memKeyE, cond = condNow(s), cover = (1 - Math.min(1, cond.snowCm / 20)) * (1 - 0.5 * cond.litter); // snow and leaves hide what's low down
-  for (const { e, n: count } of presentAt(s)) {
-    if (e.cryptic) continue; // under stones, logs and bark: only poking around finds these
-    const low = ['herb', 'grass', 'moss', 'lichen', 'mushroom'].includes(e.form) || e.kind !== 'plant';
-    const now = e.kind === 'animal' ? animalNow(e, cond) : null;
-    if (now && !now.here) continue; // away or asleep for the season
-    const visible = (e.kind === 'animal' ? 0.6 * now.seen : { herb: 0.85, grass: 0.9, mushroom: 0.6, moss: 0.9, lichen: 0.8 }[e.form] ?? 0.97) * cond.light * (low ? cover : 1) * (e.kind === 'plant' ? Math.min(1.2, plantNow(S.world, e, cond.g).notice) : 1);
-    if (!S.rng.chance(visible)) continue;
-    if (!S.mem.entities[memKey(e)] && !fresh.includes(e)) fresh.push(e);
-    rows.push({ e, n: count, text: lineFor(e, count) });
-    noteKnown(s, e);
-  }
-  // animal sign: what's been left behind, not the animals themselves
-  for (const a of S.world.animals.filter(a => a.cls !== 'invertebrate' && a.signs && a.habitats.some(h => h.micro === s.micro))) {
-    if (!animalNow(a, cond).here || !S.rng.chance((1 - Math.exp(-a.perKm2 * 0.3)) * cond.light * (cond.snowCm > 2 ? 1.5 : 1 - 0.6 * cond.litter))) continue; // fresh sign shows in snow, hides under leaves
-    const known = S.mem.entities[memKey(a)];
-    const sign = a.signs.damage ?? (a.signs.track ? `sets of ${a.signs.track.type}` : a.signs.den);
-    if (!sign) continue;
-    rows.push({ n: 0.5, text: `${/^sets/.test(sign) ? 'a few' : '1'} ${sign.replace(/^(the|a) /, '')}${known ? ` (${a.name})` : ', left by some animal'}` });
-  }
-  for (const t of boneLines(boneFinds(s, 0.35))) rows.push({ n: 0.4, text: t });
-  rows.sort((a, b) => b.n - a.n);
-  const water = S.world.water.find(w => w.micro === (s.micro === 'streambed' ? 'streambank' : s.micro));
-  const sm = localSmells(s);
-  const lines = [...(water ? [waterHere(s) ? `water: ${water.name}` : 'water: none now; the bed is dry'] : []), ...rows.map(r => r.text), ...(sm.length ? [`smells: ${sm.join('; ')}`] : []), ...namingSentences(fresh, S.mem, s.key, entity, S.rng)];
-  log(`Surveying what I can see from here:\n${lines.join('\n')}`, 'survey');
-}
+const presentAt = s => populationAt(S.world, s.micro, s.key, siteFactors(S.world.seed, s.key, S.world.environment.microhabitats.find(x => x.id === s.micro)), dice().place);
+const noteKnown = (s, e) => knowIt(s, S.mem, e);
 
 // ------------------------------------------------------------ poking around
 //
@@ -1869,7 +1722,7 @@ function survey(s) {
 // ground covered by 1 + 1.5 × its hardness; poking blunts a soft stick faster than a hard one.
 const bestStick = () => ofKind('diggingstick').sort((a, b) => b.props.hardness - a.props.hardness)[0] ?? null;
 function pokeAround(s) {
-  S.ch.germs += 0.25 * (0.45 - S.ch.germs); // soil and rot under the nails
+  S.body.germs += 0.25 * (0.45 - S.body.germs); // soil and rot under the nails
   const stick = bestStick();
   const reach = stick ? 1 + 1.5 * stick.props.hardness : 1;
   const rows = [], fresh = [];
@@ -1895,38 +1748,7 @@ function pokeAround(s) {
   log(rows.length ? `Poking around (${how}):\n${[...rows.map(r => r.text), ...named].join('\n')}` : `Poked around for half an hour (${how}); nothing worth having.`, 'survey');
 }
 
-// ------------------------------------------------------------ bones
-//
-// How many bones lie about, and of what size. For each vertebrate living in this microhabitat:
-//   finds  ∝  density × (1 / lifespan) × persistence × visibility
-// with lifespan ~ mass^0.25 (allometry), visibility ~ bone length ~ mass^(1/3), and persistence rising
-// steeply with size: a songbird carcass is usually gone to scavengers within days, while a large
-// mammal's long bones weather on the surface for years. Taking persistence ~ mass^1 (a judgment that
-// spans days at tens of grams to years at tens of kilograms), the exponents sum to about one, so
-// bone supply tracks standing biomass: density × mass. Bones show on open ground and hide in leaf litter.
-// Fine bones (birds' hollow bones, anything under 3 kg) suit needles and awls; big long bones suit
-// handles and, smashed, give sharp splinters.
-const BONE_VIS = { glade: 1.3, outcrop: 1.3, scree: 1.3, streambed: 1.2, edge: 1, claybank: 1, streambank: 0.8, pond: 0.8, spring: 0.8, woodland: 0.6, deadfall: 0.6 };
-const isFineBoned = a => /bird|soarer|fish|frog|lizard/.test(a.traits.key ?? '') || (a.traits.mass ?? 0) < 3;
-function boneFinds(s, effort) { // effort: 1 = half an hour looking for nothing else
-  const vis = BONE_VIS[s.micro] ?? 1;
-  const found = { fine: 0, big: 0 };
-  for (const a of S.world.animals) {
-    if (a.cls === 'invertebrate' || !a.habitats.some(h => h.micro === s.micro)) continue;
-    const mu = effort * vis * (a.perKm2 ?? 0) * (a.traits.mass ?? 0) / 600; // expected finds; 600 kg/km² per find is tuning
-    let n = 0, L = Math.exp(-mu), p = 1; // Poisson draw
-    do { n++; p *= S.rng.next(); } while (p > L && n < 20);
-    found[isFineBoned(a) ? 'fine' : 'big'] += n - 1;
-  }
-  s.bones ??= { fine: 0, big: 0 };
-  s.bones.fine = Math.min(4, s.bones.fine + found.fine);
-  s.bones.big = Math.min(3, s.bones.big + found.big);
-  return found;
-}
-const boneLines = f => [
-  ...(f.big ? [`${f.big > 1 ? `${f.big} long bones` : 'a long bone'}, weathered pale, from something big`] : []),
-  ...(f.fine ? [`${f.fine > 1 ? 'a scatter of' : 'a few'} fine, light bones from something small`] : []),
-];
+const boneFinds = (s, effort) => findBones(S.world, s, effort, S.rng); // bones (acts.js)
 
 // ------------------------------------------------------------ focused search
 
@@ -1979,7 +1801,7 @@ function startLooking(spec) {
   const label = type === 'focus' ? FOCI[key].label : type === 'entity' ? pluralize(entity(key).name) : key === 'water' ? 'water' : 'high ground';
   S.looking = { type, key, label };
   pass(0.5, 180);
-  S.ch.focus = clamp(S.ch.focus - 0.03);
+  S.body.focus = clamp(S.body.focus - 0.03);
   lookHere(site(), false);
 }
 // Returns lines found; `passing` is the light version used on the move (no pointers, no "nothing").
@@ -2024,7 +1846,7 @@ function lookAt(s, passing) {
     const here = presentAt(s).map(r => r.e.id);
     const m = S.mats.find(x => x.material === 'natural-edge' && here.includes(x.source));
     if (m) {
-      const res = searchNaturalEdge(S.rng, S.ch, { props: m.props, provenance: { name: m.sourceName, source: m.source } });
+      const res = searchNaturalEdge(S.rng, S.body, { props: m.props, provenance: { name: m.sourceName, source: m.source } });
       if (res.flake) {
         addItem(`natural edge, ${m.sourceName}`, 'edge', res.flake.props, { id: m.source, name: m.sourceName, part: 'natural edge', site: s.key });
         lines.push(`a piece of broken ${m.sourceName} with a usable edge; took it`);
@@ -2102,8 +1924,8 @@ function inspect(e) {
 
 // The character's educated guess from what's visible plus anything already learned. Costs focus.
 function assess(e) {
-  if (S.ch.focus < 0.25) return log('Too foggy to think it through. I need rest, water or food first.', 'warn');
-  S.ch.focus = clamp(S.ch.focus - 0.08);
+  if (S.body.focus < 0.25) return log('Too foggy to think it through. I need rest, water or food first.', 'warn');
+  S.body.focus = clamp(S.body.focus - 0.08);
   pass(0.15, 110);
   const cues = e.cues.join(' | ');
   const uses = [], risks = [], tests = [];
@@ -2214,9 +2036,9 @@ function restFor(choice) {
   if (choice === 'morning') return sleep();
   const hours = choice === 'dusk' ? sunsetAt(S.day) - S.t : Number(choice);
   pass(hours, 90);
-  S.ch.fatigue *= Math.pow(0.15, hours / 9);
-  S.ch.hands *= Math.pow(0.55, hours / 12);
-  S.ch.focus = clamp(S.ch.focus + 0.12 * hours);
+  S.body.fatigue *= Math.pow(0.15, hours / 9);
+  S.body.hands *= Math.pow(0.55, hours / 12);
+  S.body.focus = clamp(S.body.focus + 0.12 * hours);
   log(choice === 'dusk' ? 'Rested in the shade until dusk.' : `Rested for ${hours === 1 ? 'an hour' : `${hours} hours`}.`);
 }
 // ------------------------------------------------------------ the land under the map
@@ -2642,7 +2464,7 @@ function hereActions() {
   A.push({ id: 'inspect', label: 'Inspect', hint: 'something in particular', disabled: night });
   A.push({ id: 'collect', label: 'Collect', hint: 'something I can carry', disabled: night });
   if (waterHere(s)) A.push({ id: 'drink', label: 'Drink', hint: '' });
-  if (waterHere(s)) A.push({ id: 'washhands', label: 'Wash my hands', hint: S.ch.germs > 0.3 ? 'they’re filthy' : '' });
+  if (waterHere(s)) A.push({ id: 'washhands', label: 'Wash my hands', hint: S.body.germs > 0.3 ? 'they’re filthy' : '' });
   if (isLookout(S.L, s.x, s.y)) A.push({ id: 'lookout', label: 'Look out from up here', hint: '½ h; climb a tree if I must', disabled: night || skyNow().sunAlt < 3 });
   if (fireHere()) A.push({ id: 'feed', label: 'Feed the fire', hint: 'uses dead wood', disabled: !has('wood') });
   const trees = [...s.known].some(id => ['tree', 'shrub'].includes(entity(id)?.form));
@@ -2655,94 +2477,22 @@ function hereActions() {
 function doHere(id) {
   const s = site();
   switch (id) {
-    case 'survey': { pass(0.75, 160); const lim = senseLimits(true); if (lim) log(lim, 'thought'); survey(s); break; }
+    case 'survey': perform(SURVEY); break;
     case 'poke': pass(0.5, 230); pokeAround(s); break;
     case 'collect': case 'inspect': case 'make': case 'rest': picker = { kind: id, step: 'root' }; break;
     case 'look': if (S.looking) { log(`Stopped looking for ${S.looking.label}.`, 'thought'); S.looking = null; } else picker = { kind: 'look', step: 'root' }; break;
-    case 'scan': pass(0.5, 120); S.ch.focus = clamp(S.ch.focus - 0.04); sense(s, false, { scan: true }); break;
+    case 'scan': pass(0.5, 120); S.body.focus = clamp(S.body.focus - 0.04); sense(s, false, { scan: true }); break;
     case 'lookout': pass(0.5, 200); sense(s, true); markSeen(s.x, s.y, 50, { eye: lookoutEye(S.L, s) }); noteSeenFeatures(); if (!S.milestones.lookout) { S.milestones.lookout = true; log('A view at last.', 'milestone'); } break;
-    case 'washhands': {
-      pass(0.1, 110); S.ch.germs = S.ch.germs * 0.3 + 0.3 * waterGerms();
-      const cut = S.wound && now() - S.wound.at < 4; // washed out within a few hours, a cut seldom goes bad
-      if (cut) { const p = S.pendingSick.find(x => x.wound); if (p && S.rng.chance(0.8)) S.pendingSick.splice(S.pendingSick.indexOf(p), 1); S.wound = null; }
-      log(cut ? 'Washed my hands, and the cut on my shin, clean.' : 'Washed my hands in the water.');
-      break;
-    }
-    case 'drink': {
-      const w = waterSource(s);
-      pass(0.25, 120);
-      S.hyd = 1;
-      const p = w?.hidden.pathogen ?? 0.2;
-      if (S.rng.chance(p * 0.6)) S.pendingSick.push({ at: now() + 24 + S.rng.uniform(0, 18), severity: 0.25 + p * 0.5, text: 'Cramps and a loose gut. Something in the water, maybe.' });
-      log(`Drank my fill of ${w?.name ?? 'water'}.`);
-      break;
-    }
-    case 'feed': takeWood(1); s.fireUntil = Math.max(s.fireUntil, now()) + 3; log('Fed the fire.'); break;
-    case 'bed': { // heap what I carry into a bed here: a hand's depth of dry stuff between me and the ground
-      const stuff = bedding(), add = stuff.reduce((a, it) => a + (it.props.loft ?? 0.3), 0), wet = stuff.reduce((a, it) => a + (it.props.moisture ?? 0.2), 0) / stuff.length;
-      for (const it of stuff) remove(it);
-      pass(0.15, 120);
-      const before = s.bed?.clo ?? 0;
-      s.bed = { clo: Math.min(1.5, before + add), wet: clamp(((s.bed?.wet ?? 0) * before + wet * add) / (before + add)) };
-      log(`${before ? 'Added to the bed' : 'Heaped up a bed'}: ${s.bed.clo < 0.5 ? 'a thin layer, but better than bare ground' : s.bed.clo < 1 ? 'a hand’s depth to lie on' : 'a deep, springy pile'}${s.bed.wet > 0.35 ? ', though damp' : ''}.`);
-      break;
-    }
-    case 'hut': pass(3.5, 320); s.hut = true; log('Built a debris hut: a ridgepole, ribs of dead branches, and an arm-deep pile of leaves on top.'); if (!S.milestones.hut) { S.milestones.hut = true; log('A shelter.', 'milestone'); } break;
+    case 'washhands': perform(WASH_HANDS); break;
+    case 'drink': perform(DRINK); break;
+    case 'feed': perform(FEED_FIRE, { wood: ofKind('wood')[0] }); break;
+    case 'bed': perform(MAKE_BED, { stuff: bedding() }); break;
+    case 'hut': perform(BUILD_HUT); break;
   }
 }
 
-// Eating: cook it first if a fire is here (roasting), eat as much as the gut will hold, digest it.
-// Harm from compounds sets the old outcome bands (safe … potentially lethal); energy comes from
-// digestion, net of what digesting costs, and protein past ~35% of the day's energy is wasted and
-// sickening. A food that costs more to digest than it gives leaves me worse off.
-const GUT_KG = 1.5; // a stomach-full
-function eat(it) {
-  const cooking = fireHere();
-  let st = it.props.chem;
-  if (cooking) st = expose(st, PREP.roast, 0.5 + 0.5 * S.ch.focus);
-  const room = GUT_KG - S.gut;
-  if (room < 0.05) return log('Too full to eat any more just now.', 'thought');
-  const m = Math.min(it.props.mass, room);
-  pass(cooking ? 0.5 : 0.2, 120);
-  if (m >= it.props.mass - 1e-6) remove(it); else { it.props.mass = Math.round((it.props.mass - m) * 1000) / 1000; }
-  S.gut += m;
-  const how = cooking ? 'Roasted and ate' : 'Ate';
-  const what = `${S.inv.includes(it) ? 'some of ' : ''}the ${it.from.part} of the ${it.from.name}`;
-  const n = nutrients(st, m);
-  // protein and fat balance over roughly the last day
-  const tot = S.macro.p + S.macro.f + S.macro.c + n.protein + n.fat + n.carb;
-  const excess = Math.max(0, S.macro.p + n.protein - 0.35 * tot);
-  const wasted = tot > 500 ? Math.min(n.protein, excess) : 0;
-  S.macro.p += n.protein - wasted; S.macro.f += n.fat; S.macro.c += n.carb;
-  const net = n.net - wasted;
-  // harm, scaled gently by how much was eaten (a mouthful is not a meal)
-  const h = harm(st) * Math.sqrt(Math.min(1.5, m / 0.2));
-  const outcome = hazard(h);
-  const germs = (it.props.germs ?? 0) * (cooking ? 0.05 : 1);
-  touch([it], 0.3);
-  if (S.rng.chance(Math.min(0.7, (germs + 0.25 * S.ch.germs) * Math.min(1, m / 0.2)))) S.pendingSick.push({ at: now() + 20, severity: Math.min(0.5, 0.15 + 0.4 * germs), text: 'A sour gut, then the runs. Something I ate wasn’t clean.' });
-  const parasites = st.compounds.parasites ?? 0;
-  if (parasites > 0.02 && S.rng.chance(Math.min(0.8, parasites * 1.5))) S.pendingSick.push({ at: now() + 30, severity: Math.min(0.5, 0.2 + parasites), text: 'A sour gut and fever. Something I ate raw.' });
-  const irritant = Object.keys(st.compounds).some(k => COMPOUNDS[k].effect === 'irritant' && st.compounds[k] > 0.1);
-  const ent = entity(it.from.id);
-  const key = loreKey(ent, it.from.part);
-  const L = (S.lore[key] ??= { ok: 0, sick: 0 });
-  const delayed = !!st.compounds.amatoxin && /poison|lethal/.test(outcome);
-  S.energy = clamp(S.energy + (/severe|lethal/.test(outcome) && !delayed ? Math.min(0, net) : net) / 24000);
-  const feel = [`${cap(textureWords(st))}.`];
-  if (irritant) feel.push('My mouth and throat burned.');
-  if (wasted > 50) { S.sick = clamp(S.sick + Math.min(0.15, wasted / 1500)); feel.push('All lean, nothing fatty or starchy with it: my stomach turns, and I’m still hungry.'); }
-  if (net < 0) feel.push('Heavy going; I doubt it gave back what it cost to get down.');
-  else feel.push(m < 0.08 ? 'A few mouthfuls.' : S.gut > 1.2 ? 'Full.' : n.net / Math.max(0.05, m) < 600 ? 'Filling for now, but there’s not much in it.' : net > 400 ? 'That was real food.' : '');
-  if (delayed) {
-    S.pendingSick.push({ lore: key, at: now() + 30, severity: outcome === 'potentially lethal' ? 0.95 : 0.6, text: `Sick, badly, a day after eating the ${it.from.name}. It must have been that.` });
-    S.pendingLore = key;
-    return log(`${how} ${what}. ${feel.join(' ')} Tasted fine.`.replace(/ +/g, ' '), 'act');
-  }
-  const bad = { 'mild upset': [0.15, 'My stomach didn’t like it.'], 'moderate poisoning': [0.4, 'Within the hour: sweating, cramps, vomiting.'], 'severe poisoning': [0.75, 'Violently ill soon after; I thought I might die.'], 'potentially lethal': [1, 'It was poison.'] }[outcome];
-  if (bad) { S.sick = clamp(S.sick + bad[0]); L.sick++; } else L.ok++;
-  log(`${how} ${what}. ${bad ? bad[1] : feel.join(' ')}`.replace(/ +/g, ' ').trim(), bad && bad[0] >= 0.4 ? 'warn' : 'act');
-}
+// Eating (acts.js): the food, and what I've learned of eating it before.
+const eat = it => perform(EAT, { food: it });
 
 // ------------------------------------------------------------ plans (goal tree with mental cost)
 
@@ -2753,9 +2503,9 @@ function nodeLabel(n) {
   return n.slot.role;
 }
 function think(path) {
-  if (S.ch.focus < 0.25) return log('Too foggy to think it through. I need rest, water or food first.', 'warn');
+  if (S.body.focus < 0.25) return log('Too foggy to think it through. I need rest, water or food first.', 'warn');
   const n = nodeAt(path);
-  S.ch.focus = clamp(S.ch.focus - 0.06);
+  S.body.focus = clamp(S.body.focus - 0.06);
   pass(0.1, 110);
   S.revealed[S.goal].add(path);
   if (n.type === 'material') { const h = lookHint(n.slot); log(h ? `For the ${n.slot.role}: look for ${h}.` : thought(n), 'thought'); }
@@ -2940,7 +2690,7 @@ if (typeof document !== 'undefined') {
 // Everything that happens follows from the world seed and the player's choices, so a record of the
 // seed and each choice reproduces a game exactly. Each action is the data of what was tapped (or
 // the value chosen); `act` applies one, and replaying a record runs them in order on a fresh game.
-const BUILD = 'hk-2026-10-25a'; // game logic version: a record replays faithfully only on the build that made it
+const BUILD = 'hk-2026-10-26a'; // game logic version: a record replays faithfully only on the build that made it
 function record(d) {
   S.record ??= [];
   S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });

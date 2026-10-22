@@ -3903,9 +3903,9 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     }
     const musk = world.animals.find((a) => a.traits.key === "stinker");
     if (musk) {
-      const r3 = makeRng(`${world.seed}/musk`);
+      const r4 = makeRng(`${world.seed}/musk`);
       for (let i = 0; i < 2; i++) {
-        const p = landCell(L, r3, musk.habitats.map((h) => h.micro));
+        const p = landCell(L, r4, musk.habitats.map((h) => h.micro));
         if (p)
           out.push({ key: `musk-${i}`, kind: "musk", x: p.x, y: p.y, range: 1e3, words: musk.smell, animal: musk.id });
       }
@@ -5682,6 +5682,141 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   }
   var cap2 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
+  // src/act.js
+  var isPlain = (x) => x !== null && typeof x === "object" && Object.getPrototypeOf(x) === Object.prototype;
+  function copy(x) {
+    if (x === null || typeof x !== "object")
+      return x;
+    if (Array.isArray(x))
+      return x.map(copy);
+    if (x instanceof Set)
+      return new Set([...x].map(copy));
+    if (x instanceof Map)
+      return new Map([...x].map(([k, y]) => [k, copy(y)]));
+    const o = {};
+    for (const k of Object.keys(x))
+      o[k] = copy(x[k]);
+    return o;
+  }
+  var keysOf = (p) => p.split(".");
+  var get = (o, ks) => ks.reduce((a, k) => a == null ? void 0 : a[k], o);
+  function put(o, ks, value) {
+    let a = o;
+    for (const k of ks.slice(0, -1))
+      a = a[k] ?? (a[k] = {});
+    a[ks[ks.length - 1]] = value;
+  }
+  var valueOf = (x, v) => typeof x === "function" ? x(v) : x ?? 0;
+  var isConstant = (p) => p === "world" || p.startsWith("world.");
+  function pathsOf(proc) {
+    const all = [.../* @__PURE__ */ new Set([...proc.reads ?? [], ...proc.writes ?? []])].sort((a, b) => a.length - b.length);
+    return all.filter((p, i) => !all.slice(0, i).some((q) => p.startsWith(`${q}.`)));
+  }
+  var declared = (proc, path) => (proc.writes ?? []).some((w) => path === w || path.startsWith(`${w}.`) || w.startsWith(`${path}.`));
+  function viewOf(proc, state) {
+    const v = {};
+    for (const p of pathsOf(proc))
+      put(v, keysOf(p), isConstant(p) ? state.get(p) : copy(state.get(p)));
+    return v;
+  }
+  function diff(a, b, path = "", out = []) {
+    if (Object.is(a, b))
+      return out;
+    if (a instanceof Set && b instanceof Set) {
+      const added = [...b].filter((x) => !a.has(x)), removed = [...a].filter((x) => !b.has(x));
+      if (added.length || removed.length)
+        out.push({ path, added, removed });
+      return out;
+    }
+    if (Array.isArray(a) && Array.isArray(b)) {
+      if (a.length === b.length)
+        a.forEach((x, i) => diff(x, b[i], `${path}.${i}`, out));
+      else if (b.length > a.length && a.every((x, i) => !diff(x, b[i]).length))
+        out.push({ path, added: b.slice(a.length), removed: [] });
+      else
+        out.push({ path, from: a, to: b });
+      return out;
+    }
+    if (isPlain(a) && isPlain(b)) {
+      for (const k of /* @__PURE__ */ new Set([...Object.keys(a), ...Object.keys(b)]))
+        if (!isConstant(path ? `${path}.${k}` : k))
+          diff(a[k], b[k], path ? `${path}.${k}` : k, out);
+      return out;
+    }
+    out.push({ path, from: a, to: b });
+    return out;
+  }
+  function guard(node, path, paths, id) {
+    return new Proxy(node, {
+      get(o, k) {
+        if (typeof k === "symbol" || k === "toJSON")
+          return o[k];
+        const full = path ? `${path}.${k}` : k;
+        if (paths.has(full) || isConstant(full))
+          return o[k];
+        if ([...paths].some((p) => p.startsWith(`${full}.`)))
+          return o[k] && typeof o[k] === "object" ? guard(o[k], full, paths, id) : o[k];
+        throw new Error(`${id} read ${full} without declaring it`);
+      }
+    });
+  }
+  function rehearse(proc, v0, dice2) {
+    const v = {};
+    for (const [k, x] of Object.entries(v0))
+      v[k] = k === "world" ? x : copy(x);
+    const out = proc.run(guard(v, "", new Set(pathsOf(proc)), proc.id), dice2) ?? {};
+    const changes = diff(v0, v);
+    const stray = changes.filter((c) => !declared(proc, c.path));
+    if (stray.length)
+      throw new Error(`${proc.id} changed ${stray.map((c) => c.path).join(", ")} without declaring it`);
+    const say = (out.say ?? []).map((l) => Array.isArray(l) ? l : [l, "act"]);
+    return { id: proc.id, changes, make: out.make ?? [], use: out.use ?? [], say, report: out.report ?? null, after: v };
+  }
+  function apply(fx, state) {
+    for (const c of fx.changes) {
+      if ("to" in c) {
+        state.set(c.path, copy(c.to));
+        continue;
+      }
+      const cur = state.get(c.path);
+      if (cur instanceof Set) {
+        for (const x of c.added)
+          cur.add(x);
+        for (const x of c.removed)
+          cur.delete(x);
+      } else if (Array.isArray(cur))
+        cur.push(...copy(c.added));
+      else
+        state.set(c.path, copy(get(fx.after, keysOf(c.path))));
+    }
+  }
+  var hoursOf = (proc, v) => valueOf(proc.hours, v);
+  var kcalOf = (proc, v) => valueOf(proc.kcal, v) || 150;
+  var readyFor = (proc, v) => proc.ready ? proc.ready(v) : true;
+  function stateOver(namespaces, derived = {}) {
+    const root = (ns) => typeof namespaces[ns] === "function" ? namespaces[ns]() : namespaces[ns];
+    return {
+      get(path) {
+        const [ns, ...ks] = keysOf(path);
+        if (derived[ns]) {
+          if (!ks.length)
+            return Object.fromEntries(Object.entries(derived[ns]).map(([k, f2]) => [k, f2()]));
+          const f = derived[ns][ks[0]];
+          return get(f?.(), ks.slice(1));
+        }
+        return ks.length ? get(root(ns), ks) : root(ns);
+      },
+      set(path, value) {
+        const [ns, ...ks] = keysOf(path);
+        if (derived[ns])
+          throw new Error(`${path} is worked out from other state; it can't be set`);
+        if (!ks.length)
+          throw new Error(`can't replace the whole of ${ns}`);
+        put(root(ns), ks, value);
+      }
+    };
+  }
+
   // src/craft.js
   var bump = (x, lo, hi, tol) => x < lo ? Math.exp(-(((lo - x) / tol) ** 2)) : x > hi ? Math.exp(-(((x - hi) / tol) ** 2)) : 1;
   var widen = (tol, sk) => tol * (1 + 0.6 * sk);
@@ -5909,11 +6044,532 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     return { median, pFlake, edgeSource, pFireBy: (d) => curve[d - 2] ?? 1, early, late, ready: Math.ceil(ready), ambient: ambient2, hearth: m.hearthWood, spindle: m.seasonedStock ? "crooked dead shoots, then seasoned green" : m.spindleStock.name };
   }
 
+  // src/acts.js
+  var cap3 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  var r3 = (x) => Math.round(x * 1e3) / 1e3;
+  var entityIn = (world) => (id) => [...world.stones, ...world.plants, ...world.animals].find((e) => e.id === id);
+  var pluralize = (n) => /fungus$/.test(n) ? n.replace(/fungus$/, "fungi") : /louse$/.test(n) ? n.replace(/louse$/, "lice") : /(s|sh|ch|x)$/.test(n) ? `${n}es` : /[^aeiou]y$/.test(n) ? `${n.slice(0, -1)}ies` : /(deer|fish|trout|elk|grouse|quail|boar)$/.test(n) ? n : `${n}s`;
+  function countWord(n) {
+    return n < 10 ? String(Math.max(1, Math.round(n))) : `~${n < 30 ? Math.round(n / 5) * 5 : Math.round(n / 10) * 10}`;
+  }
+  function lineFor(e, n) {
+    const nm = e.name, c = countWord(n);
+    if (e.kind === "stone")
+      return `${c} heftable ${nm} cobbles`;
+    const colony = { ant: "nest", termite: "mound", wasp: "nest" }[e.traits?.key];
+    if (colony)
+      return `${c} ${nm} ${colony}${n > 1.5 ? "s" : ""}`;
+    if (e.kind === "animal")
+      return `${c} ${pluralize(nm)}`;
+    if (e.form === "tree")
+      return `${c} ${/tree$/.test(nm) ? pluralize(nm) : `${nm} trees`}`;
+    if (e.form === "shrub")
+      return `${c} ${/bush$/.test(nm) ? `${nm}es` : `${nm} bushes`}`;
+    if (e.form === "grass")
+      return `${c} tufts of ${nm}`;
+    if (e.form === "mushroom")
+      return `${c} ${pluralize(nm)}`;
+    if (e.form === "moss" || e.form === "lichen")
+      return `${c} patches of ${nm}`;
+    return `${c} clumps of ${nm}`;
+  }
+  function mix(items, body, k = 0.4, hands = true) {
+    const xs = items.filter(Boolean);
+    const all = [...xs.map((i) => i.props.germs ?? 0), ...hands ? [body.germs] : []];
+    if (!all.length)
+      return;
+    const m = all.reduce((a, b) => a + b, 0) / all.length;
+    for (const i of xs)
+      i.props.germs = r3((i.props.germs ?? 0) + k * (m - (i.props.germs ?? 0)));
+    if (hands)
+      body.germs += k * (m - body.germs);
+  }
+  function populationAt(world, micro, siteKey, factors, place) {
+    const out = [];
+    for (const e of [...world.stones, ...world.plants, ...world.animals]) {
+      const h = e.habitats.find((x) => x.micro === micro);
+      if (!h || e.kind === "animal" && e.cls !== "invertebrate")
+        continue;
+      const ar = place(`abund/${e.id}/${siteKey}`);
+      const count = (h.perInstance ?? h.pieces) * Math.exp((e.kind === "stone" ? 0 : 0.35 * factors.fertility) + 0.5 * ar.normal());
+      if (!ar.chance(1 - Math.exp(-count / 2)))
+        continue;
+      out.push({ e, n: count });
+    }
+    return out;
+  }
+  var BONE_VIS = { glade: 1.3, outcrop: 1.3, scree: 1.3, streambed: 1.2, edge: 1, claybank: 1, streambank: 0.8, pond: 0.8, spring: 0.8, woodland: 0.6, deadfall: 0.6 };
+  var isFineBoned = (a) => /bird|soarer|fish|frog|lizard/.test(a.traits.key ?? "") || (a.traits.mass ?? 0) < 3;
+  function findBones(world, site2, effort, rng) {
+    const vis = BONE_VIS[site2.micro] ?? 1;
+    const found = { fine: 0, big: 0 };
+    for (const a of world.animals) {
+      if (a.cls === "invertebrate" || !a.habitats.some((h) => h.micro === site2.micro))
+        continue;
+      const mu = effort * vis * (a.perKm2 ?? 0) * (a.traits.mass ?? 0) / 600;
+      let n = 0, L = Math.exp(-mu), p = 1;
+      do {
+        n++;
+        p *= rng.next();
+      } while (p > L && n < 20);
+      found[isFineBoned(a) ? "fine" : "big"] += n - 1;
+    }
+    site2.bones ?? (site2.bones = { fine: 0, big: 0 });
+    site2.bones.fine = Math.min(4, site2.bones.fine + found.fine);
+    site2.bones.big = Math.min(3, site2.bones.big + found.big);
+    return found;
+  }
+  var boneLines = (f) => [
+    ...f.big ? [`${f.big > 1 ? `${f.big} long bones` : "a long bone"}, weathered pale, from something big`] : [],
+    ...f.fine ? [`${f.fine > 1 ? "a scatter of" : "a few"} fine, light bones from something small`] : []
+  ];
+  var memKeyE = (e) => e.lookalike?.mimics ?? e.id;
+  function noteKnown(site2, mem, e) {
+    var _a, _b;
+    site2.known.add(e.id);
+    ((_a = mem.entities)[_b = memKeyE(e)] ?? (_a[_b] = { seen: 0, traits: {} })).seen++;
+  }
+  function smellsHere(v, here, rng) {
+    const out = [], mem = v.mem;
+    const nm = (e) => mem.entities[memKeyE(e)] ? ` (${e.name})` : "";
+    const find = (f) => here.find((e) => e.kind === "plant" && f(e.traits ?? {}));
+    const resin = find((t) => t.resin > 0.5);
+    if (resin)
+      out.push(`resin${nm(resin)}`);
+    const onion = find((t) => t.defense === "sulfur");
+    if (onion)
+      out.push(`onion, underfoot${nm(onion)}`);
+    const mint = find((t) => t.defense === "aromatic");
+    if (mint)
+      out.push(`something sharp and minty${nm(mint)}`);
+    const fruit = find((t) => ["berry", "drupe"].includes(t.fruit));
+    if (fruit)
+      out.push(`ripe fruit${nm(fruit)}`);
+    if (here.some((e) => e.form === "mushroom"))
+      out.push("damp, mushroomy earth");
+    if (here.some((e) => e.traits?.key === "bee"))
+      out.push("a waxy sweetness where bees are working");
+    if (here.some((e) => e.traits?.key === "fly") && rng.chance(0.4))
+      out.push("droppings somewhere close, by the flies");
+    if (v.world.animals.some((a) => a.traits.key === "predator" && a.habitats.some((h) => h.micro === v.site.micro)) && rng.chance(0.3))
+      out.push("a musky reek where something has marked its ground");
+    if (v.site.micro === "pond" && v.here.marsh)
+      out.push("stagnant water and rotting reeds");
+    return out;
+  }
+  var SURVEY = {
+    id: "survey",
+    name: "Survey",
+    reads: ["site.key", "site.micro", "here.factors", "here.cond", "here.water", "here.marsh", "here.seeing", "world"],
+    writes: ["site.known", "site.bones", "mem"],
+    hours: 0.75,
+    kcal: 160,
+    run(v, d) {
+      const rows = [], fresh = [], seen = {}, cond = v.here.cond, rng = d.act;
+      noteTrail(v.mem, v.site.key);
+      const cover = (1 - Math.min(1, cond.snowCm / 20)) * (1 - 0.5 * cond.litter);
+      const present = populationAt(v.world, v.site.micro, v.site.key, v.here.factors, d.place);
+      for (const { e, n } of present) {
+        if (e.cryptic)
+          continue;
+        const low = ["herb", "grass", "moss", "lichen", "mushroom"].includes(e.form) || e.kind !== "plant";
+        const now2 = e.kind === "animal" ? animalNow(e, cond) : null;
+        if (now2 && !now2.here)
+          continue;
+        const visible = (e.kind === "animal" ? 0.6 * now2.seen : { herb: 0.85, grass: 0.9, mushroom: 0.6, moss: 0.9, lichen: 0.8 }[e.form] ?? 0.97) * cond.light * (low ? cover : 1) * (e.kind === "plant" ? Math.min(1.2, plantNow(v.world, e, cond.g).notice) : 1);
+        if (!rng.chance(visible))
+          continue;
+        if (!v.mem.entities[memKeyE(e)] && !fresh.includes(e))
+          fresh.push(e);
+        rows.push({ n, text: lineFor(e, n) });
+        seen[e.name] = n;
+        noteKnown(v.site, v.mem, e);
+      }
+      for (const a of v.world.animals.filter((a2) => a2.cls !== "invertebrate" && a2.signs && a2.habitats.some((h) => h.micro === v.site.micro))) {
+        if (!animalNow(a, cond).here || !rng.chance((1 - Math.exp(-a.perKm2 * 0.3)) * cond.light * (cond.snowCm > 2 ? 1.5 : 1 - 0.6 * cond.litter)))
+          continue;
+        const known = v.mem.entities[memKeyE(a)];
+        const sign = a.signs.damage ?? (a.signs.track ? `sets of ${a.signs.track.type}` : a.signs.den);
+        if (!sign)
+          continue;
+        rows.push({ n: 0.5, text: `${/^sets/.test(sign) ? "a few" : "1"} ${sign.replace(/^(the|a) /, "")}${known ? ` (${a.name})` : ", left by some animal"}` });
+        seen[`sign of ${a.name}`] = 1;
+      }
+      const bones = findBones(v.world, v.site, 0.35, rng);
+      for (const t of boneLines(bones))
+        rows.push({ n: 0.4, text: t });
+      rows.sort((a, b) => b.n - a.n);
+      const water = v.world.water.find((w) => w.micro === (v.site.micro === "streambed" ? "streambank" : v.site.micro));
+      const sm = smellsHere(v, present.map((r) => r.e), rng);
+      const lines = [...water ? [v.here.water ? `water: ${water.name}` : "water: none now; the bed is dry"] : [], ...rows.map((r) => r.text), ...sm.length ? [`smells: ${sm.join("; ")}`] : [], ...namingSentences(fresh, v.mem, v.site.key, entityIn(v.world), rng)];
+      return {
+        say: [...v.here.seeing ? [[v.here.seeing, "thought"]] : [], [`Surveying what I can see from here:
+${lines.join("\n")}`, "survey"]],
+        report: { seen, bones, smells: sm }
+      };
+    }
+  };
+  var POOR_WATER = 0.6;
+  var DRINK = {
+    id: "drink",
+    name: "Drink",
+    reads: ["here.water", "clock.now"],
+    writes: ["body.hyd", "body.pendingSick"],
+    hours: 0.25,
+    kcal: 120,
+    ready: (v) => v.here.water ? true : "There\u2019s no water here.",
+    run(v, d) {
+      const w = v.here.water;
+      v.body.hyd = 1;
+      if (d.act.chance(w.pathogen * POOR_WATER))
+        v.body.pendingSick.push({ at: v.clock.now + 24 + d.act.uniform(0, 18), severity: 0.25 + w.pathogen * 0.5, text: "Cramps and a loose gut. Something in the water, maybe." });
+      return { say: [`Drank my fill of ${w.name}.`] };
+    }
+  };
+  var WASH_HANDS = {
+    id: "washhands",
+    name: "Wash my hands",
+    reads: ["here.water", "clock.now"],
+    writes: ["body.germs", "body.wound", "body.pendingSick"],
+    hours: 0.1,
+    kcal: 110,
+    ready: (v) => v.here.water ? true : "There\u2019s no water here.",
+    run(v, d) {
+      const b = v.body;
+      b.germs = b.germs * 0.3 + 0.3 * v.here.water.pathogen;
+      const cut = b.wound && v.clock.now - b.wound.at < 4;
+      if (cut) {
+        const i = b.pendingSick.findIndex((x) => x.wound);
+        if (i >= 0 && d.act.chance(0.8))
+          b.pendingSick.splice(i, 1);
+        b.wound = null;
+      }
+      return { say: [cut ? "Washed my hands, and the cut on my shin, clean." : "Washed my hands in the water."] };
+    }
+  };
+  var MAKE_BED = {
+    id: "bed",
+    name: "Make up a bed",
+    reads: ["stuff"],
+    writes: ["site.bed"],
+    hours: 0.15,
+    kcal: 120,
+    ready: (v) => v.stuff.length ? true : "Nothing to make a bed with.",
+    run(v) {
+      const add = v.stuff.reduce((a, it) => a + (it.props.loft ?? 0.3), 0), wet = v.stuff.reduce((a, it) => a + (it.props.moisture ?? 0.2), 0) / v.stuff.length;
+      const before = v.site.bed?.clo ?? 0;
+      v.site.bed = { clo: Math.min(1.5, before + add), wet: clamp(((v.site.bed?.wet ?? 0) * before + wet * add) / (before + add)) };
+      const b = v.site.bed;
+      return { use: v.stuff, say: [`${before ? "Added to the bed" : "Heaped up a bed"}: ${b.clo < 0.5 ? "a thin layer, but better than bare ground" : b.clo < 1 ? "a hand\u2019s depth to lie on" : "a deep, springy pile"}${b.wet > 0.35 ? ", though damp" : ""}.`] };
+    }
+  };
+  var BUILD_HUT = {
+    id: "hut",
+    name: "Build a debris hut",
+    reads: ["here.dark"],
+    writes: ["site.hut", "milestones.hut"],
+    hours: 3.5,
+    kcal: 320,
+    ready: (v) => v.here.dark ? "Too dark to build." : true,
+    run(v) {
+      v.site.hut = true;
+      const first = !v.milestones.hut;
+      v.milestones.hut = true;
+      return { say: ["Built a debris hut: a ridgepole, ribs of dead branches, and an arm-deep pile of leaves on top.", ...first ? [["A shelter.", "milestone"]] : []] };
+    }
+  };
+  var FEED_FIRE = {
+    id: "feed",
+    name: "Feed the fire",
+    reads: ["wood", "clock.now"],
+    writes: ["site.fireUntil"],
+    run(v) {
+      v.site.fireUntil = Math.max(v.site.fireUntil ?? -1, v.clock.now) + 3;
+      return { use: [v.wood], say: ["Fed the fire."] };
+    }
+  };
+  var SKILL_STATE = ["body.skills", "body.fatigue", "body.hands", "body.callus", "body.focus", "body.peakHands", "body.attempts", "body.outcomes"];
+  var KNAP = {
+    id: "knap",
+    name: "Knap flakes",
+    reads: ["core", "hammer.props", "anvil", "site.key", "here.dark"],
+    writes: [...SKILL_STATE, "milestones.edge"],
+    hours: 0.25,
+    kcal: 200,
+    ready: (v) => v.here.dark ? "Too dark to work. Time to sleep." : true,
+    run(v, d) {
+      const { core } = v, rng = d.act;
+      const res = knapFlakes(rng, v.body, { props: core.props, provenance: { name: core.from?.name ?? core.name, source: core.from?.id, site: core.from?.site } }, { props: v.hammer.props }, v.anvil);
+      const label = `flake, ${core.from.name}`;
+      const make = res.flakes.map((f) => ({ name: label, kind: "edge", props: f.props, from: { id: f.provenance?.source, name: f.provenance?.name ?? "", part: label, site: v.site.key } }));
+      const say = [make.length ? `Smashed the ${core.from.name} stone ${v.anvil.slab ? "on the slab" : "against a rock"}: ${make.length} usable flake${make.length > 1 ? "s" : ""}.` : `Smashed the ${core.from.name} stone; nothing but crumbs and blunt chunks.`];
+      if (make.length && !v.milestones.edge) {
+        v.milestones.edge = true;
+        say.push(["My first cutting edge.", "milestone"]);
+      }
+      return { make, use: rng.chance(0.25) ? [core] : [], say, report: { success: res.success, margin: res.margin, flakes: make.length } };
+    }
+  };
+  var PREP_WORDS = { pound: "Pounded", grind: "Ground", chop: "Chopped up", roast: "Roasted", leach: "Left", soak: "Soaked", dryfood: "Dried", stoneboil: "Stone-boiled" };
+  function PREPARE(id) {
+    return {
+      id,
+      name: PREP_WORDS[id],
+      reads: ["mode", "food.from", "food.base", "body.focus", "here.fire", "here.dark", "here.waterTempC", "site.basin", ...id === "pound" ? ["stone.props"] : [], ...["grind", "stoneboil"].includes(id) ? ["stones"] : []],
+      writes: ["food.props", "food.notes", "food.prep", "food.name", ...id === "chop" ? ["edge.props.sharpness"] : []],
+      hours: (v) => ({ pound: 0.25, grind: 0.75, chop: 0.2, stoneboil: 0.75 })[id] ?? (id === "roast" ? v.mode === "careful" ? 0.5 : 0.25 : ["leach", "soak"].includes(id) ? Number(v.mode) : v.mode === "fire" ? 2 : 4),
+      kcal: { pound: 260, grind: 240, chop: 150, roast: 180, leach: 140, soak: 140, dryfood: 140, stoneboil: 220 }[id],
+      ready(v) {
+        if (v.here.dark)
+          return "Too dark to work. Time to sleep.";
+        if (id === "dryfood" && v.mode === "fire" && !v.here.fire)
+          return "There\u2019s no fire here to dry it by.";
+        return true;
+      },
+      run(v, d) {
+        const { food } = v, rng = d.act, say = [], use = [];
+        const q = clamp(0.5 + 0.4 * v.body.focus + rng.normal(0, 0.1));
+        let ex, tag, cond = {};
+        if (id === "pound") {
+          const st = v.stone;
+          cond.crushPower = clamp(st.props.hardness / 7, 0.3, 1) * clamp(Math.sqrt(st.props.mass / 800), 0.6, 1.2);
+          ex = { crush: 0.5 };
+          tag = "pounded";
+        } else if (id === "grind") {
+          cond.rough = Math.max(...v.stones.map((x) => x.props.rough ?? 0.4));
+          ex = { grind: 0.9 };
+          tag = "ground";
+        } else if (id === "chop") {
+          const e = v.edge;
+          cond.crushPower = 1;
+          ex = { cut: 0.25 + 0.25 * (e.props.sharpness ?? 0.5) };
+          tag = "chopped";
+          e.props.sharpness = Math.max(0, e.props.sharpness - 0.01);
+        } else if (id === "roast") {
+          ex = { heat: { mode: "roast", minutes: v.mode === "careful" ? 25 : 10 } };
+          tag = "roasted";
+        } else if (id === "leach" || id === "soak") {
+          const hours = Number(v.mode);
+          ex = { water: { mode: id === "leach" ? "running" : "still", hours, tempC: v.here.waterTempC[id === "soak" ? "still" : "running"] } };
+          tag = `${id === "leach" ? "leached" : "soaked"} ${hours} h`;
+        } else if (id === "stoneboil") {
+          cond.heatPower = Math.min(1.2, 0.3 * v.stones.length + 0.1);
+          for (const st of v.stones)
+            if (rng.chance((st.props.spall ?? 0.3) * 0.4)) {
+              use.push(st);
+              say.push([`The ${st.name} burst with a crack in the fire.`, "warn"]);
+            }
+          ex = { heat: { mode: "boil", minutes: 20 } };
+          tag = cond.heatPower >= 0.9 ? "boiled" : "simmered";
+          if (cond.heatPower < 0.9)
+            say.push(`With only ${v.stones.length} stone${v.stones.length === 1 ? "" : "s"} the water never quite boiled.`);
+        } else {
+          ex = { dry: v.mode === "fire" ? 12 : 8 };
+          tag = "dried";
+        }
+        const before = food.props.chem, after = expose(before, ex, q, cond);
+        if (id === "roast" && v.mode === "quick" && rng.chance(0.3)) {
+          food.props.mass *= 0.85;
+          say.push("Some of it charred black.");
+        }
+        food.props.mass = r3(food.props.mass * (1 - before.water) / Math.max(0.05, 1 - after.water));
+        food.props.chem = after;
+        food.notes = {};
+        food.prep.push(tag);
+        food.name = `${food.base} (${food.prep.join(", ")})`;
+        const how = id === "leach" ? ` in the stream for ${v.mode} hours` : id === "soak" ? ` for ${v.mode} hours` : id === "dryfood" ? v.mode === "fire" ? " by the fire" : " in the sun" : id === "stoneboil" ? ` in the ${v.site.basin.kind}` : "";
+        say.push(`${PREP_WORDS[id]} the ${food.from.part} of the ${food.from.name}${how}. ${cap3(textureWords(after))} now.`);
+        return { use, say, report: { quality: q } };
+      }
+    };
+  }
+  var GUT_KG = 1.5;
+  var loreKey = (e, part) => `${e.lookalike?.mimics ?? e.id}:${part}`;
+  var EAT = {
+    id: "eat",
+    name: "Eat",
+    reads: ["food", "here.fire", "clock.now", "body.focus", "world"],
+    writes: ["body.gut", "body.macro", "body.energy", "body.sick", "body.pendingSick", "body.germs", "food.props", "lore"],
+    hours: (v) => v.here.fire ? 0.5 : 0.2,
+    kcal: 120,
+    ready: (v) => GUT_KG - v.body.gut < 0.05 ? "Too full to eat any more just now." : true,
+    run(v, d) {
+      var _a;
+      const it = v.food, b = v.body, rng = d.act, cooking = v.here.fire;
+      let st = it.props.chem;
+      if (cooking)
+        st = expose(st, PREP.roast, 0.5 + 0.5 * b.focus);
+      const m = Math.min(it.props.mass, GUT_KG - b.gut), all = m >= it.props.mass - 1e-6;
+      if (!all)
+        it.props.mass = r3(it.props.mass - m);
+      b.gut += m;
+      const how = cooking ? "Roasted and ate" : "Ate", what = `${all ? "" : "some of "}the ${it.from.part} of the ${it.from.name}`;
+      const n = nutrients(st, m);
+      const tot = b.macro.p + b.macro.f + b.macro.c + n.protein + n.fat + n.carb;
+      const excess = Math.max(0, b.macro.p + n.protein - 0.35 * tot);
+      const wasted = tot > 500 ? Math.min(n.protein, excess) : 0;
+      b.macro.p += n.protein - wasted;
+      b.macro.f += n.fat;
+      b.macro.c += n.carb;
+      const net = n.net - wasted;
+      const outcome = hazard(harm(st) * Math.sqrt(Math.min(1.5, m / 0.2)));
+      const germs = (it.props.germs ?? 0) * (cooking ? 0.05 : 1);
+      mix([it], b, 0.3);
+      if (rng.chance(Math.min(0.7, (germs + 0.25 * b.germs) * Math.min(1, m / 0.2))))
+        b.pendingSick.push({ at: v.clock.now + 20, severity: Math.min(0.5, 0.15 + 0.4 * germs), text: "A sour gut, then the runs. Something I ate wasn\u2019t clean." });
+      const parasites = st.compounds.parasites ?? 0;
+      if (parasites > 0.02 && rng.chance(Math.min(0.8, parasites * 1.5)))
+        b.pendingSick.push({ at: v.clock.now + 30, severity: Math.min(0.5, 0.2 + parasites), text: "A sour gut and fever. Something I ate raw." });
+      const irritant = Object.keys(st.compounds).some((k) => COMPOUNDS[k].effect === "irritant" && st.compounds[k] > 0.1);
+      const key = loreKey(entityIn(v.world)(it.from.id), it.from.part);
+      const L = (_a = v.lore)[key] ?? (_a[key] = { ok: 0, sick: 0 });
+      const delayed = !!st.compounds.amatoxin && /poison|lethal/.test(outcome);
+      b.energy = clamp(b.energy + (/severe|lethal/.test(outcome) && !delayed ? Math.min(0, net) : net) / 24e3);
+      const feel = [`${cap3(textureWords(st))}.`];
+      if (irritant)
+        feel.push("My mouth and throat burned.");
+      if (wasted > 50) {
+        b.sick = clamp(b.sick + Math.min(0.15, wasted / 1500));
+        feel.push("All lean, nothing fatty or starchy with it: my stomach turns, and I\u2019m still hungry.");
+      }
+      if (net < 0)
+        feel.push("Heavy going; I doubt it gave back what it cost to get down.");
+      else
+        feel.push(m < 0.08 ? "A few mouthfuls." : b.gut > 1.2 ? "Full." : n.net / Math.max(0.05, m) < 600 ? "Filling for now, but there\u2019s not much in it." : net > 400 ? "That was real food." : "");
+      const use = all ? [it] : [], report = { eatenKg: m, netKcal: net, harm: outcome };
+      if (delayed) {
+        b.pendingSick.push({ lore: key, at: v.clock.now + 30, severity: outcome === "potentially lethal" ? 0.95 : 0.6, text: `Sick, badly, a day after eating the ${it.from.name}. It must have been that.` });
+        return { use, report, say: [`${how} ${what}. ${feel.join(" ")} Tasted fine.`.replace(/ +/g, " ")] };
+      }
+      const bad = { "mild upset": [0.15, "My stomach didn\u2019t like it."], "moderate poisoning": [0.4, "Within the hour: sweating, cramps, vomiting."], "severe poisoning": [0.75, "Violently ill soon after; I thought I might die."], "potentially lethal": [1, "It was poison."] }[outcome];
+      if (bad) {
+        b.sick = clamp(b.sick + bad[0]);
+        L.sick++;
+      } else
+        L.ok++;
+      return { use, report, say: [[`${how} ${what}. ${bad ? bad[1] : feel.join(" ")}`.replace(/ +/g, " ").trim(), bad && bad[0] >= 0.4 ? "warn" : "act"]] };
+    }
+  };
+  var SLEEP_HOUR = {
+    id: "sleep-hour",
+    name: "An hour asleep",
+    reads: ["night", "shelter", "fireC", "dt", "body.clothes"],
+    writes: ["body.fatigue", "body.chill", "body.energy", "body.hyd", "body.sick", "body.limp", "body.clothes.wet", "site.bed"],
+    run(v) {
+      const b = v.body, dt = v.dt;
+      const r = sleepHour({ env: v.night, shelter: v.shelter, bed: v.site.bed ?? null, clothes: b.clothes, fireC: v.fireC, body: { energy: b.energy, hyd: b.hyd, limp: b.limp ?? 0 } });
+      b.fatigue = clamp(b.fatigue - 0.12 * (0.35 + 0.65 * r.quality) * dt);
+      b.chill = clamp((b.chill ?? 0) + r.chill * dt);
+      b.energy = clamp(b.energy - dt * (45e-4 + r.kcal / 24e3));
+      b.hyd = clamp(b.hyd - dt * 0.015);
+      b.sick = clamp(b.sick - dt * 0.03 * r.quality);
+      if (b.limp > 0)
+        b.limp = Math.max(0, b.limp - dt * 8e-3 * r.quality);
+      b.clothes.wet = clamp(b.clothes.wet + dt * (r.wetting - r.drying));
+      if (v.site.bed && r.wetting)
+        v.site.bed.wet = clamp(v.site.bed.wet + dt * 0.6 * r.wetting);
+      return { report: r };
+    }
+  };
+  var WET_WORDS = { rain: "Rain set in.", storm: "Thunder, then a downpour: a storm.", snow: "Snow began to fall.", blizzard: "The snow thickened and the wind got up: hard to see anything.", fog: "Fog crept in; I can hardly see a stone\u2019s throw." };
+  function moonLine(k) {
+    const m = k.moon, up = m.alt > 0, cloud = ["overcast", "rain", "storm", "snow", "blizzard", "fog"].includes(k.weather);
+    if (cloud)
+      return "Cloud over everything: a black night.";
+    if (!up || m.illum < 0.05)
+      return m.illum < 0.05 ? "No moon; only starlight." : "The moon isn\u2019t up yet; only starlight.";
+    return `A ${moonWords(m.phase)}${m.illum > 0.9 ? ", bright enough to see by" : m.illum < 0.3 ? ", not much use" : ""}.`;
+  }
+  var TICKS = [
+    { id: "sky", reads: ["tick", "was", "sky", "here.fire", "site.hut"], writes: [], run(v) {
+      const a = v.was, b = v.sky, say = [];
+      if (a.weather !== b.weather) {
+        if (WET_WORDS[b.weather] && !(a.wet && b.wet))
+          say.push([WET_WORDS[b.weather], "note"]);
+        else if (a.weather === "fog" && b.weather !== "fog")
+          say.push(["The fog lifted.", "note"]);
+        else if (a.wet && !b.wet)
+          say.push([`The ${a.weather === "snow" || a.weather === "blizzard" ? "snow" : "rain"} stopped.`, "note"]);
+        if (b.wet && v.here.fire && !v.site.hut && !a.wet)
+          say.push(["Rain on the fire: it won\u2019t last long like this.", "warn"]);
+      }
+      if (a.sunAlt >= -6 && b.sunAlt < -6)
+        say.push(["Night fell.", "note"]);
+      return { say };
+    } },
+    { id: "moon", reads: ["sky", "clock.day"], writes: ["mind.moonNoted"], run(v) {
+      const k = v.sky;
+      if (k.sunAlt >= -6)
+        return {};
+      const night = k.t < 12 ? v.clock.day - 1 : v.clock.day;
+      if (v.mind.moonNoted === night)
+        return {};
+      v.mind.moonNoted = night;
+      return { say: [[moonLine(k), "note"]] };
+    } },
+    { id: "metabolism", reads: ["tick", "sky.tempC", "body.sick"], writes: ["body.hyd", "body.energy", "body.gut", "body.macro"], run(v) {
+      const { dt, kcal } = v.tick, b = v.body;
+      b.hyd -= dt * (0.032 + 0.02 * Math.max(0, kcal - 150) / 250 + 0.02 * b.sick + (v.sky.tempC > 28 ? 0.015 : 0));
+      b.energy -= dt * kcal / 24e3;
+      b.gut = Math.max(0, b.gut - 0.12 * dt);
+      const fade = Math.exp(-dt / 24);
+      for (const m of ["p", "f", "c"])
+        b.macro[m] *= fade;
+    } },
+    { id: "healing", reads: ["tick"], writes: ["body.limp"], run(v) {
+      if (!(v.body.limp > 0))
+        return {};
+      v.body.limp = Math.max(0, v.body.limp - v.tick.dt * 0.1 / 24);
+      return { say: v.body.limp ? [] : [["My ankle feels sound again.", "note"]] };
+    } },
+    { id: "warming", reads: ["tick", "here.fire", "body.clothes.wet"], writes: ["body.chill"], run(v) {
+      if (v.body.chill > 0)
+        v.body.chill = Math.max(0, v.body.chill - v.tick.dt * (0.15 + (v.here.fire ? 0.3 : 0)) * (v.body.clothes.wet > 0.5 ? 0.4 : 1));
+    } },
+    { id: "clothes", reads: ["tick", "sky", "here.shelter", "here.wind", "here.fire"], writes: ["body.clothes.wet"], run(v) {
+      const k = v.sky, c = v.body.clothes, dt = v.tick.dt, pour = { storm: 2, blizzard: 1.5 }[k.weather] ?? 1;
+      if (k.wet)
+        c.wet = clamp(c.wet + dt * 0.3 * pour * (1 - v.here.shelter.rainBlock));
+      else
+        c.wet = clamp(c.wet - dt * (0.06 + 0.1 * v.here.wind.strength + (v.here.fire ? 0.4 : 0) + (k.weather === "clear" && k.sunAlt > 20 ? 0.1 : 0)));
+    } },
+    { id: "germs", reads: ["tick", "sky.tempC"], writes: ["inv"], run(v) {
+      if (v.inv.length > 1)
+        mix(v.inv, null, 0.01 * v.tick.dt, false);
+      const warm = Math.pow(2, (v.sky.tempC - 20) / 10);
+      for (const it of v.inv)
+        if (it.kind === "food" && it.props.chem.water > 0.5)
+          it.props.germs = Math.min(1, it.props.germs + v.tick.dt * 8e-3 * warm * (1 - it.props.germs));
+    } },
+    { id: "drying", reads: ["tick", "sky.wet", "here.fire", "here.ambient"], writes: ["inv"], run(v) {
+      const days = v.tick.dt / 24 * (v.here.fire ? 3 : 1) * (v.sky.wet ? 4 : 1);
+      for (const it of v.inv)
+        if (it.props.moisture !== void 0 && it.kind !== "food")
+          it.props.moisture = v.here.ambient + (it.props.moisture - v.here.ambient) * Math.exp(-0.4 * days);
+    } },
+    { id: "fire", reads: ["tick", "sky", "here.fire", "site.hut"], writes: ["site.fireUntil"], run(v) {
+      if (v.here.fire && v.sky.wet && !v.site.hut)
+        v.site.fireUntil -= v.tick.dt * ({ storm: 3, blizzard: 3, rain: 1, snow: 0.5 }[v.sky.weather] ?? 0);
+    } },
+    { id: "illness", reads: ["clock.now"], writes: ["body.sick", "body.pendingSick", "lore"], run(v) {
+      const b = v.body, say = [];
+      for (const p of [...b.pendingSick])
+        if (v.clock.now >= p.at) {
+          b.sick = clamp(b.sick + p.severity);
+          b.pendingSick.splice(b.pendingSick.indexOf(p), 1);
+          if (p.lore)
+            v.lore[p.lore].sick++;
+          say.push([p.text, "warn"]);
+        }
+      return { say };
+    } }
+  ];
+
   // src/game.js
   var $ = (sel2) => document.querySelector(sel2);
   var esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
   var typo = (s) => String(s).replace(/(\w)'(\w)/g, "$1\u2019$2").replace(/'(\w)/g, "\u2018$1").replace(/(\w)'/g, "$1\u2019").replace(/"(\w)/g, "\u201C$1").replace(/(\w|[.,!?])"/g, "$1\u201D");
-  var cap3 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  var cap4 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   var clock = (t) => {
     const m = Math.round(t * 60);
     return `${String(Math.floor(m / 60) % 24).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
@@ -5982,16 +6638,26 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       seed,
       preset,
       rng: makeRng(`${seed}/game`),
-      ch: { ...newCharacter(), germs: 0.1 },
+      // the body: crafting skill and wear (craft.js), water, food reserves, sickness, warmth, hurts, and what I'm wearing
+      body: {
+        ...newCharacter(),
+        germs: 0.1,
+        hyd: 0.8,
+        energy: 0.75,
+        sick: 0,
+        pendingSick: [],
+        gut: 0,
+        macro: { p: 0, f: 0, c: 0 },
+        chill: 0,
+        limp: 0,
+        wound: null,
+        clothes: { clo: 1, wet: 0 }
+      },
+      // what I came in: trousers, shirt and a light jacket, about 1 clo; wet 0 dry .. 1 soaked
       mem: newMemory(),
+      mind: { moonNoted: null },
       day: 1,
       t: 6.5,
-      hyd: 0.8,
-      energy: 0.75,
-      sick: 0,
-      pendingSick: [],
-      gut: 0,
-      macro: { p: 0, f: 0, c: 0 },
       showProps: false,
       sites: [],
       here: 0,
@@ -6011,15 +6677,13 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       waterNames: {},
       streams: [],
       walked: {},
-      recentNotice: null,
-      clothes: { clo: 1, wet: 0 }
-      // what I came in: trousers, shirt and a light jacket, about 1 clo; wet 0 dry .. 1 soaked
+      recentNotice: null
     };
     S.L.dyn = landNow(S.L);
     {
       const k = skyNow(), tw = k.tempC < 5 ? "cold" : k.tempC < 12 ? "cool" : k.tempC < 22 ? "mild" : "warm";
       const when = (adj, rest) => /season/.test(k.season) ? `a ${adj} morning in the ${k.season}${rest}` : `a ${adj} ${k.season} morning${rest}`;
-      log(`${cap3(k.weather === "fog" ? when("foggy", ": I can hardly see a stone\u2019s throw") : k.wet ? when("wet", `, ${WEATHER_WORDS[k.weather]} coming down`) : when(tw, `, ${WEATHER_WORDS[k.weather]}`))}.`, "note");
+      log(`${cap4(k.weather === "fog" ? when("foggy", ": I can hardly see a stone\u2019s throw") : k.wet ? when("wet", `, ${WEATHER_WORDS[k.weather]} coming down`) : when(tw, `, ${WEATHER_WORDS[k.weather]}`))}.`, "note");
     }
     const first = newSite(checked2.spawn.x, checked2.spawn.y);
     first.name = "where I woke";
@@ -6249,7 +6913,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const g = segAt(cellOf(x, y));
     return g ? g.name : st?.name ?? "the stream";
   }
-  var titleCase = (w) => w.split(/[\s-]+/).map(cap3).join(" ");
+  var titleCase = (w) => w.split(/[\s-]+/).map(cap4).join(" ");
   function newSegmentName(cells) {
     const bottom = cells[cells.length - 1], noun = titleCase(SIZE_NOUN[S.L.chan[bottom] || 1]);
     const used = new Set(Object.values(S.segNames ?? {}).map((g) => g.name));
@@ -6705,7 +7369,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
         log(`Found ${u.label}.`, "act");
         if (u.kind === "carcass") {
           const a = entity(u.source?.animal), fresh2 = u.source?.epoch === Math.floor((S.day - 1) / 4);
-          const what = a && S.mem.entities[memKeyE(a)] ? `a dead ${a.name}` : "a dead animal, something big";
+          const what = a && S.mem.entities[memKeyE2(a)] ? `a dead ${a.name}` : "a dead animal, something big";
           log(fresh2 ? `It was ${what}, a few days gone: torn open by scavengers, flies everywhere. Bones lie about.` : `It was ${what}, long dead; only scattered bones now and a faint smell.`, "note");
           s.bones ?? (s.bones = { fine: 0, big: 0 });
           s.bones.big = Math.min(3, s.bones.big + 2);
@@ -6773,7 +7437,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       }
     }
     if (S.looking) {
-      S.ch.focus = clamp(S.ch.focus - 0.03);
+      S.body.focus = clamp(S.body.focus - 0.03);
       lookHere(s);
       breakthroughs(s, S.looking.key);
       if (S.looking.type !== "distant")
@@ -6917,7 +7581,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       how = "by my reckoning";
     if (Math.hypot(here.x - est.x, here.y - est.y) < 1)
       return;
-    log(`Didn\u2019t reach ${name}. ${cap3(how)}: ${awayWords(lineHours2(S.L, here, est), sus && sus.channel === "sound" && sus.obs < 2 ? "unknown" : "guess")}, to the ${bearingWord(bearing(here, est))}.`, "thought");
+    log(`Didn\u2019t reach ${name}. ${cap4(how)}: ${awayWords(lineHours2(S.L, here, est), sus && sus.channel === "sound" && sus.obs < 2 ? "unknown" : "guess")}, to the ${bearingWord(bearing(here, est))}.`, "thought");
   }
   function missedStream(target, st) {
     const here = site();
@@ -7003,10 +7667,10 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     S.travelHint = null;
     rememberTrip(from, trip.path, trip.hours, [], knownBefore);
   }
-  var limpFactor = () => 1 + 1.5 * (S.limp ?? 0);
+  var limpFactor = () => 1 + 1.5 * (S.body.limp ?? 0);
   function onTheMove(path, hours) {
     S.trod ?? (S.trod = /* @__PURE__ */ new Set());
-    const k = skyNow(), g = groundNow(), body = { fatigue: S.ch.fatigue, energy: S.energy, sick: S.sick, limp: S.limp ?? 0 };
+    const k = skyNow(), g = groundNow(), body = { fatigue: S.body.fatigue, energy: S.body.energy, sick: S.body.sick, limp: S.body.limp ?? 0 };
     const parts = [];
     let total = 0;
     for (let i = 1; i < path.length; i++) {
@@ -7049,7 +7713,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     return w.length ? ` Probably because ${w.join(" and ")}.` : "";
   }
   function soakMe(level = 1) {
-    S.clothes.wet = Math.max(S.clothes.wet, level);
+    S.body.clothes.wet = Math.max(S.body.clothes.wet, level);
     for (const it of S.inv)
       if (it.props.moisture !== void 0 && it.kind !== "food")
         it.props.moisture = Math.min(0.6, it.props.moisture + 0.3 * level);
@@ -7057,29 +7721,29 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
   function hurt({ kind, sev }, k, ctx = {}) {
     const why = reasonWords(ctx.why ?? [], k, ctx.c ?? cellOf(site().x, site().y));
     if (kind === "ankle") {
-      S.limp = Math.max(S.limp ?? 0, sev);
+      S.body.limp = Math.max(S.body.limp ?? 0, sev);
       log(`${sev < 0.3 ? "Turned my ankle; it twinges, but it\u2019ll carry me." : sev < 0.6 ? "Went over on my ankle. It\u2019s swelling; I\u2019ll be slow for a few days." : "Badly twisted my ankle. I can barely put weight on it."}${why}`, "warn");
       return 0.1 + 0.3 * sev;
     }
     if (kind === "fall") {
-      S.ch.hands = clamp(S.ch.hands + 0.05 + 0.25 * sev);
-      S.ch.fatigue = clamp(S.ch.fatigue + 0.1 + 0.2 * sev);
-      S.ch.focus = clamp(S.ch.focus - 0.1);
+      S.body.hands = clamp(S.body.hands + 0.05 + 0.25 * sev);
+      S.body.fatigue = clamp(S.body.fatigue + 0.1 + 0.2 * sev);
+      S.body.focus = clamp(S.body.focus - 0.1);
       log(`Fell hard: ${sev < 0.4 ? "scraped palms and a bruised knee" : "skinned hands and a hip that will be black tomorrow"}.${why}`, "warn");
       return 0.15;
     }
     if (kind === "cut") {
-      S.ch.germs = clamp(S.ch.germs + 0.2);
-      S.wound = { at: now(), sev };
+      S.body.germs = clamp(S.body.germs + 0.2);
+      S.body.wound = { at: now(), sev };
       if (S.rng.chance(0.25 + 0.5 * sev))
-        S.pendingSick.push({ at: now() + 30, severity: 0.15 + 0.35 * sev, text: "The cut on my shin is hot, swollen and weeping: it\u2019s gone bad.", wound: true });
+        S.body.pendingSick.push({ at: now() + 30, severity: 0.15 + 0.35 * sev, text: "The cut on my shin is hot, swollen and weeping: it\u2019s gone bad.", wound: true });
       log(`A broken branch tore a gash in my shin.${why} I should wash it soon.`, "warn");
       return 0.1;
     }
     soakMe(0.8);
-    S.ch.fatigue = clamp(S.ch.fatigue + 0.05);
+    S.body.fatigue = clamp(S.body.fatigue + 0.05);
     if (sev > 0.5)
-      S.limp = Math.max(S.limp ?? 0, 0.4 * sev);
+      S.body.limp = Math.max(S.body.limp ?? 0, 0.4 * sev);
     log(`Slipped on a wet stone and went down in the water: soaked, everything I carry with me${sev > 0.5 ? ", and my ankle wrenched" : ""}.${why}`, "warn");
     return 0.1;
   }
@@ -7134,7 +7798,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       }
       return missedTarget(target, from);
     }
-    const thirsty = S.hyd < 0.55 && !waterHere(from);
+    const thirsty = S.body.hyd < 0.55 && !waterHere(from);
     let n = 0;
     const { sus, dest, st, area, truePos } = targetInfo(target);
     const resense = sus ? (p, force) => {
@@ -7157,13 +7821,13 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const knownBefore = S.sites.length;
     const hours = onTheMove(trip.path, trip.hours * (S.looking ? 1.25 : 1));
     if (S.looking)
-      S.ch.focus = clamp(S.ch.focus - 0.05);
+      S.body.focus = clamp(S.body.focus - 0.05);
     pass(hours, 300);
     for (const sw of trip.sweeps ?? []) {
       const m = Math.round(Math.hypot(sw.to.x - sw.from.x, sw.to.y - sw.from.y) * CELL / 10) * 10;
       log(`Mid-stream the current knocked my feet from under me and carried me ${m} m downstream before I could claw my way out. Soaked through, everything I carry with me.`, "warn");
       soakMe(1);
-      S.ch.fatigue = clamp(S.ch.fatigue + 0.15);
+      S.body.fatigue = clamp(S.body.fatigue + 0.15);
       if (S.rng.chance(0.4)) {
         const c = cellOf(sw.to.x, sw.to.y);
         pass(hurt({ kind: S.rng.chance(0.5) ? "fall" : "ankle", sev: clamp(S.rng.logNormal(0.3, 0.5), 0.05, 0.9) }, skyNow(), { why: ["the current"], c }), 100);
@@ -7246,98 +7910,58 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     s.visits++;
     log(out.text, "note");
   }
-  var WET_WORDS = { rain: "Rain set in.", storm: "Thunder, then a downpour: a storm.", snow: "Snow began to fall.", blizzard: "The snow thickened and the wind got up: hard to see anything.", fog: "Fog crept in; I can hardly see a stone\u2019s throw." };
-  function noteSky(a, b) {
-    if (a.weather !== b.weather) {
-      if (WET_WORDS[b.weather] && !(a.wet && b.wet))
-        log(WET_WORDS[b.weather], "note");
-      else if (a.weather === "fog" && b.weather !== "fog")
-        log("The fog lifted.", "note");
-      else if (a.wet && !b.wet)
-        log(`The ${a.weather === "snow" || a.weather === "blizzard" ? "snow" : "rain"} stopped.`, "note");
-      if (b.wet && fireHere() && !site().hut && !a.wet)
-        log("Rain on the fire: it won\u2019t last long like this.", "warn");
+  var HERE = {
+    water: () => waterHere(site()) ? ((w) => ({ name: w.name, pathogen: w.hidden?.pathogen ?? 0.2 }))(waterSource(site())) : null,
+    fire: () => fireHere(),
+    dark: () => isNight(),
+    shelter: () => shelterHere(site(), groundNow()),
+    wind: () => windAt(S.world, S.day, S.t),
+    ambient: () => ambient(),
+    waterTempC: () => ({ running: waterTempC(false), still: waterTempC(true) }),
+    cond: () => condNow(),
+    factors: () => siteFactors(S.world.seed, site().key, S.world.environment.microhabitats.find((x) => x.id === site().micro)),
+    marsh: () => smellsToday().some((x) => x.kind === "marsh" && Math.hypot(x.x - site().x, x.y - site().y) < 15),
+    seeing: () => senseLimits(true) || null
+  };
+  var stateFor = (binding = {}) => stateOver({
+    body: S.body,
+    site: site(),
+    sky: skyNow,
+    ground: groundNow,
+    world: S.world,
+    mem: S.mem,
+    lore: S.lore,
+    mind: S.mind,
+    milestones: S.milestones,
+    inv: S.inv,
+    clock: () => ({ day: S.day, t: S.t, now: now() }),
+    ...binding
+  }, { here: HERE });
+  var dice = () => ({ act: S.rng, place: (key) => makeRng(`${S.world.seed}/${key}`) });
+  function perform(proc, binding = {}, { quiet = false } = {}) {
+    let v = viewOf(proc, stateFor(binding));
+    const ok = readyFor(proc, v);
+    if (ok !== true) {
+      log(ok, "warn");
+      return null;
     }
-    if (a.sunAlt >= -6 && b.sunAlt < -6)
-      log("Night fell.", "note");
+    const hours = hoursOf(proc, v);
+    if (hours > 0) {
+      pass(hours, kcalOf(proc, v));
+      v = viewOf(proc, stateFor(binding));
+    }
+    const fx = rehearse(proc, v, dice());
+    apply(fx, stateFor(binding));
+    for (const it of fx.use)
+      remove(S.inv.find((i) => i.uid === it.uid));
+    fx.made = fx.make.map((m) => addItem(m.name, m.kind, m.props, m.from, m.extra));
+    if (!quiet)
+      for (const [text, kind] of fx.say)
+        log(text, kind);
+    if (!quiet && !TICKS.includes(proc))
+      S.lastAct = { id: proc.id, binding: Object.keys(binding), view: v, fx };
+    return fx;
   }
-  function noteMoon(k) {
-    if (k.sunAlt >= -6)
-      return;
-    const night = k.t < 12 ? S.day - 1 : S.day;
-    if (S.moonNoted === night)
-      return;
-    S.moonNoted = night;
-    log(moonLine(k), "note");
-  }
-  function moonLine(k) {
-    const m = k.moon, up = m.alt > 0, cloud = ["overcast", "rain", "storm", "snow", "blizzard", "fog"].includes(k.weather);
-    if (cloud)
-      return "Cloud over everything: a black night.";
-    if (!up || m.illum < 0.05)
-      return m.illum < 0.05 ? "No moon; only starlight." : "The moon isn\u2019t up yet; only starlight.";
-    return `A ${moonWords(m.phase)}${m.illum > 0.9 ? ", bright enough to see by" : m.illum < 0.3 ? ", not much use" : ""}.`;
-  }
-  var TICKS = [
-    { name: "sky", run: ({ was, k }) => noteSky(was, k) },
-    { name: "moon", run: ({ k }) => noteMoon(k) },
-    { name: "metabolism", run: ({ dt, kcal }) => {
-      S.hyd -= dt * (0.032 + 0.02 * Math.max(0, kcal - 150) / 250 + 0.02 * S.sick + (skyNow().tempC > 28 ? 0.015 : 0));
-      S.energy -= dt * kcal / 24e3;
-      S.gut = Math.max(0, S.gut - 0.12 * dt);
-      const fade = Math.exp(-dt / 24);
-      for (const m of ["p", "f", "c"])
-        S.macro[m] *= fade;
-    } },
-    { name: "healing", run: ({ dt }) => {
-      if (S.limp > 0) {
-        S.limp = Math.max(0, S.limp - dt * 0.1 / 24);
-        if (!S.limp)
-          log("My ankle feels sound again.", "note");
-      }
-    } },
-    { name: "warming", run: ({ dt, s }) => {
-      if (S.chill > 0)
-        S.chill = Math.max(0, S.chill - dt * (0.15 + (fireHere() ? 0.3 : 0)) * (S.clothes.wet > 0.5 ? 0.4 : 1));
-    } },
-    // moving, and a fire, warm me back up; wet clothes slow it
-    { name: "clothes", run: ({ dt, k, s }) => {
-      const sh = s.hut ? SHELTERS.hut : shelterHere(s, groundNow()), pour = { storm: 2, blizzard: 1.5 }[k.weather] ?? 1;
-      if (k.wet)
-        S.clothes.wet = clamp(S.clothes.wet + dt * 0.3 * pour * (1 - sh.rainBlock));
-      else
-        S.clothes.wet = clamp(S.clothes.wet - dt * (0.06 + 0.1 * windAt(S.world, S.day, S.t).strength + (fireHere() ? 0.4 : 0) + (k.weather === "clear" && k.sunAlt > 20 ? 0.1 : 0)));
-    } },
-    { name: "germs", run: ({ dt }) => {
-      if (S.inv.length > 1)
-        touch(S.inv, 0.01 * dt, false);
-      const warm = Math.pow(2, (skyNow().tempC - 20) / 10);
-      for (const it of S.inv)
-        if (it.kind === "food" && it.props.chem.water > 0.5)
-          it.props.germs = Math.min(1, it.props.germs + dt * 8e-3 * warm * (1 - it.props.germs));
-    } },
-    { name: "drying", run: ({ dt, k }) => {
-      const nearFire = fireHere();
-      for (const it of S.inv)
-        if (it.props.moisture !== void 0 && it.kind !== "food")
-          dry(it, dt / 24 * (nearFire ? 3 : 1) * (k.wet ? 4 : 1), ambient());
-    } },
-    { name: "fire", run: ({ dt, k, s }) => {
-      if (fireHere() && k.wet && !s.hut)
-        s.fireUntil -= dt * ({ storm: 3, blizzard: 3, rain: 1, snow: 0.5 }[k.weather] ?? 0);
-    } },
-    // rain eats a fire in the open
-    { name: "illness", run: () => {
-      for (const p of [...S.pendingSick])
-        if (now() >= p.at) {
-          S.sick = clamp(S.sick + p.severity);
-          S.pendingSick.splice(S.pendingSick.indexOf(p), 1);
-          if (p.lore)
-            S.lore[p.lore].sick++;
-          log(p.text, "warn");
-        }
-    } }
-  ];
   function pass(hours, kcal = 150) {
     const steps = Math.max(1, Math.ceil(hours / 0.5));
     const dt = hours / steps;
@@ -7348,24 +7972,23 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
         S.t -= 24;
         S.day++;
       }
-      const ctx = { dt, kcal, was, k: skyNow(), s: site() };
       for (const tick of TICKS)
-        tick.run(ctx);
+        perform(tick, { tick: { dt, kcal }, was });
     }
-    S.hyd = clamp(S.hyd);
-    S.energy = clamp(S.energy);
-    const cap4 = 1 - 0.6 * Math.max(0, 0.4 - S.hyd) / 0.4 - 0.4 * Math.max(0, 0.3 - S.energy) / 0.3 - 0.5 * S.sick - 0.3 * (S.chill ?? 0);
-    S.ch.focus = Math.min(S.ch.focus, clamp(cap4, 0.1, 1));
-    if (S.hyd <= 0.02 || S.energy <= 0.02 || S.sick >= 0.95)
+    S.body.hyd = clamp(S.body.hyd);
+    S.body.energy = clamp(S.body.energy);
+    const cap5 = 1 - 0.6 * Math.max(0, 0.4 - S.body.hyd) / 0.4 - 0.4 * Math.max(0, 0.3 - S.body.energy) / 0.3 - 0.5 * S.body.sick - 0.3 * (S.body.chill ?? 0);
+    S.body.focus = Math.min(S.body.focus, clamp(cap5, 0.1, 1));
+    if (S.body.hyd <= 0.02 || S.body.energy <= 0.02 || S.body.sick >= 0.95)
       collapse();
   }
   function collapse() {
-    const why = S.hyd <= 0.02 ? "thirst" : S.energy <= 0.02 ? "hunger" : "sickness";
+    const why = S.body.hyd <= 0.02 ? "thirst" : S.body.energy <= 0.02 ? "hunger" : "sickness";
     log(`Everything went grey. I lay down where I was and lost the rest of the day to ${why}.`, "warn");
     S.collapsed++;
-    S.hyd = Math.max(S.hyd, 0.35);
-    S.energy = Math.max(S.energy, 0.12);
-    S.sick = Math.min(S.sick, 0.6);
+    S.body.hyd = Math.max(S.body.hyd, 0.35);
+    S.body.energy = Math.max(S.body.energy, 0.12);
+    S.body.sick = Math.min(S.body.sick, 0.6);
     sleep(true);
   }
   function shelterHere(s, g) {
@@ -7381,23 +8004,13 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const hours = (wakeDay - S.day) * 24 + wake - S.t;
     const biterKind = !banked && ["mosquito", "gnat"].find((k) => S.world.animals.some((a) => a.traits.key === k && (waterHere(s) || a.habitats.some((h) => h.micro === s.micro))));
     const meanSoak = S.world.environment.precipMm / 365 / 0.15;
-    const tally = { q: 0, n: 0, loss: {}, cause: {}, lowC: Infinity }, limpBefore = S.limp ?? 0;
+    const tally = { q: 0, n: 0, loss: {}, cause: {}, lowC: Infinity }, limpBefore = S.body.limp ?? 0;
     let day = S.day, t = S.t;
     for (let h = 0; h < hours - 1e-9; h += 1) {
       const dt = Math.min(1, hours - h), k = skyAt(S.world, day, t), g = groundAt(S.world, day);
       const env = { tempC: k.tempC, windMs: windAt(S.world, day, t).ms, precip: k.wet ? k.weather : null, groundWet: clamp(g.soak / (2 * meanSoak)), snowCm: snowCm(S.L, g, c), biters: !!biterKind && k.tempC >= 10 };
       const fireC = banked ? (s.hut ? 7 : 5) * Math.max(0.2, 1 - h / hours) : 0;
-      const r = sleepHour({ env, shelter: shelterHere(s, g), bed: s.bed ?? null, clothes: S.clothes, fireC, body: { energy: S.energy, hyd: S.hyd, limp: S.limp ?? 0 } });
-      S.ch.fatigue = clamp(S.ch.fatigue - 0.12 * (0.35 + 0.65 * r.quality) * dt);
-      S.chill = clamp((S.chill ?? 0) + r.chill * dt);
-      S.energy = clamp(S.energy - dt * (45e-4 + r.kcal / 24e3));
-      S.hyd = clamp(S.hyd - dt * 0.015);
-      S.sick = clamp(S.sick - dt * 0.03 * r.quality);
-      if (S.limp > 0)
-        S.limp = Math.max(0, S.limp - dt * 8e-3 * r.quality);
-      S.clothes.wet = clamp(S.clothes.wet + dt * (r.wetting - r.drying));
-      if (s.bed && r.wetting)
-        s.bed.wet = clamp(s.bed.wet + dt * 0.6 * r.wetting);
+      const r = perform(SLEEP_HOUR, { night: env, shelter: shelterHere(s, g), fireC, dt }, { quiet: true }).report;
       tally.q += r.quality * dt;
       tally.n += dt;
       tally.lowC = Math.min(tally.lowC, k.tempC);
@@ -7415,10 +8028,10 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     for (const it of S.inv)
       if (it.props.moisture !== void 0 && it.kind !== "food")
         dry(it, hours / 24, s.hut ? ambient() - 0.03 : ambient());
-    S.ch.hands *= Math.pow(0.55, 0.4 + 0.6 * q);
-    S.ch.callus *= 0.995;
-    S.ch.focus = clamp(0.4 + 0.7 * q, 0.3, 1);
-    if (limpBefore > 0 && !S.limp)
+    S.body.hands *= Math.pow(0.55, 0.4 + 0.6 * q);
+    S.body.callus *= 0.995;
+    S.body.focus = clamp(0.4 + 0.7 * q, 0.3, 1);
+    if (limpBefore > 0 && !S.body.limp)
       log("My ankle feels sound again.", "note");
     const seasonBefore = seasonOf(S.world, dayOfYear(S.world, S.day));
     S.day = wakeDay;
@@ -7442,49 +8055,49 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     };
     const reasons = Object.entries(per).filter(([, v]) => v >= 0.08).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k]) => say[k]);
     const words = q >= 0.8 ? "Slept warm and deep." : q >= 0.55 ? "Slept well enough." : q >= 0.35 ? `A ${per.cold >= 0.15 ? "cold" : "restless"}, broken night.` : per.cold >= 0.3 ? "Barely slept; cold to the bone." : "Barely slept.";
-    const chill = S.chill >= 0.6 ? " I woke shaking, stiff and grey with cold." : S.chill >= 0.3 ? " I woke chilled through." : "";
+    const chill = S.body.chill >= 0.6 ? " I woke shaking, stiff and grey with cold." : S.body.chill >= 0.3 ? " I woke chilled through." : "";
     if (!forced)
-      log(`${words}${reasons.length ? ` ${cap3(reasons.join(", and "))}.` : ""}${chill}${banked ? " Banked the fire with two pieces of wood; it was still glowing at dawn." : ""}${s.hut && q >= 0.55 ? " The hut kept the night out." : ""}${s.bed && !s.hut && q >= 0.55 ? " The bed of leaves helped." : ""}`, "act");
-    if (S.chill >= 0.6 && S.sick < 0.3 && !S.pendingSick.some((p) => p.chill) && S.rng.chance(S.chill - 0.4))
-      S.pendingSick.push({ at: now() + 12, severity: 0.15 + 0.2 * (S.chill - 0.6), text: "A chill has settled on my chest: aching, shivery, coughing.", chill: true });
-    for (const p of [...S.pendingSick])
+      log(`${words}${reasons.length ? ` ${cap4(reasons.join(", and "))}.` : ""}${chill}${banked ? " Banked the fire with two pieces of wood; it was still glowing at dawn." : ""}${s.hut && q >= 0.55 ? " The hut kept the night out." : ""}${s.bed && !s.hut && q >= 0.55 ? " The bed of leaves helped." : ""}`, "act");
+    if (S.body.chill >= 0.6 && S.body.sick < 0.3 && !S.body.pendingSick.some((p) => p.chill) && S.rng.chance(S.body.chill - 0.4))
+      S.body.pendingSick.push({ at: now() + 12, severity: 0.15 + 0.2 * (S.body.chill - 0.6), text: "A chill has settled on my chest: aching, shivery, coughing.", chill: true });
+    for (const p of [...S.body.pendingSick])
       if (now() >= p.at) {
-        S.sick = clamp(S.sick + p.severity);
-        S.pendingSick.splice(S.pendingSick.indexOf(p), 1);
+        S.body.sick = clamp(S.body.sick + p.severity);
+        S.body.pendingSick.splice(S.body.pendingSick.indexOf(p), 1);
         log(p.text, "warn");
       }
   }
   function bodyWords() {
     const w = [];
-    const ch = S.ch;
-    w.push(S.hyd > 0.7 ? "Not thirsty." : S.hyd > 0.45 ? "Thirsty." : S.hyd > 0.2 ? "Very thirsty; my head aches." : "Parched. I need water now.");
-    w.push(S.energy > 0.68 ? "Fed enough." : S.energy > 0.45 ? "Hungry." : S.energy > 0.25 ? "Very hungry; weak in the legs." : "Starving and shaky.");
+    const ch = S.body;
+    w.push(S.body.hyd > 0.7 ? "Not thirsty." : S.body.hyd > 0.45 ? "Thirsty." : S.body.hyd > 0.2 ? "Very thirsty; my head aches." : "Parched. I need water now.");
+    w.push(S.body.energy > 0.68 ? "Fed enough." : S.body.energy > 0.45 ? "Hungry." : S.body.energy > 0.25 ? "Very hungry; weak in the legs." : "Starving and shaky.");
     w.push(ch.fatigue < 0.3 ? "Rested." : ch.fatigue < 0.6 ? "Getting tired." : ch.fatigue < 0.85 ? "Tired." : "Exhausted.");
     w.push(ch.hands < 0.25 ? "Hands fine." : ch.hands < 0.5 ? "Palms sore." : ch.hands < 0.8 ? "Palms blistered." : "Blisters open; palms raw.");
     if (ch.callus > 0.25)
       w.push("Calluses forming.");
-    if (S.limp > 0.05)
-      w.push(S.limp < 0.3 ? "Ankle a little sore." : S.limp < 0.6 ? "Limping on a swollen ankle." : "Hobbling; the ankle can barely take my weight.");
-    if (S.wound && now() - S.wound.at < 48)
+    if (S.body.limp > 0.05)
+      w.push(S.body.limp < 0.3 ? "Ankle a little sore." : S.body.limp < 0.6 ? "Limping on a swollen ankle." : "Hobbling; the ankle can barely take my weight.");
+    if (S.body.wound && now() - S.body.wound.at < 48)
       w.push("A gash on my shin.");
-    if (S.clothes.wet > 0.15)
-      w.push(S.clothes.wet > 0.6 ? "Clothes soaked through." : "Clothes damp.");
-    if ((S.chill ?? 0) > 0.15)
-      w.push(S.chill > 0.5 ? "Chilled to the core; I can\u2019t stop shivering." : "Still chilled.");
+    if (S.body.clothes.wet > 0.15)
+      w.push(S.body.clothes.wet > 0.6 ? "Clothes soaked through." : "Clothes damp.");
+    if ((S.body.chill ?? 0) > 0.15)
+      w.push(S.body.chill > 0.5 ? "Chilled to the core; I can\u2019t stop shivering." : "Still chilled.");
     w.push(ch.focus > 0.7 ? "Thinking clearly." : ch.focus > 0.4 ? "Thinking feels slow." : "Thinking feels foggy.");
-    const mt = S.macro.p + S.macro.f + S.macro.c;
-    if (mt > 600 && S.macro.p / mt > 0.33)
+    const mt = S.body.macro.p + S.body.macro.f + S.body.macro.c;
+    if (mt > 600 && S.body.macro.p / mt > 0.33)
       w.push("Too much lean food lately; I crave fat or starch.");
-    else if (mt > 900 && S.macro.f / mt < 0.08)
+    else if (mt > 900 && S.body.macro.f / mt < 0.08)
       w.push("Craving something fatty.");
-    if (S.gut > 1.1)
+    if (S.body.gut > 1.1)
       w.push("Full.");
-    if (S.ch.germs > 0.35)
+    if (S.body.germs > 0.35)
       w.push("Filthy hands.");
     if (S.showProps)
-      w.push(`(hands: germs ${S.ch.germs.toFixed(2)})`);
-    if (S.sick > 0.1)
-      w.push(S.sick > 0.6 ? "Badly sick." : S.sick > 0.3 ? "Sick to my stomach." : "A bit queasy.");
+      w.push(`(hands: germs ${S.body.germs.toFixed(2)})`);
+    if (S.body.sick > 0.1)
+      w.push(S.body.sick > 0.6 ? "Badly sick." : S.body.sick > 0.3 ? "Sick to my stomach." : "A bit queasy.");
     const wd = windNow();
     w.push(`${wd.strength < 0.35 ? "A light breeze" : wd.strength < 0.7 ? "A steady breeze" : "A strong wind"} from the ${bearingWord(wd.from)}.`);
     return w;
@@ -7529,17 +8142,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     board: 0.03,
     spindle: 0.03
   };
-  function touch(items, k = 0.4, hands = true) {
-    const xs = items.filter(Boolean);
-    const all = [...xs.map((i) => i.props.germs ?? 0), ...hands ? [S.ch.germs] : []];
-    if (!all.length)
-      return;
-    const m = all.reduce((a, b) => a + b, 0) / all.length;
-    for (const i of xs)
-      i.props.germs = Math.round(((i.props.germs ?? 0) + k * (m - (i.props.germs ?? 0))) * 1e3) / 1e3;
-    if (hands)
-      S.ch.germs += k * (m - S.ch.germs);
-  }
+  var touch = (items, k = 0.4, hands = true) => mix(items, S.body, k, hands);
   var waterGerms = () => waterSource(site()).hidden?.pathogen ?? 0.25;
   var waterTempC = (still) => {
     const e = S.world.environment.meanTempC;
@@ -7590,7 +8193,6 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     }
     return out;
   }
-  var loreKey = (e, part) => `${e.lookalike?.mimics ?? e.id}:${part}`;
   var loreWords = (l) => l.sick ? `made me sick ${l.sick > 1 ? `${l.sick} times` : "once"}` : `ate fine ${l.ok > 1 ? `${l.ok} times` : "once"}`;
   function patchDensity(e, s) {
     const v = e.varying?.find((x) => x.id === "woodDensity");
@@ -7629,7 +8231,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
         case "fluff":
         case "fungus-tinder":
         case "lichen-tinder":
-          add(`${cap3(m.part)} (${nm})`, () => addItem(`${m.part}, ${nm}`, "tindermat", { moisture: ambient() * (m.material === "fungus-tinder" ? 0.9 : 0.6) }, { id: e.id, name: nm, part: m.part, site: s.key }), 0.25);
+          add(`${cap4(m.part)} (${nm})`, () => addItem(`${m.part}, ${nm}`, "tindermat", { moisture: ambient() * (m.material === "fungus-tinder" ? 0.9 : 0.6) }, { id: e.id, name: nm, part: m.part, site: s.key }), 0.25);
           break;
         case "moss":
           add(`Moss (${nm})`, () => addItem(`moss, ${nm}`, "moss", { moisture: ambient() + 0.2 }, { id: e.id, name: nm, part: "moss", site: s.key }), 0.2);
@@ -7651,7 +8253,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
           const part = e.parts.find((x) => x.part === m.part);
           const lore = S.lore[loreKey(e, m.part)];
           if (part?.food && part.chem)
-            add(`${cap3(m.part)} to eat (${nm})${lore ? ` \xB7 ${loreWords(lore)}` : ""}`, () => foodItem(`${m.part} to eat, ${nm}`, part.chem, part.chem.gather * clamp(inSeason, 0.3, 1), part.food, { id: e.id, name: nm, part: m.part, site: s.key }), 0.5);
+            add(`${cap4(m.part)} to eat (${nm})${lore ? ` \xB7 ${loreWords(lore)}` : ""}`, () => foodItem(`${m.part} to eat, ${nm}`, part.chem, part.chem.gather * clamp(inSeason, 0.3, 1), part.food, { id: e.id, name: nm, part: m.part, site: s.key }), 0.5);
           break;
         }
       }
@@ -7695,7 +8297,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       }
       if (e?.eggs && !s.eggsTaken?.includes(e.id) && e.habitats.some((h) => h.micro === s.micro) && animalNow(e, condNow(s)).breeding) {
         const lore = S.lore[loreKey(e, "eggs")];
-        opts.push({ label: `${cap3(e.eggs.nest)} (${e.name})${lore ? ` \xB7 ${loreWords(lore)}` : ""}`, part: "Eggs", species: e.name, hours: 0.4, kcal: 120, fn: () => {
+        opts.push({ label: `${cap4(e.eggs.nest)} (${e.name})${lore ? ` \xB7 ${loreWords(lore)}` : ""}`, part: "Eggs", species: e.name, hours: 0.4, kcal: 120, fn: () => {
           (s.eggsTaken ?? (s.eggsTaken = [])).push(e.id);
           return foodItem(`${e.name} eggs`, e.eggs.chem, e.eggs.chem.gather, e.eggs.food, { id: e.id, name: e.name, part: "eggs", site: s.key }, { animal: true });
         } });
@@ -7728,8 +8330,8 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       log(`Smoke from the fire kept the ${pluralize(e.name)} sluggish; only a sting or two.`);
       return null;
     }
-    S.ch.hands = clamp(S.ch.hands + 0.2);
-    S.sick = clamp(S.sick + 0.05);
+    S.body.hands = clamp(S.body.hands + 0.2);
+    S.body.sick = clamp(S.body.sick + 0.05);
     log(`Stung again and again by the ${pluralize(e.name)}. Smoke would have calmed them.`, "warn");
     return null;
   }
@@ -7824,9 +8426,8 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       return [...list].sort((a, b) => b.props.life - a.props.life)[0];
     return list[0];
   }
-  var flakeItem = (f, label) => addItem(label, "edge", f.props, { id: f.provenance?.source, name: f.provenance?.name ?? "", part: label, site: site().key });
   function craft(id, mode) {
-    const r = S.rng, ch = S.ch;
+    const r = S.rng, ch = S.body;
     const R2 = RECIPES.find((x) => x.id === id);
     const pickd = Object.fromEntries(R2.slots.map(([k, , list]) => [k, pickSlot(id, k, list())]));
     const prov = (it) => ({ name: it.from?.name ?? it.name, source: it.from?.id, site: it.from?.site });
@@ -7856,17 +8457,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
           log(`Can\u2019t strike a stone with itself; used the ${other.from.name} stone as the hammer.`);
         }
         const slab = ofKind("slab")[0];
-        const anvil = { props: { mass: slab ? 6e3 : 1500 } };
-        const res = knapFlakes(r, ch, { props: core.props, provenance: prov(core) }, { props: hammer.props }, anvil);
-        pass(0.25, 200);
-        res.flakes.forEach((f) => flakeItem(f, `flake, ${core.from.name}`));
-        log(res.flakes.length ? `Smashed the ${core.from.name} stone ${slab ? "on the slab" : "against a rock"}: ${res.flakes.length} usable flake${res.flakes.length > 1 ? "s" : ""}.` : `Smashed the ${core.from.name} stone; nothing but crumbs and blunt chunks.`);
-        if (res.flakes.length && !S.milestones.edge) {
-          S.milestones.edge = true;
-          log("My first cutting edge.", "milestone");
-        }
-        if (S.rng.chance(0.25))
-          remove(core);
+        perform(KNAP, { core, hammer, anvil: { props: { mass: slab ? 6e3 : 1500 }, slab: !!slab } });
         break;
       }
       case "notch": {
@@ -7949,79 +8540,9 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       case "leach":
       case "soak":
       case "dryfood":
-      case "stoneboil": {
-        const { food } = pickd;
-        const q = clamp(0.5 + 0.4 * ch.focus + S.rng.normal(0, 0.1));
-        let ex, hours, kcal = 180, tag, cond = {};
-        if (id === "pound") {
-          const st = pickd.stone;
-          cond.crushPower = clamp(st.props.hardness / 7, 0.3, 1) * clamp(Math.sqrt(st.props.mass / 800), 0.6, 1.2);
-          ex = { crush: 0.5 };
-          hours = 0.25;
-          kcal = 260;
-          tag = "pounded";
-        } else if (id === "grind") {
-          cond.rough = Math.max(...ofKind("stone").map((x) => x.props.rough ?? 0.4));
-          ex = { grind: 0.9 };
-          hours = 0.75;
-          kcal = 240;
-          tag = "ground";
-        } else if (id === "chop") {
-          const e = pickd.edge;
-          cond.crushPower = 1;
-          ex = { cut: 0.25 + 0.25 * (e.props.sharpness ?? 0.5) };
-          hours = 0.2;
-          kcal = 150;
-          tag = "chopped";
-          e.props.sharpness = Math.max(0, e.props.sharpness - 0.01);
-        } else if (id === "roast") {
-          ex = { heat: { mode: "roast", minutes: mode === "careful" ? 25 : 10 } };
-          hours = mode === "careful" ? 0.5 : 0.25;
-          tag = "roasted";
-        } else if (id === "leach" || id === "soak") {
-          hours = Number(mode);
-          ex = { water: { mode: id === "leach" ? "running" : "still", hours, tempC: waterTempC(id === "soak") } };
-          kcal = 140;
-          tag = `${id === "leach" ? "leached" : "soaked"} ${hours} h`;
-        } else if (id === "stoneboil") {
-          const stones = ofKind("stone");
-          cond.heatPower = Math.min(1.2, 0.3 * stones.length + 0.1);
-          for (const st of stones)
-            if (S.rng.chance((st.props.spall ?? 0.3) * 0.4)) {
-              remove(st);
-              log(`The ${st.name} burst with a crack in the fire.`, "warn");
-            }
-          ex = { heat: { mode: "boil", minutes: 20 } };
-          hours = 0.75;
-          kcal = 220;
-          tag = cond.heatPower >= 0.9 ? "boiled" : "simmered";
-          if (cond.heatPower < 0.9)
-            log(`With only ${stones.length} stone${stones.length === 1 ? "" : "s"} the water never quite boiled.`);
-        } else {
-          hours = mode === "fire" ? 2 : 4;
-          ex = { dry: mode === "fire" ? 12 : 8 };
-          kcal = 140;
-          tag = "dried";
-        }
-        if (id === "dryfood" && mode === "fire" && !fireHere())
-          return log("There\u2019s no fire here to dry it by.", "warn");
-        if (id === "dryfood" && mode === "sun" && isNight())
-          return log("Not at night.", "warn");
-        pass(hours, kcal);
-        const before = food.props.chem;
-        const after = expose(before, ex, q, cond);
-        if (id === "roast" && mode === "quick" && S.rng.chance(0.3)) {
-          food.props.mass *= 0.85;
-          log("Some of it charred black.");
-        }
-        food.props.mass = Math.round(food.props.mass * (1 - before.water) / Math.max(0.05, 1 - after.water) * 1e3) / 1e3;
-        food.props.chem = after;
-        food.notes = {};
-        food.prep.push(tag);
-        food.name = `${food.base} (${food.prep.join(", ")})`;
-        log(`${{ pound: "Pounded", grind: "Ground", chop: "Chopped up", roast: "Roasted", leach: "Left", soak: "Soaked", dryfood: "Dried", stoneboil: "Stone-boiled" }[id]} the ${food.from.part} of the ${food.from.name}${id === "leach" ? ` in the stream for ${hours} hours` : id === "soak" ? ` for ${hours} hours` : id === "dryfood" ? mode === "fire" ? " by the fire" : " in the sun" : id === "stoneboil" ? ` in the ${site().basin.kind}` : ""}. ${cap3(textureWords(after))} now.`);
+      case "stoneboil":
+        perform(PREPARE(id), { food: pickd.food, mode, stone: pickd.stone, edge: pickd.edge, stones: ofKind("stone") });
         break;
-      }
       case "basin": {
         const s = site();
         if (s.micro === "claybank") {
@@ -8042,7 +8563,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
         const { thing } = pickd;
         pass(0.1, 120);
         thing.props.germs = Math.round((thing.props.germs * 0.3 + 0.4 * waterGerms()) * 1e3) / 1e3;
-        S.ch.germs = S.ch.germs * 0.5 + 0.3 * waterGerms();
+        S.body.germs = S.body.germs * 0.5 + 0.3 * waterGerms();
         log(`Washed the ${thing.name} in the water.`);
         return "rinsed";
       }
@@ -8092,7 +8613,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     [() => true, "barely warm; the spindle just polished the socket"]
   ];
   function drillTrouble(board, spindle) {
-    const sk = S.ch.skills.firecraft, b = board.props, sp = spindle.props;
+    const sk = S.body.skills.firecraft, b = board.props, sp = spindle.props;
     const pen = [
       [0.6 * -Math.log(Math.max(b.notch, 1e-3)), "dust spills out of the ragged notch instead of piling up"],
       [-Math.log(Math.max(ROLES.hearth({ ...b, moisture: 0, resin: 0 }, sk), 1e-3)), "the board is too hard; the socket only polishes and barely chars"],
@@ -8108,11 +8629,11 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const tally = {};
     let n = 0, stop = "";
     while (true) {
-      if (S.ch.hands > 0.85) {
+      if (S.body.hands > 0.85) {
         stop = "my palms are raw; I have to stop";
         break;
       }
-      if (S.ch.fatigue > 0.88) {
+      if (S.body.fatigue > 0.88) {
         stop = "too tired to keep going";
         break;
       }
@@ -8130,7 +8651,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
         remove(spindle);
         break;
       }
-      const res = handDrill(S.rng, S.ch, board, spindle);
+      const res = handDrill(S.rng, S.body, board, spindle);
       pass(0.25, 400);
       n++;
       const line = DRILL_LINES.find(([f]) => f(res))[1];
@@ -8164,7 +8685,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       return log("An ember, but no tinder bundle ready. It faded in the notch.", "warn");
     if (!has("wood"))
       return log("An ember, but no wood to feed a flame. It faded.", "warn");
-    const res = lightFire(S.rng, S.ch, e, tinder);
+    const res = lightFire(S.rng, S.body, e, tinder);
     pass(0.15, 180);
     remove(tinder);
     if (res.success) {
@@ -8178,7 +8699,6 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     } else
       log("Tipped the ember into the tinder and blew, but it smothered and died.", "warn");
   }
-  var pluralize = (n) => /fungus$/.test(n) ? n.replace(/fungus$/, "fungi") : /louse$/.test(n) ? n.replace(/louse$/, "lice") : /(s|sh|ch|x)$/.test(n) ? `${n}es` : /[^aeiou]y$/.test(n) ? `${n.slice(0, -1)}ies` : /(deer|fish|trout|elk|grouse|quail|boar)$/.test(n) ? n : `${n}s`;
   function shortDesc(e) {
     if (e.kind === "stone")
       return e.cues.slice(0, 2).join("; ");
@@ -8211,120 +8731,12 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       b.push(t.pace > 0.3 ? "soft leaves" : t.pace < -0.3 ? "leathery leaves" : "plain leaves");
     return b.slice(0, 4).join(", ");
   }
-  function countWord(n) {
-    return n < 10 ? String(Math.max(1, Math.round(n))) : `~${n < 30 ? Math.round(n / 5) * 5 : Math.round(n / 10) * 10}`;
-  }
-  function lineFor(e, n) {
-    const nm = e.name, c = countWord(n);
-    if (e.kind === "stone")
-      return `${c} heftable ${nm} cobbles`;
-    const colony = { ant: "nest", termite: "mound", wasp: "nest" }[e.traits?.key];
-    if (colony)
-      return `${c} ${nm} ${colony}${n > 1.5 ? "s" : ""}`;
-    if (e.kind === "animal")
-      return `${c} ${pluralize(nm)}`;
-    if (e.form === "tree")
-      return `${c} ${/tree$/.test(nm) ? pluralize(nm) : `${nm} trees`}`;
-    if (e.form === "shrub")
-      return `${c} ${/bush$/.test(nm) ? `${nm}es` : `${nm} bushes`}`;
-    if (e.form === "grass")
-      return `${c} tufts of ${nm}`;
-    if (e.form === "mushroom")
-      return `${c} ${pluralize(nm)}`;
-    if (e.form === "moss" || e.form === "lichen")
-      return `${c} patches of ${nm}`;
-    return `${c} clumps of ${nm}`;
-  }
-  var memKeyE = (e) => e.lookalike?.mimics ?? e.id;
-  function presentAt(s) {
-    const m = S.world.environment.microhabitats.find((x) => x.id === s.micro);
-    const f = siteFactors(S.world.seed, s.key, m);
-    const out = [];
-    for (const e of [...S.world.stones, ...S.world.plants, ...S.world.animals]) {
-      const h = e.habitats.find((x) => x.micro === s.micro);
-      if (!h || e.kind === "animal" && e.cls !== "invertebrate")
-        continue;
-      const ar = makeRng(`${S.world.seed}/abund/${e.id}/${s.key}`);
-      const count = (h.perInstance ?? h.pieces) * Math.exp((e.kind === "stone" ? 0 : 0.35 * f.fertility) + 0.5 * ar.normal());
-      if (!ar.chance(1 - Math.exp(-count / 2)))
-        continue;
-      out.push({ e, n: count });
-    }
-    return out;
-  }
-  function noteKnown(s, e) {
-    var _a, _b;
-    s.known.add(e.id);
-    ((_a = S.mem.entities)[_b = memKeyE(e)] ?? (_a[_b] = { seen: 0, traits: {} })).seen++;
-  }
-  function localSmells(s) {
-    const here = presentAt(s).map((r) => r.e), out = [];
-    const nm = (e) => S.mem.entities[memKeyE(e)] ? ` (${e.name})` : "";
-    const find = (f) => here.find((e) => e.kind === "plant" && f(e.traits ?? {}));
-    const resin = find((t) => t.resin > 0.5);
-    if (resin)
-      out.push(`resin${nm(resin)}`);
-    const onion = find((t) => t.defense === "sulfur");
-    if (onion)
-      out.push(`onion, underfoot${nm(onion)}`);
-    const mint = find((t) => t.defense === "aromatic");
-    if (mint)
-      out.push(`something sharp and minty${nm(mint)}`);
-    const fruit = find((t) => ["berry", "drupe"].includes(t.fruit));
-    if (fruit)
-      out.push(`ripe fruit${nm(fruit)}`);
-    if (here.some((e) => e.form === "mushroom"))
-      out.push("damp, mushroomy earth");
-    if (here.some((e) => e.traits?.key === "bee"))
-      out.push("a waxy sweetness where bees are working");
-    if (here.some((e) => e.traits?.key === "fly") && S.rng.chance(0.4))
-      out.push("droppings somewhere close, by the flies");
-    if (S.world.animals.some((a) => a.traits.key === "predator" && a.habitats.some((h) => h.micro === s.micro)) && S.rng.chance(0.3))
-      out.push("a musky reek where something has marked its ground");
-    if (s.micro === "pond" && smellsToday().some((x) => x.kind === "marsh" && Math.hypot(x.x - s.x, x.y - s.y) < 15))
-      out.push("stagnant water and rotting reeds");
-    return out;
-  }
-  function survey(s) {
-    const rows = [], fresh = [];
-    noteTrail(S.mem, s.key);
-    const memKey = memKeyE, cond = condNow(s), cover = (1 - Math.min(1, cond.snowCm / 20)) * (1 - 0.5 * cond.litter);
-    for (const { e, n: count } of presentAt(s)) {
-      if (e.cryptic)
-        continue;
-      const low = ["herb", "grass", "moss", "lichen", "mushroom"].includes(e.form) || e.kind !== "plant";
-      const now2 = e.kind === "animal" ? animalNow(e, cond) : null;
-      if (now2 && !now2.here)
-        continue;
-      const visible = (e.kind === "animal" ? 0.6 * now2.seen : { herb: 0.85, grass: 0.9, mushroom: 0.6, moss: 0.9, lichen: 0.8 }[e.form] ?? 0.97) * cond.light * (low ? cover : 1) * (e.kind === "plant" ? Math.min(1.2, plantNow(S.world, e, cond.g).notice) : 1);
-      if (!S.rng.chance(visible))
-        continue;
-      if (!S.mem.entities[memKey(e)] && !fresh.includes(e))
-        fresh.push(e);
-      rows.push({ e, n: count, text: lineFor(e, count) });
-      noteKnown(s, e);
-    }
-    for (const a of S.world.animals.filter((a2) => a2.cls !== "invertebrate" && a2.signs && a2.habitats.some((h) => h.micro === s.micro))) {
-      if (!animalNow(a, cond).here || !S.rng.chance((1 - Math.exp(-a.perKm2 * 0.3)) * cond.light * (cond.snowCm > 2 ? 1.5 : 1 - 0.6 * cond.litter)))
-        continue;
-      const known = S.mem.entities[memKey(a)];
-      const sign = a.signs.damage ?? (a.signs.track ? `sets of ${a.signs.track.type}` : a.signs.den);
-      if (!sign)
-        continue;
-      rows.push({ n: 0.5, text: `${/^sets/.test(sign) ? "a few" : "1"} ${sign.replace(/^(the|a) /, "")}${known ? ` (${a.name})` : ", left by some animal"}` });
-    }
-    for (const t of boneLines(boneFinds(s, 0.35)))
-      rows.push({ n: 0.4, text: t });
-    rows.sort((a, b) => b.n - a.n);
-    const water = S.world.water.find((w) => w.micro === (s.micro === "streambed" ? "streambank" : s.micro));
-    const sm = localSmells(s);
-    const lines = [...water ? [waterHere(s) ? `water: ${water.name}` : "water: none now; the bed is dry"] : [], ...rows.map((r) => r.text), ...sm.length ? [`smells: ${sm.join("; ")}`] : [], ...namingSentences(fresh, S.mem, s.key, entity, S.rng)];
-    log(`Surveying what I can see from here:
-${lines.join("\n")}`, "survey");
-  }
+  var memKeyE2 = (e) => e.lookalike?.mimics ?? e.id;
+  var presentAt = (s) => populationAt(S.world, s.micro, s.key, siteFactors(S.world.seed, s.key, S.world.environment.microhabitats.find((x) => x.id === s.micro)), dice().place);
+  var noteKnown2 = (s, e) => noteKnown(s, S.mem, e);
   var bestStick = () => ofKind("diggingstick").sort((a, b) => b.props.hardness - a.props.hardness)[0] ?? null;
   function pokeAround(s) {
-    S.ch.germs += 0.25 * (0.45 - S.ch.germs);
+    S.body.germs += 0.25 * (0.45 - S.body.germs);
     const stick = bestStick();
     const reach = stick ? 1 + 1.5 * stick.props.hardness : 1;
     const rows = [], fresh = [];
@@ -8336,15 +8748,15 @@ ${lines.join("\n")}`, "survey");
       const p = 1 - Math.exp(-reach * n / (e.kind === "animal" ? 25 : 10));
       if (!S.rng.chance(p))
         continue;
-      if (!S.mem.entities[memKeyE(e)])
+      if (!S.mem.entities[memKeyE2(e)])
         fresh.push(e);
       rows.push({ n, text: lineFor(e, n) });
-      noteKnown(s, e);
+      noteKnown2(s, e);
     }
     const bee = S.world.animals.find((a) => a.traits.key === "bee" && a.habitats.some((h) => h.micro === s.micro));
     if (bee && !s.hive && ["woodland", "deadfall", "edge"].includes(s.micro) && S.rng.chance(0.25)) {
       s.hive = true;
-      noteKnown(s, bee);
+      noteKnown2(s, bee);
       rows.push({ n: 0.5, text: "a hollow log humming with bees: a hive" });
     }
     if (stick)
@@ -8355,31 +8767,7 @@ ${lines.join("\n")}`, "survey");
     log(rows.length ? `Poking around (${how}):
 ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half an hour (${how}); nothing worth having.`, "survey");
   }
-  var BONE_VIS = { glade: 1.3, outcrop: 1.3, scree: 1.3, streambed: 1.2, edge: 1, claybank: 1, streambank: 0.8, pond: 0.8, spring: 0.8, woodland: 0.6, deadfall: 0.6 };
-  var isFineBoned = (a) => /bird|soarer|fish|frog|lizard/.test(a.traits.key ?? "") || (a.traits.mass ?? 0) < 3;
-  function boneFinds(s, effort) {
-    const vis = BONE_VIS[s.micro] ?? 1;
-    const found = { fine: 0, big: 0 };
-    for (const a of S.world.animals) {
-      if (a.cls === "invertebrate" || !a.habitats.some((h) => h.micro === s.micro))
-        continue;
-      const mu = effort * vis * (a.perKm2 ?? 0) * (a.traits.mass ?? 0) / 600;
-      let n = 0, L = Math.exp(-mu), p = 1;
-      do {
-        n++;
-        p *= S.rng.next();
-      } while (p > L && n < 20);
-      found[isFineBoned(a) ? "fine" : "big"] += n - 1;
-    }
-    s.bones ?? (s.bones = { fine: 0, big: 0 });
-    s.bones.fine = Math.min(4, s.bones.fine + found.fine);
-    s.bones.big = Math.min(3, s.bones.big + found.big);
-    return found;
-  }
-  var boneLines = (f) => [
-    ...f.big ? [`${f.big > 1 ? `${f.big} long bones` : "a long bone"}, weathered pale, from something big`] : [],
-    ...f.fine ? [`${f.fine > 1 ? "a scatter of" : "a few"} fine, light bones from something small`] : []
-  ];
+  var boneFinds = (s, effort) => findBones(S.world, s, effort, S.rng);
   var matOf = (e, cls) => S.mats.find((m) => m.source === e.id && m.material === cls);
   var FOCI = {
     spindle: {
@@ -8454,7 +8842,7 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
     const label = type === "focus" ? FOCI[key].label : type === "entity" ? pluralize(entity(key).name) : key === "water" ? "water" : "high ground";
     S.looking = { type, key, label };
     pass(0.5, 180);
-    S.ch.focus = clamp(S.ch.focus - 0.03);
+    S.body.focus = clamp(S.body.focus - 0.03);
     lookHere(site(), false);
   }
   function lookAt(s, passing) {
@@ -8485,7 +8873,7 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
         const p = e.cryptic ? 1 - Math.exp(-reach * hit.n / (e.kind === "animal" ? 15 : 6)) : 0.92;
         if (S.rng.chance(p)) {
           lines.push(lineFor(hit.e, hit.n));
-          noteKnown(s, hit.e);
+          noteKnown2(s, hit.e);
           if (e.traits?.key === "bee" && !s.hive && ["woodland", "deadfall", "edge"].includes(s.micro) && S.rng.chance(0.5)) {
             s.hive = true;
             lines.push("followed them to a hollow tree humming with bees: a hive");
@@ -8499,7 +8887,7 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
       for (const a of S.world.animals.filter((a2) => a2.cls !== "invertebrate" && a2.signs && a2.habitats.some((h) => h.micro === s.micro))) {
         if (!S.rng.chance(1 - Math.exp(-a.perKm2 * (passing ? 0.25 : 0.45))))
           continue;
-        const known = S.mem.entities[memKeyE(a)];
+        const known = S.mem.entities[memKeyE2(a)];
         for (const sign of [a.signs.track && `${a.signs.track.type}, about ${a.signs.track.lengthCm} cm`, a.signs.scat, a.signs.damage].filter(Boolean))
           if (S.rng.chance(0.6))
             lines.push(`${sign}${known ? ` (${a.name})` : ""}`);
@@ -8516,7 +8904,7 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
       const here = presentAt(s).map((r) => r.e.id);
       const m = S.mats.find((x) => x.material === "natural-edge" && here.includes(x.source));
       if (m) {
-        const res = searchNaturalEdge(S.rng, S.ch, { props: m.props, provenance: { name: m.sourceName, source: m.source } });
+        const res = searchNaturalEdge(S.rng, S.body, { props: m.props, provenance: { name: m.sourceName, source: m.source } });
         if (res.flake) {
           addItem(`natural edge, ${m.sourceName}`, "edge", res.flake.props, { id: m.source, name: m.sourceName, part: "natural edge", site: s.key });
           lines.push(`a piece of broken ${m.sourceName} with a usable edge; took it`);
@@ -8539,7 +8927,7 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
       rows.sort((a, b) => (F.rank?.(b.e) ?? 0) - (F.rank?.(a.e) ?? 0) || b.n - a.n);
       rows.forEach((r, i) => {
         lines.push(`${lineFor(r.e, r.n)}: ${r.detail}${i === 0 && rows.length > 1 ? " (best bet here)" : ""}`);
-        noteKnown(s, r.e);
+        noteKnown2(s, r.e);
       });
       if (makeshift)
         lines.unshift("nothing proper; the best of a bad lot:");
@@ -8580,13 +8968,13 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const fruit = presentAt(s).find(({ e }) => e.kind === "plant" && ["berry", "drupe"].includes(e.traits.fruit) && !S.fruitNoted[e.id] && S.rng.chance(0.6));
       if (fruit) {
         S.fruitNoted[fruit.e.id] = true;
-        log(`Even so, I couldn\u2019t miss ${fruit.e.traits.fruitColor} fruit on ${S.mem.entities[memKeyE(fruit.e)] ? `the ${fruit.e.name}` : `a bush I haven\u2019t named (${shortDesc(fruit.e)})`}.`, "note");
-        noteKnown(s, fruit.e);
+        log(`Even so, I couldn\u2019t miss ${fruit.e.traits.fruitColor} fruit on ${S.mem.entities[memKeyE2(fruit.e)] ? `the ${fruit.e.name}` : `a bush I haven\u2019t named (${shortDesc(fruit.e)})`}.`, "note");
+        noteKnown2(s, fruit.e);
       }
     }
     const big = S.world.animals.filter((a) => a.cls === "large" && !a.signs?.distant && a.habitats.some((h) => h.micro === s.micro)).find((a) => S.rng.chance(1 - Math.exp(-a.perKm2 * 0.06)));
     if (big) {
-      const known = S.mem.entities[memKeyE(big)];
+      const known = S.mem.entities[memKeyE2(big)];
       log(known ? `A ${big.name} crashed away through the brush ahead.` : `Something big crashed away through the brush ahead: a ${firstCueA(big)}.`, "note");
     }
   }
@@ -8611,9 +8999,9 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     log(`Looked closely at the ${e.name}: ${e.cues.filter((c) => !/^active:/.test(c)).join("; ")}.${parts.length ? ` Parts worth noting: ${parts.join(", ")}.` : ""}${learned.length ? ` What I\u2019ve learned: ${learned.join("; ")}.` : ""}`, "note");
   }
   function assess(e) {
-    if (S.ch.focus < 0.25)
+    if (S.body.focus < 0.25)
       return log("Too foggy to think it through. I need rest, water or food first.", "warn");
-    S.ch.focus = clamp(S.ch.focus - 0.08);
+    S.body.focus = clamp(S.body.focus - 0.08);
     pass(0.15, 110);
     const cues = e.cues.join(" | ");
     const uses = [], risks = [], tests = [];
@@ -8690,11 +9078,11 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         const parts = [...new Set(opts.map((o) => o.part))], species = [...new Set(opts.map((o) => o.species))];
         title = "Collect";
         buttons = opts.length ? `<h4>By part</h4><div class="gather">${parts.map((p) => `<button data-pk="part" data-v="${esc(p)}">${esc(typo(p))}</button>`).join("")}</div>
-        <h4>By species</h4><div class="gather">${species.map((x) => `<button data-pk="species" data-v="${esc(x)}">${esc(typo(cap3(x)))}</button>`).join("")}</div>` : '<p class="hint">Nothing noticed here that I can take. Survey first.</p>';
+        <h4>By species</h4><div class="gather">${species.map((x) => `<button data-pk="species" data-v="${esc(x)}">${esc(typo(cap4(x)))}</button>`).join("")}</div>` : '<p class="hint">Nothing noticed here that I can take. Survey first.</p>';
       } else {
         const list2 = opts.map((o, i) => [o, i]).filter(([o]) => picker.step === "part" ? o.part === picker.value : o.species === picker.value);
         title = picker.step === "part" ? `Collect: ${picker.value}` : `Collect from the ${picker.value}`;
-        buttons = `<div class="gather">${list2.map(([o, i]) => `<button data-gather="${i}"${o.blocked || isNight() ? " disabled" : ""}>${esc(typo(picker.step === "part" ? cap3(o.species) : o.part))}${o.label.includes(" \xB7 ") ? `<small>${esc(typo(o.label.split(" \xB7 ")[1]))}</small>` : ""}${o.blocked ? `<small>${esc(o.blocked)}</small>` : ""}</button>`).join("")}</div>`;
+        buttons = `<div class="gather">${list2.map(([o, i]) => `<button data-gather="${i}"${o.blocked || isNight() ? " disabled" : ""}>${esc(typo(picker.step === "part" ? cap4(o.species) : o.part))}${o.label.includes(" \xB7 ") ? `<small>${esc(typo(o.label.split(" \xB7 ")[1]))}</small>` : ""}${o.blocked ? `<small>${esc(o.blocked)}</small>` : ""}</button>`).join("")}</div>`;
       }
       return pickerFrame(title, buttons);
     }
@@ -8704,7 +9092,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       return pickerFrame("Rest", `<div class="gather">${restOptions().map(([v, l]) => `<button data-rest="${v}">${esc(l)}</button>`).join("")}</div>`);
     if (picker.kind === "look") {
       const known = Object.keys(S.mem.entities).map(entity).filter((e) => e && !(e.kind === "animal" && e.cls !== "invertebrate")).sort((a, b) => a.name.localeCompare(b.name));
-      const btn = (type, key, label) => `<button data-look="${type}:${key}">${esc(typo(cap3(label)))}</button>`;
+      const btn = (type, key, label) => `<button data-look="${type}:${key}">${esc(typo(cap4(label)))}</button>`;
       return pickerFrame("Look for\u2026", `<p class="hint">Half an hour here, then I keep an eye out in every patch I pass through until I stop looking. It slows travel a little.</p>
       <h4>Things to use</h4><div class="gather">${Object.entries(FOCI).map(([k, F]) => btn("focus", k, F.label)).join("")}</div>
       ${known.length ? `<h4>Things I know</h4><div class="gather">${known.map((e) => btn("entity", e.id, pluralize(e.name))).join("")}</div>` : ""}
@@ -8712,7 +9100,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     }
     const list = knownHere();
     const sub = '<p class="hint">A close look, then my best guess at uses, risks and useful tests (costs a little focus).</p>';
-    return pickerFrame("Inspect", sub + (list.length ? `<div class="gather">${list.map((e) => `<button data-${picker.kind}="${e.id}">${esc(typo(cap3(e.name)))}</button>`).join("")}</div>` : '<p class="hint">Nothing noticed here yet. Survey first.</p>'));
+    return pickerFrame("Inspect", sub + (list.length ? `<div class="gather">${list.map((e) => `<button data-${picker.kind}="${e.id}">${esc(typo(cap4(e.name)))}</button>`).join("")}</div>` : '<p class="hint">Nothing noticed here yet. Survey first.</p>'));
   }
   function makeHTML() {
     const ready = RECIPES.filter((R2) => R2.ready());
@@ -8740,9 +9128,9 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       return sleep();
     const hours = choice === "dusk" ? sunsetAt(S.day) - S.t : Number(choice);
     pass(hours, 90);
-    S.ch.fatigue *= Math.pow(0.15, hours / 9);
-    S.ch.hands *= Math.pow(0.55, hours / 12);
-    S.ch.focus = clamp(S.ch.focus + 0.12 * hours);
+    S.body.fatigue *= Math.pow(0.15, hours / 9);
+    S.body.hands *= Math.pow(0.55, hours / 12);
+    S.body.focus = clamp(S.body.focus + 0.12 * hours);
     log(choice === "dusk" ? "Rested in the shade until dusk." : `Rested for ${hours === 1 ? "an hour" : `${hours} hours`}.`);
   }
   var waterUp = (x, y) => {
@@ -9240,14 +9628,14 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         ang -= 180;
       if (ang < -90)
         ang += 180;
-      return `<line class="edge ${e.certainty}${e.stub ? " stub" : ""}" data-link="${e.kind}" data-a="${e.a}" data-b="${e.b}" x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke-width="${fs * 0.12}"><title>${esc(typo(`${cap3(A.name)} \u2013 ${B.name}: ${timeWords(e.hours, e.certainty)}${e.crossings.length ? `, crossing ${e.crossings.map((c) => c.name).join(" and ")}` : ""}`))}</title></line>` + (len > fs * 4.5 ? `<text class="etime" x="${mx}" y="${my}" dy="${-fs * 0.3}" font-size="${fs * 0.8}" text-anchor="middle" transform="rotate(${ang.toFixed(1)} ${mx} ${my})">${esc(timeWords(e.hours, e.certainty))}</text>` : "");
+      return `<line class="edge ${e.certainty}${e.stub ? " stub" : ""}" data-link="${e.kind}" data-a="${e.a}" data-b="${e.b}" x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke-width="${fs * 0.12}"><title>${esc(typo(`${cap4(A.name)} \u2013 ${B.name}: ${timeWords(e.hours, e.certainty)}${e.crossings.length ? `, crossing ${e.crossings.map((c) => c.name).join(" and ")}` : ""}`))}</title></line>` + (len > fs * 4.5 ? `<text class="etime" x="${mx}" y="${my}" dy="${-fs * 0.3}" font-size="${fs * 0.8}" text-anchor="middle" transform="rotate(${ang.toFixed(1)} ${mx} ${my})">${esc(timeWords(e.hours, e.certainty))}</text>` : "");
     }).join("");
     const Nd = M2.nodes.map((v, i) => {
       if (v.unmarked)
         return "";
       const e = M2.edges.find((x) => x.a === hi && x.b === i || x.b === hi && x.a === i);
       const t = timeWords(e ? e.hours : routeHours(here, v), e ? e.certainty : v.certainty === "known" ? "guess" : v.certainty);
-      const say = i === hi ? `${cap3(v.name)} (here)` : `${v.site !== void 0 ? "Head back to" : "Head for"} ${v.name} (${t})`;
+      const say = i === hi ? `${cap4(v.name)} (here)` : `${v.site !== void 0 ? "Head back to" : "Head for"} ${v.name} (${t})`;
       return `<g ${i === hi ? "" : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" data-i="${i}" class="node ${v.site !== void 0 ? "site" : "sus"}${v.mark ? ` ${v.mark}` : ""} ${v.certainty}${i === hi ? " here" : ""}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${radius(i)}" stroke-width="${fs * 0.12}"/>${i === hi ? "" : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${labelOf.get(i) ?? ""}</g>`;
     }).join("");
     const P = !pin ? "" : `<g class="pin" data-hike="go:${pin.x}_${pin.y}" role="button" tabindex="0" aria-label="${esc(typo(pinSay))}"><title>${esc(typo(pinSay))}</title><path d="M${pin.x} ${pin.y}l${-u(7)} ${-u(14)}a${u(7.5)} ${u(7.5)} 0 1 1 ${u(14)} 0z" stroke-width="${u(2)}"/><circle class="hit" cx="${pin.x}" cy="${pin.y - u(14)}" r="${fs * 1.45}"/>${pinLabel}</g>`;
@@ -9299,7 +9687,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     if (waterHere(s))
       A.push({ id: "drink", label: "Drink", hint: "" });
     if (waterHere(s))
-      A.push({ id: "washhands", label: "Wash my hands", hint: S.ch.germs > 0.3 ? "they\u2019re filthy" : "" });
+      A.push({ id: "washhands", label: "Wash my hands", hint: S.body.germs > 0.3 ? "they\u2019re filthy" : "" });
     if (isLookout(S.L, s.x, s.y))
       A.push({ id: "lookout", label: "Look out from up here", hint: "\xBD h; climb a tree if I must", disabled: night || skyNow().sunAlt < 3 });
     if (fireHere())
@@ -9315,14 +9703,9 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
   function doHere(id) {
     const s = site();
     switch (id) {
-      case "survey": {
-        pass(0.75, 160);
-        const lim = senseLimits(true);
-        if (lim)
-          log(lim, "thought");
-        survey(s);
+      case "survey":
+        perform(SURVEY);
         break;
-      }
       case "poke":
         pass(0.5, 230);
         pokeAround(s);
@@ -9342,7 +9725,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         break;
       case "scan":
         pass(0.5, 120);
-        S.ch.focus = clamp(S.ch.focus - 0.04);
+        S.body.focus = clamp(S.body.focus - 0.04);
         sense(s, false, { scan: true });
         break;
       case "lookout":
@@ -9355,122 +9738,24 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
           log("A view at last.", "milestone");
         }
         break;
-      case "washhands": {
-        pass(0.1, 110);
-        S.ch.germs = S.ch.germs * 0.3 + 0.3 * waterGerms();
-        const cut = S.wound && now() - S.wound.at < 4;
-        if (cut) {
-          const p = S.pendingSick.find((x) => x.wound);
-          if (p && S.rng.chance(0.8))
-            S.pendingSick.splice(S.pendingSick.indexOf(p), 1);
-          S.wound = null;
-        }
-        log(cut ? "Washed my hands, and the cut on my shin, clean." : "Washed my hands in the water.");
+      case "washhands":
+        perform(WASH_HANDS);
         break;
-      }
-      case "drink": {
-        const w = waterSource(s);
-        pass(0.25, 120);
-        S.hyd = 1;
-        const p = w?.hidden.pathogen ?? 0.2;
-        if (S.rng.chance(p * 0.6))
-          S.pendingSick.push({ at: now() + 24 + S.rng.uniform(0, 18), severity: 0.25 + p * 0.5, text: "Cramps and a loose gut. Something in the water, maybe." });
-        log(`Drank my fill of ${w?.name ?? "water"}.`);
+      case "drink":
+        perform(DRINK);
         break;
-      }
       case "feed":
-        takeWood(1);
-        s.fireUntil = Math.max(s.fireUntil, now()) + 3;
-        log("Fed the fire.");
+        perform(FEED_FIRE, { wood: ofKind("wood")[0] });
         break;
-      case "bed": {
-        const stuff = bedding(), add = stuff.reduce((a, it) => a + (it.props.loft ?? 0.3), 0), wet = stuff.reduce((a, it) => a + (it.props.moisture ?? 0.2), 0) / stuff.length;
-        for (const it of stuff)
-          remove(it);
-        pass(0.15, 120);
-        const before = s.bed?.clo ?? 0;
-        s.bed = { clo: Math.min(1.5, before + add), wet: clamp(((s.bed?.wet ?? 0) * before + wet * add) / (before + add)) };
-        log(`${before ? "Added to the bed" : "Heaped up a bed"}: ${s.bed.clo < 0.5 ? "a thin layer, but better than bare ground" : s.bed.clo < 1 ? "a hand\u2019s depth to lie on" : "a deep, springy pile"}${s.bed.wet > 0.35 ? ", though damp" : ""}.`);
+      case "bed":
+        perform(MAKE_BED, { stuff: bedding() });
         break;
-      }
       case "hut":
-        pass(3.5, 320);
-        s.hut = true;
-        log("Built a debris hut: a ridgepole, ribs of dead branches, and an arm-deep pile of leaves on top.");
-        if (!S.milestones.hut) {
-          S.milestones.hut = true;
-          log("A shelter.", "milestone");
-        }
+        perform(BUILD_HUT);
         break;
     }
   }
-  var GUT_KG = 1.5;
-  function eat(it) {
-    var _a;
-    const cooking = fireHere();
-    let st = it.props.chem;
-    if (cooking)
-      st = expose(st, PREP.roast, 0.5 + 0.5 * S.ch.focus);
-    const room = GUT_KG - S.gut;
-    if (room < 0.05)
-      return log("Too full to eat any more just now.", "thought");
-    const m = Math.min(it.props.mass, room);
-    pass(cooking ? 0.5 : 0.2, 120);
-    if (m >= it.props.mass - 1e-6)
-      remove(it);
-    else {
-      it.props.mass = Math.round((it.props.mass - m) * 1e3) / 1e3;
-    }
-    S.gut += m;
-    const how = cooking ? "Roasted and ate" : "Ate";
-    const what = `${S.inv.includes(it) ? "some of " : ""}the ${it.from.part} of the ${it.from.name}`;
-    const n = nutrients(st, m);
-    const tot = S.macro.p + S.macro.f + S.macro.c + n.protein + n.fat + n.carb;
-    const excess = Math.max(0, S.macro.p + n.protein - 0.35 * tot);
-    const wasted = tot > 500 ? Math.min(n.protein, excess) : 0;
-    S.macro.p += n.protein - wasted;
-    S.macro.f += n.fat;
-    S.macro.c += n.carb;
-    const net = n.net - wasted;
-    const h = harm(st) * Math.sqrt(Math.min(1.5, m / 0.2));
-    const outcome = hazard(h);
-    const germs = (it.props.germs ?? 0) * (cooking ? 0.05 : 1);
-    touch([it], 0.3);
-    if (S.rng.chance(Math.min(0.7, (germs + 0.25 * S.ch.germs) * Math.min(1, m / 0.2))))
-      S.pendingSick.push({ at: now() + 20, severity: Math.min(0.5, 0.15 + 0.4 * germs), text: "A sour gut, then the runs. Something I ate wasn\u2019t clean." });
-    const parasites = st.compounds.parasites ?? 0;
-    if (parasites > 0.02 && S.rng.chance(Math.min(0.8, parasites * 1.5)))
-      S.pendingSick.push({ at: now() + 30, severity: Math.min(0.5, 0.2 + parasites), text: "A sour gut and fever. Something I ate raw." });
-    const irritant = Object.keys(st.compounds).some((k) => COMPOUNDS[k].effect === "irritant" && st.compounds[k] > 0.1);
-    const ent = entity(it.from.id);
-    const key = loreKey(ent, it.from.part);
-    const L = (_a = S.lore)[key] ?? (_a[key] = { ok: 0, sick: 0 });
-    const delayed = !!st.compounds.amatoxin && /poison|lethal/.test(outcome);
-    S.energy = clamp(S.energy + (/severe|lethal/.test(outcome) && !delayed ? Math.min(0, net) : net) / 24e3);
-    const feel = [`${cap3(textureWords(st))}.`];
-    if (irritant)
-      feel.push("My mouth and throat burned.");
-    if (wasted > 50) {
-      S.sick = clamp(S.sick + Math.min(0.15, wasted / 1500));
-      feel.push("All lean, nothing fatty or starchy with it: my stomach turns, and I\u2019m still hungry.");
-    }
-    if (net < 0)
-      feel.push("Heavy going; I doubt it gave back what it cost to get down.");
-    else
-      feel.push(m < 0.08 ? "A few mouthfuls." : S.gut > 1.2 ? "Full." : n.net / Math.max(0.05, m) < 600 ? "Filling for now, but there\u2019s not much in it." : net > 400 ? "That was real food." : "");
-    if (delayed) {
-      S.pendingSick.push({ lore: key, at: now() + 30, severity: outcome === "potentially lethal" ? 0.95 : 0.6, text: `Sick, badly, a day after eating the ${it.from.name}. It must have been that.` });
-      S.pendingLore = key;
-      return log(`${how} ${what}. ${feel.join(" ")} Tasted fine.`.replace(/ +/g, " "), "act");
-    }
-    const bad = { "mild upset": [0.15, "My stomach didn\u2019t like it."], "moderate poisoning": [0.4, "Within the hour: sweating, cramps, vomiting."], "severe poisoning": [0.75, "Violently ill soon after; I thought I might die."], "potentially lethal": [1, "It was poison."] }[outcome];
-    if (bad) {
-      S.sick = clamp(S.sick + bad[0]);
-      L.sick++;
-    } else
-      L.ok++;
-    log(`${how} ${what}. ${bad ? bad[1] : feel.join(" ")}`.replace(/ +/g, " ").trim(), bad && bad[0] >= 0.4 ? "warn" : "act");
-  }
+  var eat = (it) => perform(EAT, { food: it });
   function nodeLabel(n) {
     if (n.type === "item")
       return n.name;
@@ -9481,10 +9766,10 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     return n.slot.role;
   }
   function think(path) {
-    if (S.ch.focus < 0.25)
+    if (S.body.focus < 0.25)
       return log("Too foggy to think it through. I need rest, water or food first.", "warn");
     const n = nodeAt(path);
-    S.ch.focus = clamp(S.ch.focus - 0.06);
+    S.body.focus = clamp(S.body.focus - 0.06);
     pass(0.1, 110);
     S.revealed[S.goal].add(path);
     if (n.type === "material") {
@@ -9520,7 +9805,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     const kids = children(n);
     const isLeaf = n.type === "material" || n.type === "item" && (!kids.length || n.truncated);
     const label = depth === 0 ? n.type === "process" ? n.name : `To get ${n.name}` : nodeLabel(n);
-    let h = `<li class="plan-node ${n.type}"><span class="plan-label">${esc(typo(cap3(label)))}</span>`;
+    let h = `<li class="plan-node ${n.type}"><span class="plan-label">${esc(typo(cap4(label)))}</span>`;
     if (!open && !(n.type === "item" && n.truncated))
       h += ` <button class="think" data-think="${path}">Think it through</button>`;
     if (open && !isLeaf && kids.length)
@@ -9561,7 +9846,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     const imp = impressions(it);
     const tests = testsFor(it).filter(([k]) => !it.notes[k]);
     const exact = S.showProps ? exactProps(it) : [];
-    return `<li class="item"><div class="item-head"><span class="item-name">${esc(typo(cap3(it.name)))}</span>${it.kind === "food" ? `<button data-eat="${it.uid}">${fireHere() ? "Roast and eat" : "Eat"}</button>` : ""}<button class="ghost" data-drop="${it.uid}" aria-label="Drop ${esc(it.name)}">Drop</button></div>
+    return `<li class="item"><div class="item-head"><span class="item-name">${esc(typo(cap4(it.name)))}</span>${it.kind === "food" ? `<button data-eat="${it.uid}">${fireHere() ? "Roast and eat" : "Eat"}</button>` : ""}<button class="ghost" data-drop="${it.uid}" aria-label="Drop ${esc(it.name)}">Drop</button></div>
     ${it.from?.site && S.sites.some((t) => t.key === it.from.site) ? `<button class="ghost origin" data-origin="${esc(it.from.site)}">${(() => {
       const t = S.sites.find((x) => x.key === it.from.site);
       return t.renamed ? `From ${esc(typo(t.name))} \xB7 rename` : "Name where this came from";
@@ -9585,8 +9870,8 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const k = skyNow(), tod = timeOfDay();
       $("#when").textContent = `Day ${S.day}, ${clock(S.t)}${tod === "night" ? ", night" : tod === "dusk" && k.sunAlt < 3 ? ", dusk" : ""} \xB7 ${k.season} \xB7 ${WEATHER_WORDS[k.weather]}, ${Math.round(k.tempC)}\xB0C${tod === "night" && k.moon.alt > 0 && k.moon.illum > 0.05 ? ` \xB7 ${moonWords(k.moon.phase)}` : ""}`;
     }
-    setHTML("#where", `<span class="place" data-rename="1" title="Rename this place">${esc(typo(cap3(s.name)))}</span>${fireHere() ? ' <span class="fire">fire burning</span>' : ""}${s.hut ? ' <span class="tag">hut</span>' : ""}`);
-    $("#world-line").textContent = typo(`${cap3(e.biome)}; ${e.leanSeason === "winter" ? "cool nights" : "warm days"}`);
+    setHTML("#where", `<span class="place" data-rename="1" title="Rename this place">${esc(typo(cap4(s.name)))}</span>${fireHere() ? ' <span class="fire">fire burning</span>' : ""}${s.hut ? ' <span class="tag">hut</span>' : ""}`);
+    $("#world-line").textContent = typo(`${cap4(e.biome)}; ${e.leanSeason === "winter" ? "cool nights" : "warm days"}`);
     const fresh = renderJournal();
     if (fresh) {
       const j = $("#journal-wrap");
@@ -9598,7 +9883,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     const items = Object.keys(ITEMS).filter((k) => PROCESSES.some((p) => p.makes.some((m) => m.item === k))).sort((a, b) => ITEMS[a].name.replace(/^an? /, "").localeCompare(ITEMS[b].name.replace(/^an? /, "")));
     const procs = [...PROCESSES].sort((a, b) => a.name.localeCompare(b.name));
     const opt = (v, l) => `<option value="${v}"${v === S.goal ? " selected" : ""}>${esc(typo(l))}</option>`;
-    setHTML("#plans", `<label class="goal-pick">Think about <select id="goal"><optgroup label="Things to make or get">${items.map((k) => opt(k, cap3(ITEMS[k].name.replace(/^an? /, "")))).join("")}</optgroup><optgroup label="Ways of doing things">${procs.map((p) => opt(`proc:${p.id}`, p.name)).join("")}</optgroup></select></label>
+    setHTML("#plans", `<label class="goal-pick">Think about <select id="goal"><optgroup label="Things to make or get">${items.map((k) => opt(k, cap4(ITEMS[k].name.replace(/^an? /, "")))).join("")}</optgroup><optgroup label="Ways of doing things">${procs.map((p) => opt(`proc:${p.id}`, p.name)).join("")}</optgroup></select></label>
     <p class="hint">Thinking a step through costs a little focus. Thoughts go in the journal.</p><ul class="plan">${planHTML()}</ul>`);
     const acts = hereActions();
     const gather = gatherOptions(s);
@@ -9611,7 +9896,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     document.querySelectorAll("[data-panel]").forEach((p) => p.classList.toggle("active", p.dataset.panel.split(" ").includes(tab)));
   }
   var mapGesture = { pts: /* @__PURE__ */ new Map(), start: null, moved: false, swallowClick: false };
-  function viewOf(svg) {
+  function viewOf2(svg) {
     const [x, y, span] = svg.getAttribute("viewBox").split(" ").map(Number);
     return { x, y, span };
   }
@@ -9630,7 +9915,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       if (!svg)
         return;
       mapGesture.pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
-      mapGesture.start = { v: viewOf(svg), pts: new Map(mapGesture.pts), svg };
+      mapGesture.start = { v: viewOf2(svg), pts: new Map(mapGesture.pts), svg };
       if (mapGesture.pts.size === 1)
         mapGesture.moved = false;
     });
@@ -9663,7 +9948,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         return;
       g.pts.delete(ev.pointerId);
       if (g.pts.size) {
-        g.start = { v: viewOf(g.start.svg), pts: new Map(g.pts), svg: g.start.svg };
+        g.start = { v: viewOf2(g.start.svg), pts: new Map(g.pts), svg: g.start.svg };
         return;
       }
       if (g.moved) {
@@ -9683,7 +9968,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       if (!svg)
         return;
       ev.preventDefault();
-      const v = viewOf(svg), at = toUser(svg, v, ev.clientX, ev.clientY), k = Math.exp(ev.deltaY * 15e-4);
+      const v = viewOf2(svg), at = toUser(svg, v, ev.clientX, ev.clientY), k = Math.exp(ev.deltaY * 15e-4);
       setView(svg, { x: at.x - (at.x - v.x) * k, y: at.y - (at.y - v.y) * k, span: v.span * k });
       clearTimeout(wheelTimer);
       wheelTimer = setTimeout(render, 160);
@@ -9700,7 +9985,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       }).observe(box);
     }
   }
-  var BUILD = "hk-2026-10-25a";
+  var BUILD = "hk-2026-10-26a";
   function record(d) {
     S.record ?? (S.record = []);
     S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
@@ -9728,7 +10013,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest("button, [data-rename], [data-hike]");
     if (!b && S && ev.target.closest?.(".mapsvg") && !mapGesture.swallowClick) {
-      const svg = ev.target.closest(".mapsvg"), p = toUser(svg, viewOf(svg), ev.clientX, ev.clientY);
+      const svg = ev.target.closest(".mapsvg"), p = toUser(svg, viewOf2(svg), ev.clientX, ev.clientY);
       S.mapPin = { x: clamp(Math.round(p.x), 0, N - 1), y: clamp(Math.round(p.y), 0, N - 1) };
       return render();
     }
@@ -9942,7 +10227,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const { world, outlook: o } = checked;
       const e = world.environment;
       const odds = `For a beginner, roughly: ${o.text.water}, ${o.text.food}, ${o.text.fire}.`;
-      out.innerHTML = `<p><strong>${esc(typo(cap3(e.biome)))}</strong> on ${esc(e.bedrockLabel)}. ${e.meanTempC < 10 ? "Cold nights." : e.meanTempC > 18 ? "Hot days." : "Mild weather."}</p>
+      out.innerHTML = `<p><strong>${esc(typo(cap4(e.biome)))}</strong> on ${esc(e.bedrockLabel)}. ${e.meanTempC < 10 ? "Cold nights." : e.meanTempC > 18 ? "Hot days." : "Mild weather."}</p>
       <p>${esc(typo(odds))}</p><p class="hint">Indicative: a few quick trial runs of a sensible start, not a promise.</p>
       <div class="row"><button id="begin">Begin here</button><button class="ghost" id="reroll">Try another world</button></div>`;
     }, 20);
