@@ -2119,12 +2119,21 @@ function mapHTML() {
   // A walked stretch has a fix on every cell, but the line is drawn through only the ones that matter
   // (forks, ends, springs, falls, mouths, outlets, places marked on the map) and one cell in ten
   // between, as a curve leaving each in the way the water runs there (a cubic Hermite spline).
-  const curve = (pts, tan) => { // Bezier pieces through pts with unit tangents tan; also sampled, for chevrons
+  const unit = (x, y) => { const l = Math.hypot(x, y); return l ? { x: x / l, y: y / l } : { x: 0, y: 1 }; };
+  const curve = (pts, flow) => { // Bezier pieces through pts leaving each the way the water runs there; also sampled, for chevrons
+    // One direction per point, used on both sides of it (so the line never kinks there). Where the
+    // water's own direction is far off the line to a neighbouring point (it turns sharply just there,
+    // between points ten cells apart), the point takes the direction from its neighbour before to the
+    // one after instead, so the curve doesn't loop.
+    const tan = pts.map((p, k) => {
+      const a = pts[Math.max(0, k - 1)], b = pts[Math.min(pts.length - 1, k + 1)], cr = unit(b.x - a.x, b.y - a.y);
+      const ok = [[a, p], [p, b]].every(([q, r]) => q === r || (flow[k].x * (r.x - q.x) + flow[k].y * (r.y - q.y)) / Math.hypot(r.x - q.x, r.y - q.y) > 0.5);
+      return ok ? flow[k] : cr;
+    });
     let d = `M${pts[0].x} ${pts[0].y}`;
     const fine = [pts[0]];
     for (let k = 1; k < pts.length; k++) {
-      const a = pts[k - 1], b = pts[k], L = Math.hypot(b.x - a.x, b.y - a.y) || 1, cx = (b.x - a.x) / L, cy = (b.y - a.y) / L;
-      const t0 = tan[k - 1].x * cx + tan[k - 1].y * cy > 0.3 ? tan[k - 1] : { x: cx, y: cy }, t1 = tan[k].x * cx + tan[k].y * cy > 0.3 ? tan[k] : { x: cx, y: cy }; // no loops back on itself
+      const a = pts[k - 1], b = pts[k], L = Math.hypot(b.x - a.x, b.y - a.y) || 1, t0 = tan[k - 1], t1 = tan[k];
       const c0 = { x: a.x + t0.x * L / 3, y: a.y + t0.y * L / 3 }, c1 = { x: b.x - t1.x * L / 3, y: b.y - t1.y * L / 3 };
       d += `C${+c0.x.toFixed(2)} ${+c0.y.toFixed(2)} ${+c1.x.toFixed(2)} ${+c1.y.toFixed(2)} ${b.x} ${b.y}`;
       for (let j = 1; j <= 8; j++) { const t = j / 8, m = 1 - t; fine.push({ x: m * m * m * a.x + 3 * m * m * t * c0.x + 3 * m * t * t * c1.x + t * t * t * b.x, y: m * m * m * a.y + 3 * m * m * t * c0.y + 3 * m * t * t * c1.y + t * t * t * b.y }); }
@@ -2143,14 +2152,12 @@ function mapHTML() {
       while (downOf.has(f) && !drawn.has(f)) { const sg = downOf.get(f); drawn.add(f); draw(sg, fresh); fresh = false; f = sg[1]; }
     }
     for (const sg of t.segs) if (!drawn.has(sg[0])) draw(sg, true); // a loop with no source (rare)
-    const tangent = (q, k) => { // the way the water runs at q.pts[k]: across two cells either side as walked, else as seen there
+    const tangent = (q, k) => { // the way the water runs at q.pts[k]: across three cells either side as walked, else as seen there
       const f = q.pts[k];
-      let dn = f; for (let n = 0; n < 2 && downOf.has(dn); n++) dn = downOf.get(dn)[1];
-      const up = q.pts[Math.max(0, k - 2)];
-      let x = dn.x - up.x, y = dn.y - up.y;
-      if (!q.known && f.flow != null) { const r = f.flow * Math.PI / 180; x = Math.sin(r); y = -Math.cos(r); }
-      const l = Math.hypot(x, y);
-      return l ? { x: x / l, y: y / l } : { x: 0, y: 1 };
+      if (!q.known && f.flow != null) { const r = f.flow * Math.PI / 180; return unit(Math.sin(r), -Math.cos(r)); }
+      let dn = f; for (let n = 0; n < 3 && downOf.has(dn); n++) dn = downOf.get(dn)[1];
+      const up = q.pts[Math.max(0, k - 3)];
+      return unit(dn.x - up.x, dn.y - up.y);
     };
     let carry = 35;
     const lines = pieces.map(q => {

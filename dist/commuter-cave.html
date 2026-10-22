@@ -8022,12 +8022,20 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       return area(q, "cliff") + `<path class="face" d="${d}" stroke-width="${u(3.5)}"/>` + along(pts, 16).marks.map((m) => `<line class="tick" x1="${m.x}" y1="${m.y}" x2="${m.x + nx * t}" y2="${m.y + ny * t}" stroke-width="${u(2)}"/>`).join("") + `<path class="hit" d="${d}" stroke-width="${fs * 2.2}"/></g>`;
     }).join("");
     const land = landImage();
-    const curve = (pts, tan) => {
+    const unit = (x, y) => {
+      const l = Math.hypot(x, y);
+      return l ? { x: x / l, y: y / l } : { x: 0, y: 1 };
+    };
+    const curve = (pts, flow) => {
+      const tan = pts.map((p, k) => {
+        const a = pts[Math.max(0, k - 1)], b = pts[Math.min(pts.length - 1, k + 1)], cr = unit(b.x - a.x, b.y - a.y);
+        const ok = [[a, p], [p, b]].every(([q, r]) => q === r || (flow[k].x * (r.x - q.x) + flow[k].y * (r.y - q.y)) / Math.hypot(r.x - q.x, r.y - q.y) > 0.5);
+        return ok ? flow[k] : cr;
+      });
       let d = `M${pts[0].x} ${pts[0].y}`;
       const fine = [pts[0]];
       for (let k = 1; k < pts.length; k++) {
-        const a = pts[k - 1], b = pts[k], L = Math.hypot(b.x - a.x, b.y - a.y) || 1, cx = (b.x - a.x) / L, cy = (b.y - a.y) / L;
-        const t0 = tan[k - 1].x * cx + tan[k - 1].y * cy > 0.3 ? tan[k - 1] : { x: cx, y: cy }, t1 = tan[k].x * cx + tan[k].y * cy > 0.3 ? tan[k] : { x: cx, y: cy };
+        const a = pts[k - 1], b = pts[k], L = Math.hypot(b.x - a.x, b.y - a.y) || 1, t0 = tan[k - 1], t1 = tan[k];
         const c0 = { x: a.x + t0.x * L / 3, y: a.y + t0.y * L / 3 }, c1 = { x: b.x - t1.x * L / 3, y: b.y - t1.y * L / 3 };
         d += `C${+c0.x.toFixed(2)} ${+c0.y.toFixed(2)} ${+c1.x.toFixed(2)} ${+c1.y.toFixed(2)} ${b.x} ${b.y}`;
         for (let j = 1; j <= 8; j++) {
@@ -8065,18 +8073,15 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
           draw(sg, true);
       const tangent = (q, k) => {
         const f = q.pts[k];
-        let dn = f;
-        for (let n = 0; n < 2 && downOf.has(dn); n++)
-          dn = downOf.get(dn)[1];
-        const up = q.pts[Math.max(0, k - 2)];
-        let x = dn.x - up.x, y = dn.y - up.y;
         if (!q.known && f.flow != null) {
           const r = f.flow * Math.PI / 180;
-          x = Math.sin(r);
-          y = -Math.cos(r);
+          return unit(Math.sin(r), -Math.cos(r));
         }
-        const l = Math.hypot(x, y);
-        return l ? { x: x / l, y: y / l } : { x: 0, y: 1 };
+        let dn = f;
+        for (let n = 0; n < 3 && downOf.has(dn); n++)
+          dn = downOf.get(dn)[1];
+        const up = q.pts[Math.max(0, k - 3)];
+        return unit(dn.x - up.x, dn.y - up.y);
       };
       let carry = 35;
       const lines = pieces.map((q) => {

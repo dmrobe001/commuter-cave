@@ -63,7 +63,13 @@ setTimeout(() => {
   if (!fork || `${fork.getAttribute('cx')},${fork.getAttribute('cy')}` !== '71,55') fails.push(`gbn2f: expected the fork marked at 71,55, found ${fork ? `${fork.getAttribute('cx')},${fork.getAttribute('cy')}` : 'none'}`);
   for (const end of ['71,58', '73,57', '67,53']) if (!tidy.deg.has(end)) fails.push(`gbn2f: no solid line reaches ${end}`);
   if (tidy.lines.length !== 2 || tidy.deg.get('71,55') !== 3) fails.push(`gbn2f: expected two solid lines meeting at the fork (one from an outlet down to the mouth, the other branch ending at the fork), got ${tidy.lines.length}, ${tidy.deg.get('71,55') ?? 0} ends at the fork`);
+  // A third (seed hmfqm): a stream followed up from its falls to its spring had a kink where it turned
+  // sharply between drawn points (the curve arrived one way and left another). Now one direction per point.
+  d.querySelector('#replay-text').value = JSON.stringify({ game: 'hands-and-knowledge', seed: 'hmfqm', preset: '', actions: ['u1', 'scan', 'u2', 'go:56_49', 'go:78_55', 'u3', 'u3', 'follow:up:82_50', 'follow:up:86_47', 'follow:up:93_45', 'follow:up:99_42', 'follow:up:104_39', 'follow:up:108_34'].map(a => ({ d: a === 'scan' ? { here: 'scan' } : { hike: a } })) });
+  d.querySelector('#replay').click();
+  if (!/spring/.test(d.querySelector('.mapsvg .node.here')?.getAttribute('aria-label') ?? '')) fails.push(`hmfqm: didn't follow up to the spring (at ${at()})`);
+  fails.push(...tidiness(d).bad.map(b => `hmfqm: ${b}`));
   if (errors.length) fails.push(...errors);
-  console.log(fails.length ? 'FAIL\n  ' + fails.join('\n  ') : 'reported (hbgk9, gbn2f): all passed');
+  console.log(fails.length ? 'FAIL\n  ' + fails.join('\n  ') : 'reported (hbgk9, gbn2f, hmfqm): all passed');
   if (fails.length) process.exitCode = 1;
 }, 50);
