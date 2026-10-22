@@ -5333,7 +5333,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       nodes.push(v);
     };
     for (const u of S.suspects) {
-      if (u.reached)
+      if (u.reached || u.lost)
         continue;
       hang({ key: u.id, name: u.label, x: u.est.x, y: u.est.y, sus: u.id, water: u.group === "water", certainty: u.channel === "sound" && u.obs < 2 || u.channel === "smell" ? "unknown" : "guess" }, byDistance(u.seenAt ?? u.est).slice(0, 1), "sighting");
     }
@@ -5426,16 +5426,21 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   function associateSmell(c, from) {
     const wkey = c.source.waterKey;
     let sus = S.suspects.find((u) => u.trueKey === (wkey ?? c.key));
+    const fix = () => {
+      const w = windNow(), dir = (w.from + S.rng.normal(0, 25)) * Math.PI / 180, dist = c.trueDist * Math.exp(S.rng.normal(0, 0.6)) / CELL;
+      return { est: { x: clamp(Math.round(from.x + Math.sin(dir) * dist), 0, N - 1), y: clamp(Math.round(from.y - Math.cos(dir) * dist), 0, N - 1) }, err: fixErr("smell", dist * CELL) };
+    };
     if (sus) {
+      if (sus.lost)
+        Object.assign(sus, fix(), { lost: false });
       sus.obs++;
       noteSeenFrom(sus, from);
       return { sus, isNew: false };
     }
-    const w = windNow(), dir = (w.from + S.rng.normal(0, 25)) * Math.PI / 180, dist = c.trueDist * Math.exp(S.rng.normal(0, 0.6)) / CELL;
-    const est = { x: clamp(Math.round(from.x + Math.sin(dir) * dist), 0, N - 1), y: clamp(Math.round(from.y - Math.cos(dir) * dist), 0, N - 1) };
+    const { est, err } = fix();
     S.lastTag = null;
     const label = wkey ? waterName(wkey, "lake", est) : uniqueName(SMELL_NOUN[c.kind] ?? "smell", est, []);
-    sus = { id: `u${S.suspects.length + 1}`, kind: wkey ? "lake" : c.kind, group: wkey ? "water" : "smell", trueKey: wkey ?? c.key, truePos: { x: c.x, y: c.y }, est, seenAt: { x: from.x, y: from.y }, channel: "smell", obs: 1, label, reached: false, source: c.source };
+    sus = { id: `u${S.suspects.length + 1}`, kind: wkey ? "lake" : c.kind, group: wkey ? "water" : "smell", trueKey: wkey ?? c.key, truePos: { x: c.x, y: c.y }, est, err, seenAt: { x: from.x, y: from.y }, channel: "smell", obs: 1, label, reached: false, source: c.source };
     S.suspects.push(sus);
     return { sus, isNew: true };
   }
@@ -5443,14 +5448,18 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     if (!sus.seenAt || Math.hypot(from.x - sus.est.x, from.y - sus.est.y) < Math.hypot(sus.seenAt.x - sus.est.x, sus.seenAt.y - sus.est.y))
       sus.seenAt = { x: from.x, y: from.y };
   }
+  var FIX_ERR = { sight: 0.2, sound: 0.45, smell: 0.6 };
+  var fixErr = (channel, distM3) => Math.max(0.5, FIX_ERR[channel] * distM3 / CELL);
   function associate(c, from) {
     var _a;
     const g = suspicionFrom(c, from, S.rng);
     const kindGroup = isWaterKind(c.kind) ? "water" : c.kind;
     let sus = S.suspects.find((u) => u.trueKey === c.key) ?? S.suspects.find((u) => u.group === kindGroup && Math.hypot(u.est.x - g.est.x, u.est.y - g.est.y) * CELL < Math.max(700, 0.35 * g.dist));
     if (sus) {
-      const w = c.channel === "sight" ? 0.6 : 0.3;
+      const e = fixErr(c.channel, g.dist), old = sus.lost ? Infinity : sus.err ?? e, w = old === Infinity ? 1 : old ** 2 / (old ** 2 + e ** 2);
       sus.est = { x: Math.round(sus.est.x * (1 - w) + g.est.x * w), y: Math.round(sus.est.y * (1 - w) + g.est.y * w) };
+      sus.err = old === Infinity ? e : Math.sqrt(old ** 2 * e ** 2 / (old ** 2 + e ** 2));
+      sus.lost = false;
       sus.obs++;
       noteSeenFrom(sus, from);
       return { sus, isNew: false, g };
@@ -5469,7 +5478,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       ((_a = S.landNamed ?? (S.landNamed = {}))[noun] ?? (_a[noun] = [])).push({ site: site()?.key, label });
     if (named && c.channel === "sight")
       notePoint(waterKeyOf(c.key), g.est);
-    sus = { id: `u${S.suspects.length + 1}`, kind: c.kind, group: kindGroup, trueKey: c.key, truePos: { x: c.x, y: c.y }, est: g.est, seenAt: { x: from.x, y: from.y }, channel: c.channel, obs: 1, label, reached: false, another };
+    sus = { id: `u${S.suspects.length + 1}`, kind: c.kind, group: kindGroup, trueKey: c.key, truePos: { x: c.x, y: c.y }, est: g.est, err: fixErr(c.channel, g.dist), seenAt: { x: from.x, y: from.y }, channel: c.channel, obs: 1, label, reached: false, another };
     S.suspects.push(sus);
     return { sus, isNew: true, g };
   }
@@ -5586,9 +5595,11 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
         const wkey = waterKeyAt(S.L, best.x, best.y);
         const wname = waterName(wkey, S.L.chan[cellOf(best.x, best.y)] >= 3 ? "river" : "stream", best);
         notePoint(wkey, best);
+        const known = S.sites.length;
         newSite(wx, wy, waterSiteName(wname, wx, wy));
         const first = !S.milestones.water;
-        log(`${first ? "Water! " : ""}${best.lake ? "A lake" : "A watercourse"} just to the ${bearingWord(bearing(s, best))}, ${timeWords(best.d * CELL / 3e3)} away: ${wname}. Marked it.`, first ? "act" : "note");
+        if (S.sites.length > known || first)
+          log(`${first ? "Water! " : ""}${best.lake ? "A lake" : "A watercourse"} just to the ${bearingWord(bearing(s, best))}, ${timeWords(best.d * CELL / 3e3)} away: ${wname}. Marked it.`, first ? "act" : "note");
         for (const u of S.suspects)
           if (!u.reached && u.group === "water" && Math.hypot(u.truePos.x - best.x, u.truePos.y - best.y) <= 4)
             u.reached = true;
@@ -5715,10 +5726,11 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       if (c) {
         const g = suspicionFrom(c, here, S.rng);
         sus.est = est = g.est;
+        sus.err = fixErr(c.channel, g.dist);
         how = `I can still ${c.channel === "sound" ? "hear" : "see"} it`;
-      } else if (Math.hypot(here.x - sus.est.x, here.y - sus.est.y) <= 2) {
-        sus.est = est = { x: Math.round(sus.est.x + (sus.est.x - from.x) * 0.5), y: Math.round(sus.est.y + (sus.est.y - from.y) * 0.5) };
-        how = "no sign of it where I expected; probably further on";
+      } else if (Math.hypot(here.x - sus.est.x, here.y - sus.est.y) <= 2 || here === from) {
+        sus.lost = true;
+        return log(`Didn\u2019t reach ${name}. ${here === from && Math.hypot(here.x - sus.est.x, here.y - sus.est.y) > 2 ? "I can\u2019t get any nearer this way, and there\u2019s no sign of it" : "No sign of it where I expected"}; I\u2019ve lost track of it. A scan, or a view from higher up, might pick it up again.`, "thought");
       } else {
         est = sus.est;
         how = "by my reckoning";
@@ -5731,6 +5743,15 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
   }
   function travelTo(target, label) {
     const from = site();
+    if (target.suspect && Math.hypot(target.x - from.x, target.y - from.y) <= 1.5) {
+      const info = targetInfo(target);
+      pass(0.1, 120);
+      if (atTarget(from, info)) {
+        info.sus.reached = true;
+        return log(`Found ${info.sus.label}, right here.`, "act");
+      }
+      return missedTarget(target, from);
+    }
     const thirsty = S.hyd < 0.55;
     let n = 0;
     const { sus, dest, truePos } = targetInfo(target);
@@ -6850,7 +6871,7 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
       const dir = bearingWord(bearing(s, best));
       let u = S.suspects.find((v) => v.kind === "patch" && Math.hypot(v.truePos.x - best.x, v.truePos.y - best.y) < 3);
       if (!u)
-        S.suspects.push(u = { id: `u${S.suspects.length + 1}`, kind: "patch", group: "patch", trueKey: `patch-${best.x}-${best.y}`, truePos: { x: best.x, y: best.y }, est: { x: best.x, y: best.y }, seenAt: { x: s.x, y: s.y }, channel: "sight", obs: 1, label: uniqueName(SITE_NOUN[microAt(best.x, best.y)] ?? "patch", best, []), reached: false });
+        S.suspects.push(u = { id: `u${S.suspects.length + 1}`, kind: "patch", group: "patch", trueKey: `patch-${best.x}-${best.y}`, truePos: { x: best.x, y: best.y }, est: { x: best.x, y: best.y }, err: 0.5, seenAt: { x: s.x, y: s.y }, channel: "sight", obs: 1, label: uniqueName(SITE_NOUN[microAt(best.x, best.y)] ?? "patch", best, []), reached: false });
       lines.push(`nothing here, but ${F.nearLabel} ${timeWords(lineHours2(S.L, s, best))} ${dir} (${u.label})`);
     } else
       lines.push(`nothing here, and no ${F.nearLabel} anywhere close`);
@@ -7587,7 +7608,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       }).observe(box);
     }
   }
-  var BUILD = "hk-2026-10-21e";
+  var BUILD = "hk-2026-10-22a";
   function record(d) {
     S.record ?? (S.record = []);
     S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });

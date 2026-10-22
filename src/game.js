@@ -174,7 +174,7 @@ function mentalMap() {
     links.push({ a: S.sites.indexOf(t), b: nodes.length, kind }); segs.push([t, v]); nodes.push(v);
   };
   for (const u of S.suspects) {
-    if (u.reached) continue;
+    if (u.reached || u.lost) continue;
     hang({ key: u.id, name: u.label, x: u.est.x, y: u.est.y, sus: u.id, water: u.group === 'water', certainty: (u.channel === 'sound' && u.obs < 2) || u.channel === 'smell' ? 'unknown' : 'guess' }, byDistance(u.seenAt ?? u.est).slice(0, 1), 'sighting');
   }
   for (const f of frontierPoints()) { // a landmark already marks the way, so no stub beside it
@@ -270,12 +270,15 @@ const SMELL_NOUN = { carcass: 'dead thing', sulfur: 'sulfur smell', musk: 'musky
 function associateSmell(c, from) {
   const wkey = c.source.waterKey;
   let sus = S.suspects.find(u => u.trueKey === (wkey ?? c.key));
-  if (sus) { sus.obs++; noteSeenFrom(sus, from); return { sus, isNew: false }; }
-  const w = windNow(), dir = (w.from + S.rng.normal(0, 25)) * Math.PI / 180, dist = c.trueDist * Math.exp(S.rng.normal(0, 0.6)) / CELL;
-  const est = { x: clamp(Math.round(from.x + Math.sin(dir) * dist), 0, GN - 1), y: clamp(Math.round(from.y - Math.cos(dir) * dist), 0, GN - 1) };
+  const fix = () => { // upwind, at a guessed distance
+    const w = windNow(), dir = (w.from + S.rng.normal(0, 25)) * Math.PI / 180, dist = c.trueDist * Math.exp(S.rng.normal(0, 0.6)) / CELL;
+    return { est: { x: clamp(Math.round(from.x + Math.sin(dir) * dist), 0, GN - 1), y: clamp(Math.round(from.y - Math.cos(dir) * dist), 0, GN - 1) }, err: fixErr('smell', dist * CELL) };
+  };
+  if (sus) { if (sus.lost) Object.assign(sus, fix(), { lost: false }); sus.obs++; noteSeenFrom(sus, from); return { sus, isNew: false }; }
+  const { est, err } = fix();
   S.lastTag = null;
   const label = wkey ? waterName(wkey, 'lake', est) : uniqueName(SMELL_NOUN[c.kind] ?? 'smell', est, []);
-  sus = { id: `u${S.suspects.length + 1}`, kind: wkey ? 'lake' : c.kind, group: wkey ? 'water' : 'smell', trueKey: wkey ?? c.key, truePos: { x: c.x, y: c.y }, est, seenAt: { x: from.x, y: from.y }, channel: 'smell', obs: 1, label, reached: false, source: c.source };
+  sus = { id: `u${S.suspects.length + 1}`, kind: wkey ? 'lake' : c.kind, group: wkey ? 'water' : 'smell', trueKey: wkey ?? c.key, truePos: { x: c.x, y: c.y }, est, err, seenAt: { x: from.x, y: from.y }, channel: 'smell', obs: 1, label, reached: false, source: c.source };
   S.suspects.push(sus);
   return { sus, isNew: true };
 }
@@ -284,14 +287,23 @@ function associateSmell(c, from) {
 function noteSeenFrom(sus, from) {
   if (!sus.seenAt || Math.hypot(from.x - sus.est.x, from.y - sus.est.y) < Math.hypot(sus.seenAt.x - sus.est.x, sus.seenAt.y - sus.est.y)) sus.seenAt = { x: from.x, y: from.y };
 }
-// Data association: is this cue one I already suspect? If not, a new named suspect.
+// How far off (in cells, one standard deviation, roughly) a fix on something is: a fraction of its
+// distance, bigger for sounds than sightings (geo.js suspicionFrom), biggest for smells.
+const FIX_ERR = { sight: 0.2, sound: 0.45, smell: 0.6 };
+const fixErr = (channel, distM) => Math.max(0.5, FIX_ERR[channel] * distM / CELL);
+// Data association: is this cue one I already suspect? If not, a new named suspect. A new fix is
+// blended with the old one by how sure each is (inverse-variance weighting, as in a Kalman update),
+// so a glimpse from far off doesn't spoil a good look from close by. A thing I'd lost track of takes
+// the new fix outright.
 function associate(c, from) {
   const g = suspicionFrom(c, from, S.rng);
   const kindGroup = isWaterKind(c.kind) ? 'water' : c.kind;
   let sus = S.suspects.find(u => u.trueKey === c.key) ?? S.suspects.find(u => u.group === kindGroup && Math.hypot(u.est.x - g.est.x, u.est.y - g.est.y) * CELL < Math.max(700, 0.35 * g.dist));
   if (sus) {
-    const w = c.channel === 'sight' ? 0.6 : 0.3; // sightings sharpen the estimate more than sounds
+    const e = fixErr(c.channel, g.dist), old = sus.lost ? Infinity : sus.err ?? e, w = old === Infinity ? 1 : old ** 2 / (old ** 2 + e ** 2);
     sus.est = { x: Math.round(sus.est.x * (1 - w) + g.est.x * w), y: Math.round(sus.est.y * (1 - w) + g.est.y * w) };
+    sus.err = old === Infinity ? e : Math.sqrt(old ** 2 * e ** 2 / (old ** 2 + e ** 2));
+    sus.lost = false;
     sus.obs++;
     noteSeenFrom(sus, from);
     return { sus, isNew: false, g };
@@ -309,7 +321,7 @@ function associate(c, from) {
   }
   if (!known) ((S.landNamed ??= {})[noun] ??= []).push({ site: site()?.key, label });
   if (named && c.channel === 'sight') notePoint(waterKeyOf(c.key), g.est);
-  sus = { id: `u${S.suspects.length + 1}`, kind: c.kind, group: kindGroup, trueKey: c.key, truePos: { x: c.x, y: c.y }, est: g.est, seenAt: { x: from.x, y: from.y }, channel: c.channel, obs: 1, label, reached: false, another };
+  sus = { id: `u${S.suspects.length + 1}`, kind: c.kind, group: kindGroup, trueKey: c.key, truePos: { x: c.x, y: c.y }, est: g.est, err: fixErr(c.channel, g.dist), seenAt: { x: from.x, y: from.y }, channel: c.channel, obs: 1, label, reached: false, another };
   S.suspects.push(sus);
   return { sus, isNew: true, g };
 }
@@ -389,9 +401,10 @@ function arrive(x, y, how, onTheWay = null) {
       const wkey = waterKeyAt(S.L, best.x, best.y);
       const wname = waterName(wkey, S.L.chan[cellOf(best.x, best.y)] >= 3 ? 'river' : 'stream', best);
       notePoint(wkey, best);
+      const known = S.sites.length;
       newSite(wx, wy, waterSiteName(wname, wx, wy));
       const first = !S.milestones.water;
-      log(`${first ? 'Water! ' : ''}${best.lake ? 'A lake' : 'A watercourse'} just to the ${bearingWord(bearing(s, best))}, ${timeWords(best.d * CELL / 3000)} away: ${wname}. Marked it.`, first ? 'act' : 'note');
+      if (S.sites.length > known || first) log(`${first ? 'Water! ' : ''}${best.lake ? 'A lake' : 'A watercourse'} just to the ${bearingWord(bearing(s, best))}, ${timeWords(best.d * CELL / 3000)} away: ${wname}. Marked it.`, first ? 'act' : 'note');
       for (const u of S.suspects) if (!u.reached && u.group === 'water' && Math.hypot(u.truePos.x - best.x, u.truePos.y - best.y) <= 4) u.reached = true;
       waterFound();
     }
@@ -494,9 +507,14 @@ function missedTarget(target, from) {
   let est = { x: target.x, y: target.y }, how;
   if (sus) {
     const c = perceive(S.L, here, { time: timeOfDay(), boost: 1.4 }).find(k => k.key === sus.trueKey);
-    if (c) { const g = suspicionFrom(c, here, S.rng); sus.est = est = g.est; how = `I can still ${c.channel === 'sound' ? 'hear' : 'see'} it`; }
-    else if (Math.hypot(here.x - sus.est.x, here.y - sus.est.y) <= 2) { sus.est = est = { x: Math.round(sus.est.x + (sus.est.x - from.x) * 0.5), y: Math.round(sus.est.y + (sus.est.y - from.y) * 0.5) }; how = 'no sign of it where I expected; probably further on'; }
-    else { est = sus.est; how = 'by my reckoning'; }
+    if (c) { const g = suspicionFrom(c, here, S.rng); sus.est = est = g.est; sus.err = fixErr(c.channel, g.dist); how = `I can still ${c.channel === 'sound' ? 'hear' : 'see'} it`; }
+    else if (Math.hypot(here.x - sus.est.x, here.y - sus.est.y) <= 2 || here === from) {
+      // Here is where I thought it was (or as near as I can get: the walk ended where it began, at a
+      // shore, say), and there's no sign of it. Guessing "further on" sends me chasing it in ever
+      // smaller hops, sometimes the wrong way, so it comes off the map until I pick it up again.
+      sus.lost = true;
+      return log(`Didn’t reach ${name}. ${here === from && Math.hypot(here.x - sus.est.x, here.y - sus.est.y) > 2 ? 'I can’t get any nearer this way, and there’s no sign of it' : 'No sign of it where I expected'}; I’ve lost track of it. A scan, or a view from higher up, might pick it up again.`, 'thought');
+    } else { est = sus.est; how = 'by my reckoning'; }
   } else how = 'by my reckoning';
   if (Math.hypot(here.x - est.x, here.y - est.y) < 1) return;
   log(`Didn’t reach ${name}. ${cap(how)}: ${awayWords(lineHours(S.L, here, est), sus && sus.channel === 'sound' && sus.obs < 2 ? 'unknown' : 'guess')}, to the ${bearingWord(bearing(here, est))}.`, 'thought');
@@ -505,6 +523,13 @@ function missedTarget(target, from) {
 // Head straight for something: a suspected landmark, a known place, or the edge of the unexplored.
 function travelTo(target, label) {
   const from = site();
+  if (target.suspect && Math.hypot(target.x - from.x, target.y - from.y) <= 1.5) {
+    // It should be right here: a step would land me back at this same place, so look instead of walking.
+    const info = targetInfo(target);
+    pass(0.1, 120);
+    if (atTarget(from, info)) { info.sus.reached = true; return log(`Found ${info.sus.label}, right here.`, 'act'); }
+    return missedTarget(target, from);
+  }
   const thirsty = S.hyd < 0.55;
   let n = 0;
   const { sus, dest, truePos } = targetInfo(target);
@@ -1319,7 +1344,7 @@ function pointNear(s, F, lines) {
   if (best) {
     const dir = bearingWord(bearing(s, best));
     let u = S.suspects.find(v => v.kind === 'patch' && Math.hypot(v.truePos.x - best.x, v.truePos.y - best.y) < 3);
-    if (!u) S.suspects.push(u = { id: `u${S.suspects.length + 1}`, kind: 'patch', group: 'patch', trueKey: `patch-${best.x}-${best.y}`, truePos: { x: best.x, y: best.y }, est: { x: best.x, y: best.y }, seenAt: { x: s.x, y: s.y }, channel: 'sight', obs: 1, label: uniqueName(SITE_NOUN[microAt(best.x, best.y)] ?? 'patch', best, []), reached: false });
+    if (!u) S.suspects.push(u = { id: `u${S.suspects.length + 1}`, kind: 'patch', group: 'patch', trueKey: `patch-${best.x}-${best.y}`, truePos: { x: best.x, y: best.y }, est: { x: best.x, y: best.y }, err: 0.5, seenAt: { x: s.x, y: s.y }, channel: 'sight', obs: 1, label: uniqueName(SITE_NOUN[microAt(best.x, best.y)] ?? 'patch', best, []), reached: false });
     lines.push(`nothing here, but ${F.nearLabel} ${timeWords(lineHours(S.L, s, best))} ${dir} (${u.label})`);
   } else lines.push(`nothing here, and no ${F.nearLabel} anywhere close`);
 }
@@ -1917,7 +1942,7 @@ if (typeof document !== 'undefined') {
 // Everything that happens follows from the world seed and the player's choices, so a record of the
 // seed and each choice reproduces a game exactly. Each action is the data of what was tapped (or
 // the value chosen); `act` applies one, and replaying a record runs them in order on a fresh game.
-const BUILD = 'hk-2026-10-21e'; // game logic version: a record replays faithfully only on the build that made it
+const BUILD = 'hk-2026-10-22a'; // game logic version: a record replays faithfully only on the build that made it
 function record(d) {
   S.record ??= [];
   S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
