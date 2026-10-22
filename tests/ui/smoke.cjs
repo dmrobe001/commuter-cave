@@ -1,11 +1,12 @@
 const STEPS = Number(process.env.SMOKE_STEPS ?? 100); // random clicks per world (was 250; set SMOKE_STEPS for a longer soak)
 const { JSDOM } = require('jsdom');
+const { openPage } = require('./page.cjs');
 const { strikeOut, DIRS } = require('./tap-map.cjs');
 const fs = require('fs');
 const html = fs.readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
 for (const seed of ['pig-rock', 'a', 'i', 'h']) {
   const errors = [];
-  const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
+  const dom = openPage();
   const w = dom.window;
   w.addEventListener('error', e => errors.push(e.message));
   w.Element.prototype.scrollIntoView = () => {};

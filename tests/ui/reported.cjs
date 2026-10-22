@@ -6,9 +6,10 @@
 // the spring's own cell; the mouth marked; no follow arrow that goes nowhere; the lake drawn. And a
 // second reported game (seed gbn2f): getting round a lake, and a fork marked off the lines (below).
 const { JSDOM } = require('jsdom');
+const { openPage } = require('./page.cjs');
 const { tidiness } = require('./stream-lines.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
-const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
+const dom = openPage();
 const w = dom.window, d = w.document, errors = [], fails = [];
 w.addEventListener('error', e => errors.push(e.message));
 const click = el => el?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));

@@ -5692,6 +5692,98 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   }
   var cap2 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
+  // src/pack.js
+  var b64 = (bytes) => {
+    let s = "";
+    for (let i = 0; i < bytes.length; i += 32768)
+      s += String.fromCharCode(...bytes.subarray(i, i + 32768));
+    return btoa(s);
+  };
+  var unb64 = (s) => {
+    const t = atob(s), b = new Uint8Array(t.length);
+    for (let i = 0; i < t.length; i++)
+      b[i] = t.charCodeAt(i);
+    return b;
+  };
+  var GRIDS = { Float32Array, Float64Array, Int32Array, Uint32Array, Int16Array, Uint16Array, Int8Array, Uint8Array, Uint8ClampedArray };
+  function pack(root) {
+    const count = /* @__PURE__ */ new Map();
+    const tally = (x) => {
+      if (x === null || typeof x !== "object")
+        return;
+      count.set(x, (count.get(x) ?? 0) + 1);
+      if (count.get(x) > 1 || ArrayBuffer.isView(x))
+        return;
+      for (const v of Object.values(x))
+        tally(v);
+    };
+    tally(root);
+    const ids = /* @__PURE__ */ new Map();
+    const enc = (x) => {
+      if (typeof x === "number" && !Number.isFinite(x))
+        return { $n: String(x) };
+      if (x === void 0)
+        return { $u: 1 };
+      if (x === null || typeof x !== "object")
+        return x;
+      if (ids.has(x))
+        return { $ref: ids.get(x) };
+      let v;
+      if (count.get(x) > 1)
+        ids.set(x, ids.size);
+      if (ArrayBuffer.isView(x))
+        v = { $t: x.constructor.name, d: b64(new Uint8Array(x.buffer, x.byteOffset, x.byteLength)) };
+      else if (Array.isArray(x))
+        v = x.map(enc);
+      else {
+        v = {};
+        for (const [k, y] of Object.entries(x))
+          v[k] = enc(y);
+      }
+      return ids.has(x) ? { $def: ids.get(x), v } : v;
+    };
+    return JSON.stringify(enc(root));
+  }
+  function unpack(text) {
+    const defs = [];
+    const dec = (x) => {
+      if (x === null || typeof x !== "object")
+        return x;
+      if (Array.isArray(x))
+        return x.map(dec);
+      if ("$n" in x)
+        return Number(x.$n);
+      if ("$u" in x)
+        return void 0;
+      if ("$ref" in x)
+        return defs[x.$ref];
+      if ("$t" in x) {
+        const b = unb64(x.d);
+        return new GRIDS[x.$t](b.buffer, 0, b.byteLength / GRIDS[x.$t].BYTES_PER_ELEMENT);
+      }
+      if ("$def" in x) {
+        const v = x.v, out = Array.isArray(v) ? [] : "$t" in v ? null : {};
+        if (out === null) {
+          defs[x.$def] = dec(v);
+          return defs[x.$def];
+        }
+        defs[x.$def] = out;
+        if (Array.isArray(v))
+          for (const y of v)
+            out.push(dec(y));
+        else
+          for (const [k, y] of Object.entries(v))
+            out[k] = dec(y);
+        return out;
+      }
+      const o = {};
+      for (const [k, y] of Object.entries(x))
+        o[k] = dec(y);
+      return o;
+    };
+    return dec(JSON.parse(text));
+  }
+
   // src/act.js
   var isPlain = (x) => x !== null && typeof x === "object" && Object.getPrototypeOf(x) === Object.prototype;
   function copyWith(x, memo) {
@@ -7025,12 +7117,22 @@ ${lines.join("\n")}`, "survey"]],
   function log(text, kind = "act") {
     S.log.push({ day: S.day, t: S.t, text: typo(text), kind });
   }
-  function checkWorld(seed, preset, { withOutlook = true } = {}) {
+  function makeWorld(seed, preset) {
+    const store = typeof window !== "undefined" ? window.__worldStore : null;
+    const key = `${seed}|${preset ?? ""}|mc150|${false ? "dev" : "e3429cda55f5"}`;
+    const kept = store?.get(key);
+    if (kept)
+      return unpack(kept);
     const world = generateWorld(seed, { ...preset ? { preset } : {}, mcSamples: 150 });
+    const L = generateLandscape(world);
+    const made = { world, L, spawn: chooseSpawn(L, seed) };
+    store?.set(key, pack(made));
+    return made;
+  }
+  function checkWorld(seed, preset, { withOutlook = true } = {}) {
+    const { world, L, spawn } = makeWorld(seed, preset);
     const est = estimateFire(world);
     const water = world.water.filter((w) => w.micro !== "anywhere");
-    const L = generateLandscape(world);
-    const spawn = chooseSpawn(L, seed);
     return { world, est, water, L, spawn, outlook: withOutlook ? outlook(world, L, spawn, est, seed) : null };
   }
   function newGame(seed, preset, checked2) {
@@ -7495,59 +7597,88 @@ ${lines.join("\n")}`, "survey"]],
       return S.walked[edgeKey(from.key, key)].hours;
     return routeHours(from, target);
   }
+  var stepMemo = { key: null, h: null };
+  function stepGrid() {
+    const key = `${S.seed}/${S.day}`;
+    if (stepMemo.key === key)
+      return stepMemo.h;
+    const L = S.L, h = new Float64Array(N * N * 8);
+    for (let c = 0; c < N * N; c++) {
+      const x = c % N, y = c / N | 0;
+      for (let k = 0; k < 8; k++) {
+        const nx = x + NB8[k][0], ny = y + NB8[k][1];
+        h[c * 8 + k] = nx < 0 || ny < 0 || nx >= N || ny >= N ? Infinity : stepHours(L, { x, y }, { x: nx, y: ny });
+      }
+    }
+    stepMemo = { key, h };
+    return h;
+  }
   function routeField(from) {
     const key = `${from.x},${from.y}/${S.seenVer ?? 0}/${S.day}`;
     if (S.routeMemo?.key === key)
       return S.routeMemo.D;
-    const esc2 = cliffIndex(), seen = S.seenLand, land = S.L, lake = land.lake, known = (c) => (seen?.[c] ?? 0) >= SEEN;
+    const esc2 = cliffIndex(), seen = S.seenLand, lake = S.L.lake, steps = stepGrid(), known = (c) => (seen?.[c] ?? 0) >= SEEN;
     const blocked = (c) => known(c) && !!lake[c];
-    const D = new Float64Array(N * N).fill(Infinity), heap = [], start = cellOf(from.x, from.y);
+    const D = new Float64Array(N * N).fill(Infinity), start = cellOf(from.x, from.y);
+    let hd = new Float64Array(4096), hc = new Int32Array(4096), n = 0;
     const push = (c, d) => {
-      heap.push([d, c]);
-      let i = heap.length - 1;
+      if (n === hd.length) {
+        const d2 = new Float64Array(n * 2), c2 = new Int32Array(n * 2);
+        d2.set(hd);
+        c2.set(hc);
+        hd = d2;
+        hc = c2;
+      }
+      let i = n++;
       while (i > 0) {
         const j = i - 1 >> 1;
-        if (heap[j][0] <= heap[i][0])
+        if (hd[j] <= d)
           break;
-        [heap[i], heap[j]] = [heap[j], heap[i]];
+        hd[i] = hd[j];
+        hc[i] = hc[j];
         i = j;
       }
+      hd[i] = d;
+      hc[i] = c;
     };
     const pop = () => {
-      const top = heap[0], last = heap.pop();
-      if (heap.length) {
-        heap[0] = last;
-        let i = 0;
-        for (; ; ) {
-          const l = 2 * i + 1, r = l + 1;
-          let m = i;
-          if (l < heap.length && heap[l][0] < heap[m][0])
-            m = l;
-          if (r < heap.length && heap[r][0] < heap[m][0])
-            m = r;
-          if (m === i)
-            break;
-          [heap[i], heap[m]] = [heap[m], heap[i]];
-          i = m;
+      const c = hc[0], d = hd[0], ld = hd[--n], lc = hc[n];
+      let i = 0;
+      for (; ; ) {
+        const l = 2 * i + 1, r = l + 1;
+        let m = -1, md = ld;
+        if (l < n && hd[l] < md) {
+          m = l;
+          md = hd[l];
         }
+        if (r < n && hd[r] < md)
+          m = r;
+        if (m < 0)
+          break;
+        hd[i] = hd[m];
+        hc[i] = hc[m];
+        i = m;
       }
-      return top;
+      hd[i] = ld;
+      hc[i] = lc;
+      hd[n] = d;
+      return c;
     };
     D[start] = 0;
     push(start, 0);
-    while (heap.length) {
-      const [d, c] = pop();
+    while (n) {
+      const c = pop(), d = hd[n];
       if (d > D[c] || blocked(c) && c !== start)
         continue;
-      const x = c % N, y = Math.floor(c / N);
-      for (const [dx, dy] of NB8) {
-        const nx = x + dx, ny = y + dy;
+      const x = c % N, y = c / N | 0;
+      for (let k = 0; k < 8; k++) {
+        const nx = x + NB8[k][0], ny = y + NB8[k][1];
         if (nx < 0 || ny < 0 || nx >= N || ny >= N)
           continue;
-        const n = cellOf(nx, ny), nd = d + (blocked(n) ? 0 : stepHours(land, { x, y }, { x: nx, y: ny }) * (lake[n] ? 1.6 : known(n) && esc2[n] >= 0 ? CLIFF_COST : 1));
-        if (nd < D[n]) {
-          D[n] = nd;
-          push(n, nd);
+        const m = cellOf(nx, ny), nd = d + (blocked(m) ? 0 : steps[c * 8 + k] * (lake[m] ? 1.6 : known(m) && esc2[m] >= 0 ? CLIFF_COST : 1));
+        if (nd < D[m]) {
+          D[m] = nd;
+          push(m, nd);
         }
       }
     }
@@ -9768,6 +9899,83 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     const say = mins < 60 ? `${mins} min` : `${mins / 60} h`;
     return `<span class="scalebar" aria-label="Scale: ${say} walking on open ground"><i style="width:${px}px"></i>${say} on open ground</span>`;
   }
+  var knownCrossings = () => (S.crossingsKnown ?? []).filter((q) => !S.sites.some((t) => t.x === q.x && t.y === q.y)).map((q) => ({ ...q, key: `crossing:${q.x}_${q.y}`, name: "crossing", cells: [q] }));
+  var crossedMarks = (M2, crossings) => S.streams.flatMap((st) => st.fixes.filter((f) => f.how === "crossed" && !(st.runs ?? []).some((r) => r.includes(f))).map((f) => ({ x: f.x, y: f.y, key: `crossed:${f.x}_${f.y}`, kind: "crossed", name: "where I crossed", cells: [f] }))).filter((q) => !M2.nodes.some((v) => !v.unmarked && v.x === q.x && v.y === q.y) && !crossings.some((c) => c.x === q.x && c.y === q.y));
+  function streamLines(t, keyCells) {
+    const downOf = new Map(t.segs.map((sg) => [sg[0], sg])), ins = /* @__PURE__ */ new Map(), drawn = /* @__PURE__ */ new Set(), pieces = [];
+    for (const sg of t.segs)
+      ins.set(sg[1], (ins.get(sg[1]) ?? 0) + 1);
+    const draw = (sg, fresh) => {
+      const last = pieces[pieces.length - 1];
+      if (!fresh && last && last.known === !!sg.known)
+        last.pts.push(sg[1]);
+      else
+        pieces.push({ known: !!sg.known, pts: [sg[0], sg[1]], fresh });
+    };
+    for (const src of t.segs.map((sg) => sg[0]).filter((f) => !ins.has(f))) {
+      let f = src, fresh = true;
+      while (downOf.has(f) && !drawn.has(f)) {
+        const sg = downOf.get(f);
+        drawn.add(f);
+        draw(sg, fresh);
+        fresh = false;
+        f = sg[1];
+      }
+    }
+    for (const sg of t.segs)
+      if (!drawn.has(sg[0]))
+        draw(sg, true);
+    for (const q of pieces) {
+      const key = q.known ? q.pts.map((f, k) => k).filter((k) => k === 0 || k === q.pts.length - 1 || waterMark(q.pts[k]) || (ins.get(q.pts[k]) ?? 0) >= 2 || keyCells.has(`${q.pts[k].x},${q.pts[k].y}`)) : q.pts.map((f, k) => k);
+      q.keep = [];
+      for (const k of key) {
+        const last = q.keep[q.keep.length - 1] ?? 0;
+        for (let m = last + 10; m < k - 4; m += 10)
+          q.keep.push(m);
+        if (!q.keep.length || q.keep[q.keep.length - 1] !== k)
+          q.keep.push(k);
+      }
+    }
+    return { pieces, downOf, ins };
+  }
+  var keyCellsNow = () => new Set(S.sites.filter((t) => !unmarked(t)).map((t) => `${t.x},${t.y}`));
+  function mapData() {
+    const M2 = mentalMap(), hi = M2.nodes.findIndex((v) => v.site === S.at), here = M2.nodes[hi];
+    const lakes = lakeShapes(), cliffs = seenPieces("cliff"), crossings = knownCrossings(), crossed = crossedMarks(M2, crossings), keyCells = keyCellsNow();
+    const streams = streamTrees().map((t) => ({
+      id: t.id,
+      name: t.name,
+      hike: `stream:${t.id}`,
+      lone: t.lone.map((f) => ({ x: f.x, y: f.y })),
+      lines: streamLines(t, keyCells).pieces.map((q) => ({ known: q.known, cells: q.pts.map((f) => ({ x: f.x, y: f.y })), drawn: q.keep.map((k) => ({ x: q.pts[k].x, y: q.pts[k].y })) }))
+    }));
+    const nodes = M2.nodes.map((v, i) => ({ i, key: v.key, name: v.name, x: v.x, y: v.y, kind: v.site !== void 0 ? "site" : "sus", site: v.site, sus: v.sus, mark: v.mark ?? null, certainty: v.certainty, here: i === hi, drawn: !v.unmarked }));
+    const follows = followOptions().concat(shoreOptions()).map((o) => ({ key: o.key, dir: o.dir, say: o.say }));
+    const targets = [
+      ...lakes.map((q) => ({ hike: q.id, kind: "lake", name: q.name })),
+      ...cliffs.map((q) => ({ hike: q.id, kind: "cliff", name: q.name })),
+      ...streams.map((t) => ({ hike: t.hike, kind: "stream", name: t.name })),
+      ...crossings.map((q) => ({ hike: `go:${q.x}_${q.y}`, kind: "crossing", name: "crossing" })),
+      ...crossed.map((q) => ({ hike: `go:${q.x}_${q.y}`, kind: "crossed", name: "where I crossed" })),
+      ...nodes.filter((v) => v.drawn && !v.here).map((v) => ({ hike: v.key, kind: v.kind, name: v.name, mark: v.mark, certainty: v.certainty })),
+      ...follows.map((o) => ({ hike: o.key, kind: "follow", name: o.say })),
+      ...S.mapPin ? [{ hike: `go:${S.mapPin.x}_${S.mapPin.y}`, kind: "pin", name: "the spot I picked" }] : []
+    ];
+    return {
+      here: { x: here.x, y: here.y, name: here.name },
+      nodes,
+      edges: M2.edges.map((e) => ({ a: e.a, b: e.b, kind: e.kind, certainty: e.certainty, hours: e.hours })),
+      streams,
+      lakes: lakes.map((q) => ({ key: q.key, hike: q.id, name: q.name, cells: q.cells.length })),
+      cliffs: cliffs.map((q) => ({ key: q.key, hike: q.id, name: q.name, cells: q.cells.length })),
+      crossings: crossings.map((q) => ({ x: q.x, y: q.y, kind: q.kind })),
+      crossed: crossed.map((q) => ({ x: q.x, y: q.y })),
+      follows,
+      pin: S.mapPin ?? null,
+      targets,
+      segNames: Object.values(S.segNames ?? {}).map((g) => g.name)
+    };
+  }
   function mapHTML() {
     const M2 = mentalMap();
     const hi = M2.nodes.findIndex((v) => v.site === S.at), here = M2.nodes[hi];
@@ -9804,10 +10012,9 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     for (const q of [...lakes, ...cliffs].sort((a, b) => b.cells.length - a.cells.length))
       if (!items.some((t) => t.feature?.key === q.key))
         items.push({ feature: q, rank: 1 });
-    const crossings = (S.crossingsKnown ?? []).filter((q) => !S.sites.some((t) => t.x === q.x && t.y === q.y)).map((q) => ({ ...q, key: `crossing:${q.x}_${q.y}`, name: "crossing", cells: [q] }));
+    const crossings = knownCrossings(), crossed = crossedMarks(M2, crossings);
     for (const q of crossings)
       items.push({ feature: q, rank: 1.5 });
-    const crossed = S.streams.flatMap((st) => st.fixes.filter((f) => f.how === "crossed" && !(st.runs ?? []).some((r) => r.includes(f))).map((f) => ({ x: f.x, y: f.y, key: `crossed:${f.x}_${f.y}`, kind: "crossed", name: "where I crossed", cells: [f] }))).filter((q) => !M2.nodes.some((v) => !v.unmarked && v.x === q.x && v.y === q.y) && !crossings.some((c) => c.x === q.x && c.y === q.y));
     for (const q of crossed)
       items.push({ feature: q, rank: 4.5 });
     M2.nodes.forEach((v, i) => {
@@ -9930,32 +10137,10 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       }
       return { d, fine };
     };
-    const keyCells = new Set(S.sites.filter((t) => !unmarked(t)).map((t) => `${t.x},${t.y}`));
+    const keyCells = keyCellsNow();
     const W = trees.map((t) => {
       const near = nearestOnStream(t, here), say = `Head for ${t.name} (${timeWords(routeHours(here, near), "guess")})`;
-      const downOf = new Map(t.segs.map((sg) => [sg[0], sg])), ins = /* @__PURE__ */ new Map(), drawn = /* @__PURE__ */ new Set(), marks = [], pieces = [];
-      for (const sg of t.segs)
-        ins.set(sg[1], (ins.get(sg[1]) ?? 0) + 1);
-      const draw = (sg, fresh) => {
-        const last = pieces[pieces.length - 1];
-        if (!fresh && last && last.known === !!sg.known)
-          last.pts.push(sg[1]);
-        else
-          pieces.push({ known: !!sg.known, pts: [sg[0], sg[1]], fresh });
-      };
-      for (const src of t.segs.map((sg) => sg[0]).filter((f) => !ins.has(f))) {
-        let f = src, fresh = true;
-        while (downOf.has(f) && !drawn.has(f)) {
-          const sg = downOf.get(f);
-          drawn.add(f);
-          draw(sg, fresh);
-          fresh = false;
-          f = sg[1];
-        }
-      }
-      for (const sg of t.segs)
-        if (!drawn.has(sg[0]))
-          draw(sg, true);
+      const { pieces, downOf } = streamLines(t, keyCells), marks = [];
       const tangent = (q, k) => {
         const f = q.pts[k];
         if (!q.known && f.flow != null) {
@@ -9970,15 +10155,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       };
       let carry = 35;
       const lines = pieces.map((q) => {
-        const keep = q.known ? q.pts.map((f, k) => k).filter((k) => k === 0 || k === q.pts.length - 1 || waterMark(q.pts[k]) || (ins.get(q.pts[k]) ?? 0) >= 2 || keyCells.has(`${q.pts[k].x},${q.pts[k].y}`)) : q.pts.map((f, k) => k);
-        const idx5 = [];
-        for (const k of keep) {
-          const last = idx5[idx5.length - 1] ?? 0;
-          for (let m = last + 10; m < k - 4; m += 10)
-            idx5.push(m);
-          if (!idx5.length || idx5[idx5.length - 1] !== k)
-            idx5.push(k);
-        }
+        const idx5 = q.keep;
         const { d, fine } = curve(idx5.map((k) => q.pts[k]), idx5.map((k) => tangent(q, k)));
         const r = along(fine, 70, q.fresh ? 35 : carry);
         marks.push(...r.marks);
@@ -10224,8 +10401,8 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     lastHTML.set(sel2, html);
     $(sel2).innerHTML = html;
   }
-  function render() {
-    if (!S)
+  function render(force = false) {
+    if (!S || window.__noDraw && !force)
       return;
     const s = site(), e = S.world.environment;
     {
@@ -10347,7 +10524,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       }).observe(box);
     }
   }
-  var BUILD = "hk-2026-10-26b";
+  var BUILD = "hk-2026-10-26c";
   function record(d) {
     S.record ?? (S.record = []);
     S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
@@ -10615,6 +10792,18 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       render,
       act,
       // test hooks
+      draw: () => render(true),
+      mapData,
+      journal: () => S.log.map((e) => e.text),
+      actions: () => hereActions(),
+      recordText: () => gameRecord(),
+      replay(text) {
+        const rec = replay(text);
+        $("#start").hidden = true;
+        $("#app").hidden = false;
+        render();
+        return rec;
+      },
       start(seed, preset = "") {
         checked = { seed, preset, ...checkWorld(seed, preset || null, { withOutlook: false }) };
         newGame(seed, preset || null, checked);
@@ -10627,7 +10816,8 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     };
   function boot() {
     $("#seed").value = randomSeed();
-    showCheck();
+    if (!window.__testPage)
+      showCheck();
   }
   boot();
 })();

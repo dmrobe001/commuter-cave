@@ -9,8 +9,9 @@
 // - a lake's shore can be walked in stages, either way round, and every stage moves me along it.
 // Usage: node tests/ui/names.cjs
 const { JSDOM } = require('jsdom');
+const { openPage } = require('./page.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
-const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
+const dom = openPage();
 const w = dom.window, d = w.document, errors = [], fails = [];
 w.addEventListener('error', e => errors.push(e.message));
 const click = el => el?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));

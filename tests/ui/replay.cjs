@@ -1,10 +1,11 @@
 // The game record reproduces a game exactly: play a few hundred random actions, copy the record,
 // replay it in a fresh page, and compare the journals and the state. Usage: node tests/ui/replay.cjs [seed] [steps]
 const { JSDOM } = require('jsdom');
+const { openPage } = require('./page.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
 const seed = process.argv[2] ?? 'pig-rock', steps = Number(process.argv[3] ?? 40);
 const wait = ms => new Promise(r => setTimeout(r, ms));
-function page() { const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true }); return { w: dom.window, d: dom.window.document }; }
+function page() { const dom = openPage(); return { w: dom.window, d: dom.window.document }; }
 const journal = S => S.log.map(e => `${e.day} ${e.t.toFixed(3)} ${e.text}`).join('\n'); // the log itself, not its rendering
 (async () => {
   const A = page();

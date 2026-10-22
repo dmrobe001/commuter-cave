@@ -1,9 +1,10 @@
 // Poking around: what a survey misses, then the same with a digging stick, then fire-hardening it.
 // Usage: node tests/ui/poke-around.cjs [seed]
 const { JSDOM } = require('jsdom');
+const { openPage } = require('./page.cjs');
 const { strikeOut } = require('./tap-map.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
-const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
+const dom = openPage();
 const w = dom.window, d = w.document, errors = [];
 w.addEventListener('error', e => errors.push(e.message));
 const seed = process.argv[2] ?? 'c';

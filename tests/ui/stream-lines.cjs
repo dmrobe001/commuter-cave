@@ -34,3 +34,18 @@ function tidiness(d) {
   return { lines, deg, bad };
 }
 module.exports = { knownLines, kinks, tidiness };
+// The same check on the map's data (mapData in game.js) rather than its drawing: the points each walked
+// stretch is drawn through, no more than about fifteen cells apart, and three or more ends meeting only
+// where a fork is marked.
+function tidyData(map) {
+  const bad = [], deg = new Map(), key = p => `${p.x},${p.y}`;
+  const lines = map.streams.flatMap(t => t.lines.filter(l => l.known).map(l => l.drawn));
+  for (const pts of lines) {
+    pts.forEach((p, k) => { if (k) { const q = pts[k - 1]; if (Math.hypot(p.x - q.x, p.y - q.y) > 15 * Math.SQRT2) bad.push(`a solid line jumps from ${key(q)} to ${key(p)}`); } });
+    pts.forEach((p, k) => deg.set(key(p), (deg.get(key(p)) ?? 0) + (k === 0 || k === pts.length - 1 ? 1 : 2)));
+  }
+  const forks = new Set(map.nodes.filter(v => v.drawn && v.kind === 'site' && v.mark === 'fork').map(key));
+  for (const [p, n] of deg) if (n >= 3 && !forks.has(p)) bad.push(`solid lines meet at ${p}, with no fork marked there`);
+  return { lines, deg, bad };
+}
+module.exports.tidyData = tidyData;

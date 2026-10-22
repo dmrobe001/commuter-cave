@@ -1,6 +1,7 @@
 const { JSDOM } = require('jsdom');
+const { openPage } = require('./page.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
-const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
+const dom = openPage();
 const w = dom.window, d = w.document, errors = [];
 w.addEventListener('error', e => errors.push(e.message));
 const click = sel => { const b = [...d.querySelectorAll(sel)].find(x => !x.disabled); if (b) b.click(); return b; };

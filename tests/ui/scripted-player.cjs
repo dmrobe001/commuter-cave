@@ -10,13 +10,14 @@
 //   then the fire plan: edges → hearth board → spindle → tinder → spare wood → test, choose, drill.
 
 const { JSDOM } = require('jsdom');
+const { openPage } = require('./page.cjs');
 const { strikeOut } = require('./tap-map.cjs');
 const path = require('path');
 const html = require('fs').readFileSync(path.join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
 const [seed = 'pig-rock', preset = '', maxStepsArg] = process.argv.slice(2);
 const MAX_STEPS = Number(maxStepsArg ?? 600);
 
-const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
+const dom = openPage();
 const w = dom.window, d = w.document, errors = [];
 w.addEventListener('error', e => errors.push(e.message));
 

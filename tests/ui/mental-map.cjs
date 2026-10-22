@@ -1,8 +1,9 @@
 // The mental map: names, the mesh with walking times and stream marks, straight and relayed journeys,
 // and notes when a walk takes longer or shorter than expected. Usage: node tests/ui/mental-map.cjs [seed]
 const { JSDOM } = require('jsdom');
+const { openPage } = require('./page.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
-const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
+const dom = openPage();
 const w = dom.window, d = w.document, errors = [];
 w.addEventListener('error', e => errors.push(e.message));
 const seed = process.argv[2] ?? 'c';

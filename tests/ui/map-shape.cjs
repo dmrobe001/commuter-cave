@@ -1,10 +1,9 @@
 // The shape of the mental map after a fixed sequence of hikes: how many links per node, how many
-// links cross, and how roundabout the map's routes between visited places are. Reads the drawn SVG,
-// so it measures what the player sees. Fails if the map falls into pieces.
+// links cross, and how roundabout the map's routes between visited places are. Reads the map as data
+// (mapData: the places and links the drawing is made from), played without drawing. Fails if the map
+// falls into pieces.
 // Usage: node tests/ui/map-shape.cjs [seed ...]
-const { JSDOM } = require('jsdom');
-const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
-const wait = ms => new Promise(r => setTimeout(r, ms));
+const { game } = require('./drive.cjs');
 const seeds = process.argv.slice(2).length ? process.argv.slice(2) : ['pig-rock', 'c', 'm', 'wgxdd'];
 const CHECKPOINTS = [6, 12, 20];
 
@@ -12,15 +11,10 @@ function cross(p1, p2, q1, q2) { // proper crossing of two segments that share n
   const o = (a, b, c) => Math.sign((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
   return o(p1, p2, q1) * o(p1, p2, q2) < 0 && o(q1, q2, p1) * o(q1, q2, p2) < 0;
 }
-function measure(d) {
-  const svg = d.querySelector('.mapsvg');
-  if (!svg) return null;
-  // nodes by their index in the map (data-i on markers, data-a/b on links); places drawn without a
-  // marker (by a stream or lake) are known only as link ends, at the link's coordinates
-  const byIndex = new Map([...svg.querySelectorAll('.node')].map(g => { const c = g.querySelector('circle'); return [+g.dataset.i, { x: +c.getAttribute('cx'), y: +c.getAttribute('cy'), site: g.classList.contains('site'), sus: g.classList.contains('sus') }]; }));
-  for (const l of svg.querySelectorAll('line.edge')) for (const [k, x, y] of [['a', 'x1', 'y1'], ['b', 'x2', 'y2']]) if (!byIndex.has(+l.dataset[k])) byIndex.set(+l.dataset[k], { x: +l.getAttribute(x), y: +l.getAttribute(y), site: false });
-  const keys = [...byIndex.keys()], nodes = keys.map(k => byIndex.get(k)), pos = new Map(keys.map((k, i) => [k, i]));
-  const edges = [...svg.querySelectorAll('line.edge')].map(l => ({ a: pos.get(+l.dataset.a), b: pos.get(+l.dataset.b), kind: l.dataset.link }));
+function measure(map) {
+  // every node (places drawn without a marker, by a stream or lake, still have their links) and every link
+  const nodes = map.nodes.map(v => ({ x: v.x, y: v.y, site: v.kind === 'site', sus: v.kind === 'sus' }));
+  const edges = map.edges;
   const kind = e => e.kind;
   let crossings = 0; const byKind = {};
   for (let i = 0; i < edges.length; i++) for (let j = i + 1; j < edges.length; j++) {
@@ -50,29 +44,22 @@ function measure(d) {
 (async () => {
   let errors = 0;
   for (const seed of seeds) {
-    const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
-    const w = dom.window, d = w.document, errs = [];
-    w.addEventListener('error', e => errs.push(e.message));
-    await wait(50);
-    d.querySelector('#seed').value = seed; d.querySelector('#check').click();
-    for (let k = 0; k < 50 && !d.querySelector('#begin'); k++) await wait(100);
-    d.querySelector('#begin').click();
-    const click = el => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
-    click(d.querySelector('[data-maproutes]')); // routes are hidden until asked for
-    const scan = d.querySelector('[data-here="scan"]:not([disabled])'); if (scan) click(scan);
+    const g = await game(seed), errs = [];
+    if (g.can('scan')) g.act({ here: 'scan' });
     // a fixed itinerary: out to landmarks and unexplored ground, now and then back to a known place
     for (let move = 1; move <= CHECKPOINTS[CHECKPOINTS.length - 1]; move++) {
-      const opts = [...d.querySelectorAll('[data-hike]')];
-      const pick = move % 4 === 0 ? opts.filter(g => g.classList.contains('site')) : opts.filter(g => !g.classList.contains('site'));
+      const opts = g.map().targets;
+      const pick = move % 4 === 0 ? opts.filter(t => t.kind === 'site') : opts.filter(t => t.kind !== 'site');
       const pool = pick.length ? pick : opts;
       if (!pool.length) break;
-      click(pool[(move * 7) % pool.length]);
-      const s = d.querySelector('[data-here="scan"]:not([disabled])'); if (s && move % 2) click(s);
+      g.hike(pool[(move * 7) % pool.length].hike);
+      if (g.can('scan') && move % 2) g.act({ here: 'scan' });
       if (!CHECKPOINTS.includes(move)) continue;
-      const m = measure(d);
+      const m = measure(g.map());
       console.log(`${seed.padEnd(9)} move ${String(move).padStart(2)}: ${JSON.stringify(m)}`);
       if (m.unreachable) errs.push(`move ${move}: the map is in pieces (${m.unreachable} pairs unjoined)`);
     }
+    errs.push(...g.errs);
     if (errs.length) { errors++; console.log(`${seed}: errors`, errs); }
   }
   if (errors) process.exit(1);

@@ -3,11 +3,12 @@
 // thrown errors and the regressions that have bitten before, not balance or prose.
 // Usage: node tests/ui/quick.cjs
 const { JSDOM } = require('jsdom');
+const { openPage } = require('./page.cjs');
 const { strikeOut } = require('./tap-map.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
 const errors = [];
 function page() {
-  const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
+  const dom = openPage();
   dom.window.addEventListener('error', e => errors.push(e.message));
   return { w: dom.window, d: dom.window.document };
 }

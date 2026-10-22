@@ -17,6 +17,7 @@ import { cloneChem, expose, nutrients, harm, tasteWords, smellWords, textureWord
 import { chooseSpawn, perceive, suspicionFrom, walk, followStage, shoreStage, stepHours, CLIFF_COST, sightline, lookoutEye, isLookout, bearingWord, bearing, distM, CUE_WORDS, loudWords, waterKeyAt, waterKeyOf, lineHours as rawLineHours } from './geo.js';
 import { trailGraph, firstClear, placeLabels, suspectedCrossings, timeWords, awayWords, explainTrip } from './mentalmap.js';
 import { materialsOf, expandGoal, thought, ITEMS, lookHint, PROCESSES } from './process.js';
+import { pack, unpack } from './pack.js';
 import { viewOf as viewFor, rehearse, apply, stateOver, hoursOf, kcalOf, readyFor } from './act.js';
 import { TICKS, SLEEP_HOUR, CRAFTS, DRILL_ATTEMPT, EMBER, HANDLE, REST, DRINK, WASH_HANDS, MAKE_BED, BUILD_HUT, FEED_FIRE, KNAP, PREPARE, EAT, SURVEY, GUT_KG, loreKey, populationAt, findBones, boneLines, noteKnown as knowIt, pluralize, lineFor, mix } from './acts.js';
 import { newCharacter, dry, ROLES, searchNaturalEdge, estimateFire } from './craft.js';
@@ -66,12 +67,25 @@ function log(text, kind = 'act') {
 // ------------------------------------------------------------ world setup
 
 // The start-screen outlook (trial walks) is only for showing; a replay or a test start can skip it.
-function checkWorld(seed, preset, { withOutlook = true } = {}) {
+// Making a world (species, landscape, spawn) takes a while, so a page can keep made worlds between runs
+// (the tests do): window.__worldStore, if set, is { get(key) → text or null, set(key, text) }, keyed by
+// the seed, the preset and a hash of the code that makes worlds (__GEN_HASH__, set by the build), so a
+// change to that code never gets an old world. The fire estimate and the outlook are worked out fresh.
+function makeWorld(seed, preset) {
+  const store = typeof window !== 'undefined' ? window.__worldStore : null;
+  const key = `${seed}|${preset ?? ''}|mc150|${typeof __GEN_HASH__ === 'undefined' ? 'dev' : __GEN_HASH__}`;
+  const kept = store?.get(key);
+  if (kept) return unpack(kept);
   const world = generateWorld(seed, { ...(preset ? { preset } : {}), mcSamples: 150 });
+  const L = generateLandscape(world);
+  const made = { world, L, spawn: chooseSpawn(L, seed) };
+  store?.set(key, pack(made));
+  return made;
+}
+function checkWorld(seed, preset, { withOutlook = true } = {}) {
+  const { world, L, spawn } = makeWorld(seed, preset);
   const est = estimateFire(world);
   const water = world.water.filter(w => w.micro !== 'anywhere');
-  const L = generateLandscape(world);
-  const spawn = chooseSpawn(L, seed);
   return { world, est, water, L, spawn, outlook: withOutlook ? outlook(world, L, spawn, est, seed) : null };
 }
 
@@ -471,23 +485,50 @@ function mapHours(from, key, target) {
 // walking time); Dijkstra over the grid; what I haven't seen I take as it looks.
 // One field per place I'm at and per state of what I've seen; a target on a lake or cliff is reached
 // beside it.
+// Every step's walking time across the land today (stepHours, geo.js: slope, cover, snow, wading),
+// worked out once a day: route-finding asks it of every cell, eight ways, each time the map is drawn.
+let stepMemo = { key: null, h: null };
+function stepGrid() {
+  const key = `${S.seed}/${S.day}`;
+  if (stepMemo.key === key) return stepMemo.h;
+  const L = S.L, h = new Float64Array(GN * GN * 8);
+  for (let c = 0; c < GN * GN; c++) {
+    const x = c % GN, y = (c / GN) | 0;
+    for (let k = 0; k < 8; k++) { const nx = x + NB8[k][0], ny = y + NB8[k][1]; h[c * 8 + k] = nx < 0 || ny < 0 || nx >= GN || ny >= GN ? Infinity : stepHours(L, { x, y }, { x: nx, y: ny }); }
+  }
+  stepMemo = { key, h };
+  return h;
+}
 function routeField(from) {
   const key = `${from.x},${from.y}/${S.seenVer ?? 0}/${S.day}`; // the water changes by the day
   if (S.routeMemo?.key === key) return S.routeMemo.D;
-  const esc = cliffIndex(), seen = S.seenLand, land = S.L, lake = land.lake, known = c => (seen?.[c] ?? 0) >= SEEN;
+  const esc = cliffIndex(), seen = S.seenLand, lake = S.L.lake, steps = stepGrid(), known = c => (seen?.[c] ?? 0) >= SEEN;
   const blocked = c => known(c) && !!lake[c];
-  const D = new Float64Array(GN * GN).fill(Infinity), heap = [], start = cellOf(from.x, from.y);
-  const push = (c, d) => { heap.push([d, c]); let i = heap.length - 1; while (i > 0) { const j = (i - 1) >> 1; if (heap[j][0] <= heap[i][0]) break; [heap[i], heap[j]] = [heap[j], heap[i]]; i = j; } };
-  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[i], heap[m]] = [heap[m], heap[i]]; i = m; } } return top; };
+  const D = new Float64Array(GN * GN).fill(Infinity), start = cellOf(from.x, from.y);
+  // a binary heap of (time, cell) in two typed arrays
+  let hd = new Float64Array(4096), hc = new Int32Array(4096), n = 0;
+  const push = (c, d) => {
+    if (n === hd.length) { const d2 = new Float64Array(n * 2), c2 = new Int32Array(n * 2); d2.set(hd); c2.set(hc); hd = d2; hc = c2; }
+    let i = n++;
+    while (i > 0) { const j = (i - 1) >> 1; if (hd[j] <= d) break; hd[i] = hd[j]; hc[i] = hc[j]; i = j; }
+    hd[i] = d; hc[i] = c;
+  };
+  const pop = () => { // the cell with the least time; its time is left in hd[n]
+    const c = hc[0], d = hd[0], ld = hd[--n], lc = hc[n];
+    let i = 0;
+    for (;;) { const l = 2 * i + 1, r = l + 1; let m = -1, md = ld; if (l < n && hd[l] < md) { m = l; md = hd[l]; } if (r < n && hd[r] < md) m = r; if (m < 0) break; hd[i] = hd[m]; hc[i] = hc[m]; i = m; }
+    hd[i] = ld; hc[i] = lc; hd[n] = d;
+    return c;
+  };
   D[start] = 0; push(start, 0);
-  while (heap.length) {
-    const [d, c] = pop();
+  while (n) {
+    const c = pop(), d = hd[n];
     if (d > D[c] || (blocked(c) && c !== start)) continue; // a blocked cell gets a time (I can reach its edge) but leads nowhere
-    const x = c % GN, y = Math.floor(c / GN);
-    for (const [dx, dy] of NB8) {
-      const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= GN || ny >= GN) continue;
-      const n = cellOf(nx, ny), nd = d + (blocked(n) ? 0 : stepHours(land, { x, y }, { x: nx, y: ny }) * (lake[n] ? 1.6 : known(n) && esc[n] >= 0 ? CLIFF_COST : 1));
-      if (nd < D[n]) { D[n] = nd; push(n, nd); }
+    const x = c % GN, y = (c / GN) | 0;
+    for (let k = 0; k < 8; k++) {
+      const nx = x + NB8[k][0], ny = y + NB8[k][1]; if (nx < 0 || ny < 0 || nx >= GN || ny >= GN) continue;
+      const m = cellOf(nx, ny), nd = d + (blocked(m) ? 0 : steps[c * 8 + k] * (lake[m] ? 1.6 : known(m) && esc[m] >= 0 ? CLIFF_COST : 1));
+      if (nd < D[m]) { D[m] = nd; push(m, nd); }
     }
   }
   S.routeMemo = { key, D };
@@ -2160,6 +2201,61 @@ function scaleBar(span) {
   const say = mins < 60 ? `${mins} min` : `${mins / 60} h`; // exact: a scale needs the number, not "a few minutes"
   return `<span class="scalebar" aria-label="Scale: ${say} walking on open ground"><i style="width:${px}px"></i>${say} on open ground</span>`;
 }
+// crossings I know of and haven't stood on (one I've stood on is a place, marked as such)
+const knownCrossings = () => (S.crossingsKnown ?? []).filter(q => !S.sites.some(t => t.x === q.x && t.y === q.y)).map(q => ({ ...q, key: `crossing:${q.x}_${q.y}`, name: 'crossing', cells: [q] }));
+// where I crossed a stream and haven't since walked along it there: the crossing isn't joined to the
+// rest of the stream by anything but a guess, so it keeps a marker of its own until it is
+const crossedMarks = (M, crossings) => S.streams.flatMap(st => st.fixes.filter(f => f.how === 'crossed' && !(st.runs ?? []).some(r => r.includes(f)))
+  .map(f => ({ x: f.x, y: f.y, key: `crossed:${f.x}_${f.y}`, kind: 'crossed', name: 'where I crossed', cells: [f] })))
+  .filter(q => !M.nodes.some(v => !v.unmarked && v.x === q.x && v.y === q.y) && !crossings.some(c => c.x === q.x && c.y === q.y));
+// A stream as drawn: unbroken lines from each source down, a new line wherever walked gives way to
+// guessed. Each piece: whether it was walked (known), its fixes (pts), whether it starts afresh, and
+// which of its fixes the line is drawn through (keep): on a walked stretch, the ones that matter (ends,
+// forks, waterfalls, springs, mouths, outlets, places marked on the map) and one in ten between; on a
+// guessed one, all of them.
+function streamLines(t, keyCells) {
+  const downOf = new Map(t.segs.map(sg => [sg[0], sg])), ins = new Map(), drawn = new Set(), pieces = [];
+  for (const sg of t.segs) ins.set(sg[1], (ins.get(sg[1]) ?? 0) + 1);
+  const draw = (sg, fresh) => { const last = pieces[pieces.length - 1]; if (!fresh && last && last.known === !!sg.known) last.pts.push(sg[1]); else pieces.push({ known: !!sg.known, pts: [sg[0], sg[1]], fresh }); };
+  for (const src of t.segs.map(sg => sg[0]).filter(f => !ins.has(f))) {
+    let f = src, fresh = true;
+    while (downOf.has(f) && !drawn.has(f)) { const sg = downOf.get(f); drawn.add(f); draw(sg, fresh); fresh = false; f = sg[1]; }
+  }
+  for (const sg of t.segs) if (!drawn.has(sg[0])) draw(sg, true); // a loop with no source (rare)
+  for (const q of pieces) {
+    const key = q.known ? q.pts.map((f, k) => k).filter(k => k === 0 || k === q.pts.length - 1 || waterMark(q.pts[k]) || (ins.get(q.pts[k]) ?? 0) >= 2 || keyCells.has(`${q.pts[k].x},${q.pts[k].y}`)) : q.pts.map((f, k) => k);
+    q.keep = [];
+    for (const k of key) { const last = q.keep[q.keep.length - 1] ?? 0; for (let m = last + 10; m < k - 4; m += 10) q.keep.push(m); if (!q.keep.length || q.keep[q.keep.length - 1] !== k) q.keep.push(k); } // one cell in ten between the ones that matter
+  }
+  return { pieces, downOf, ins };
+}
+const keyCellsNow = () => new Set(S.sites.filter(t => !unmarked(t)).map(t => `${t.x},${t.y}`));
+
+// What the map shows, as data: places and landmarks (drawn or not, marked as a fork, spring and so on,
+// here), the links between them, streams as the lines drawn (the fixes each passes through), lakes,
+// cliffs, crossings, where I crossed, the arrows for following water or a shore, the pin, and every
+// target a tap can head for, in the order the map stacks them. The drawing (mapHTML) is made from the
+// same pieces; tests read this.
+function mapData() {
+  const M = mentalMap(), hi = M.nodes.findIndex(v => v.site === S.at), here = M.nodes[hi];
+  const lakes = lakeShapes(), cliffs = seenPieces('cliff'), crossings = knownCrossings(), crossed = crossedMarks(M, crossings), keyCells = keyCellsNow();
+  const streams = streamTrees().map(t => ({ id: t.id, name: t.name, hike: `stream:${t.id}`, lone: t.lone.map(f => ({ x: f.x, y: f.y })),
+    lines: streamLines(t, keyCells).pieces.map(q => ({ known: q.known, cells: q.pts.map(f => ({ x: f.x, y: f.y })), drawn: q.keep.map(k => ({ x: q.pts[k].x, y: q.pts[k].y })) })) }));
+  const nodes = M.nodes.map((v, i) => ({ i, key: v.key, name: v.name, x: v.x, y: v.y, kind: v.site !== undefined ? 'site' : 'sus', site: v.site, sus: v.sus, mark: v.mark ?? null, certainty: v.certainty, here: i === hi, drawn: !v.unmarked }));
+  const follows = followOptions().concat(shoreOptions()).map(o => ({ key: o.key, dir: o.dir, say: o.say }));
+  const targets = [
+    ...lakes.map(q => ({ hike: q.id, kind: 'lake', name: q.name })), ...cliffs.map(q => ({ hike: q.id, kind: 'cliff', name: q.name })),
+    ...streams.map(t => ({ hike: t.hike, kind: 'stream', name: t.name })),
+    ...crossings.map(q => ({ hike: `go:${q.x}_${q.y}`, kind: 'crossing', name: 'crossing' })), ...crossed.map(q => ({ hike: `go:${q.x}_${q.y}`, kind: 'crossed', name: 'where I crossed' })),
+    ...nodes.filter(v => v.drawn && !v.here).map(v => ({ hike: v.key, kind: v.kind, name: v.name, mark: v.mark, certainty: v.certainty })),
+    ...follows.map(o => ({ hike: o.key, kind: 'follow', name: o.say })),
+    ...(S.mapPin ? [{ hike: `go:${S.mapPin.x}_${S.mapPin.y}`, kind: 'pin', name: 'the spot I picked' }] : []),
+  ];
+  return { here: { x: here.x, y: here.y, name: here.name }, nodes, edges: M.edges.map(e => ({ a: e.a, b: e.b, kind: e.kind, certainty: e.certainty, hours: e.hours })), streams,
+    lakes: lakes.map(q => ({ key: q.key, hike: q.id, name: q.name, cells: q.cells.length })), cliffs: cliffs.map(q => ({ key: q.key, hike: q.id, name: q.name, cells: q.cells.length })),
+    crossings: crossings.map(q => ({ x: q.x, y: q.y, kind: q.kind })), crossed: crossed.map(q => ({ x: q.x, y: q.y })), follows, pin: S.mapPin ?? null, targets, segNames: Object.values(S.segNames ?? {}).map(g => g.name) };
+}
+
 function mapHTML() {
   const M = mentalMap();
   const hi = M.nodes.findIndex(v => v.site === S.at), here = M.nodes[hi];
@@ -2190,14 +2286,8 @@ function mapHTML() {
   items.push({ i: hi, rank: 0 });
   if (pin) items.push({ pin: true, rank: 0 });
   for (const q of [...lakes, ...cliffs].sort((a, b) => b.cells.length - a.cells.length)) if (!items.some(t => t.feature?.key === q.key)) items.push({ feature: q, rank: 1 });
-  // crossings I know of and haven't stood on (one I've stood on is a place, marked as such)
-  const crossings = (S.crossingsKnown ?? []).filter(q => !S.sites.some(t => t.x === q.x && t.y === q.y)).map(q => ({ ...q, key: `crossing:${q.x}_${q.y}`, name: 'crossing', cells: [q] }));
+  const crossings = knownCrossings(), crossed = crossedMarks(M, crossings);
   for (const q of crossings) items.push({ feature: q, rank: 1.5 });
-  // where I crossed a stream and haven't since walked along it there: the crossing isn't joined to the
-  // rest of the stream by anything but a guess, so it keeps a marker of its own until it is
-  const crossed = S.streams.flatMap(st => st.fixes.filter(f => f.how === 'crossed' && !(st.runs ?? []).some(r => r.includes(f)))
-    .map(f => ({ x: f.x, y: f.y, key: `crossed:${f.x}_${f.y}`, kind: 'crossed', name: 'where I crossed', cells: [f] })))
-    .filter(q => !M.nodes.some(v => !v.unmarked && v.x === q.x && v.y === q.y) && !crossings.some(c => c.x === q.x && c.y === q.y));
   for (const q of crossed) items.push({ feature: q, rank: 4.5 });
   M.nodes.forEach((v, i) => { if (i === hi || v.unmarked) return; if (v.site !== undefined) items.push({ i, rank: 2, weight: S.sites[v.site].visits ?? 0 }); else items.push({ i, rank: v.certainty === 'unknown' ? 4 : 3, weight: S.suspects.find(x => x.id === v.sus)?.obs ?? 0 }); });
   items.sort((a, b) => a.rank - b.rank || (b.weight ?? 0) - (a.weight ?? 0));
@@ -2279,18 +2369,10 @@ function mapHTML() {
     }
     return { d, fine };
   };
-  const keyCells = new Set(S.sites.filter(t => !unmarked(t)).map(t => `${t.x},${t.y}`));
+  const keyCells = keyCellsNow();
   const W = trees.map(t => {
     const near = nearestOnStream(t, here), say = `Head for ${t.name} (${timeWords(routeHours(here, near), 'guess')})`;
-    // drawn as unbroken lines from each source down, a new line wherever walked gives way to guessed
-    const downOf = new Map(t.segs.map(sg => [sg[0], sg])), ins = new Map(), drawn = new Set(), marks = [], pieces = [];
-    for (const sg of t.segs) ins.set(sg[1], (ins.get(sg[1]) ?? 0) + 1);
-    const draw = (sg, fresh) => { const last = pieces[pieces.length - 1]; if (!fresh && last && last.known === !!sg.known) last.pts.push(sg[1]); else pieces.push({ known: !!sg.known, pts: [sg[0], sg[1]], fresh }); };
-    for (const src of t.segs.map(sg => sg[0]).filter(f => !ins.has(f))) {
-      let f = src, fresh = true;
-      while (downOf.has(f) && !drawn.has(f)) { const sg = downOf.get(f); drawn.add(f); draw(sg, fresh); fresh = false; f = sg[1]; }
-    }
-    for (const sg of t.segs) if (!drawn.has(sg[0])) draw(sg, true); // a loop with no source (rare)
+    const { pieces, downOf } = streamLines(t, keyCells), marks = [];
     const tangent = (q, k) => { // the way the water runs at q.pts[k]: across three cells either side as walked, else as seen there
       const f = q.pts[k];
       if (!q.known && f.flow != null) { const r = f.flow * Math.PI / 180; return unit(Math.sin(r), -Math.cos(r)); }
@@ -2300,9 +2382,7 @@ function mapHTML() {
     };
     let carry = 35;
     const lines = pieces.map(q => {
-      const keep = q.known ? q.pts.map((f, k) => k).filter(k => k === 0 || k === q.pts.length - 1 || waterMark(q.pts[k]) || (ins.get(q.pts[k]) ?? 0) >= 2 || keyCells.has(`${q.pts[k].x},${q.pts[k].y}`)) : q.pts.map((f, k) => k);
-      const idx = [];
-      for (const k of keep) { const last = idx[idx.length - 1] ?? 0; for (let m = last + 10; m < k - 4; m += 10) idx.push(m); if (!idx.length || idx[idx.length - 1] !== k) idx.push(k); } // one cell in ten between the ones that matter
+      const idx = q.keep;
       const { d, fine } = curve(idx.map(k => q.pts[k]), idx.map(k => tangent(q, k)));
       const r = along(fine, 70, q.fresh ? 35 : carry); marks.push(...r.marks); carry = r.carry;
       return `<path class="flow${q.known ? ' known' : ''}" d="${d}" stroke-width="${u(3.5)}"/><path class="hit" d="${d}" stroke-width="${fs * 2.2}"/>`;
@@ -2496,8 +2576,11 @@ function setHTML(sel, html) {
   lastHTML.set(sel, html);
   $(sel).innerHTML = html;
 }
-function render() {
-  if (!S) return;
+// A test page can leave the screen undrawn (window.__noDraw): the game runs the same, and the test reads
+// its state through __hk (mapData, journal, actions) or draws once with __hk.draw() when it checks the
+// drawing itself.
+function render(force = false) {
+  if (!S || (window.__noDraw && !force)) return;
   const s = site(), e = S.world.environment;
   { const k = skyNow(), tod = timeOfDay();
     $('#when').textContent = `Day ${S.day}, ${clock(S.t)}${tod === 'night' ? ', night' : tod === 'dusk' && k.sunAlt < 3 ? ', dusk' : ''} · ${k.season} · ${WEATHER_WORDS[k.weather]}, ${Math.round(k.tempC)}°C${tod === 'night' && k.moon.alt > 0 && k.moon.illum > 0.05 ? ` · ${moonWords(k.moon.phase)}` : ''}`; }
@@ -2603,7 +2686,7 @@ if (typeof document !== 'undefined') {
 // Everything that happens follows from the world seed and the player's choices, so a record of the
 // seed and each choice reproduces a game exactly. Each action is the data of what was tapped (or
 // the value chosen); `act` applies one, and replaying a record runs them in order on a fresh game.
-const BUILD = 'hk-2026-10-26b'; // game logic version: a record replays faithfully only on the build that made it
+const BUILD = 'hk-2026-10-26c'; // game logic version: a record replays faithfully only on the build that made it
 function record(d) {
   S.record ??= [];
   S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
@@ -2744,10 +2827,12 @@ document.addEventListener('click', ev => {
 
 // Debug hook for automated testing; harmless in play.
 if (typeof window !== 'undefined') window.__hk = { state: () => S, ROLES, render, act, // test hooks
+  draw: () => render(true), mapData, journal: () => S.log.map(e => e.text), actions: () => hereActions(), recordText: () => gameRecord(),
+  replay(text) { const rec = replay(text); $('#start').hidden = true; $('#app').hidden = false; render(); return rec; },
   start(seed, preset = '') { checked = { seed, preset, ...checkWorld(seed, preset || null, { withOutlook: false }) }; newGame(seed, preset || null, checked); journalShown = 0; lastHTML.clear(); $('#start').hidden = true; $('#app').hidden = false; render(); } };
 
 export function boot() {
   $('#seed').value = randomSeed();
-  showCheck();
+  if (!window.__testPage) showCheck(); // a test picks its own world; it needn't wait on a random one
 }
 boot();
