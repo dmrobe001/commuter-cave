@@ -1577,6 +1577,13 @@ function restFor(choice) {
   log(choice === 'dusk' ? 'Rested in the shade until dusk.' : `Rested for ${hours === 1 ? 'an hour' : `${hours} hours`}.`);
 }
 // The Map: tap a place or landmark to hike there; tap a sequence of them to choose a route.
+// Text and markers keep one size on screen whatever the zoom or the size of the window: labels are
+// MAP_PX screen pixels, fs is that size in grid cells, and everything else is drawn in fs.
+const MAP_PX = 15;
+function mapSide() { // the side, in screen pixels, of the square the map is drawn in
+  const r = document.querySelector('#map .mapsvg')?.getBoundingClientRect(), side = r ? Math.min(r.width, r.height) : 0;
+  return side > 0 ? side : Math.min(document.querySelector('#map')?.clientWidth || 400, 576);
+}
 function mapHTML() {
   const M = mentalMap();
   const hi = M.nodes.findIndex(v => v.site === S.here), here = M.nodes[hi];
@@ -1584,13 +1591,13 @@ function mapHTML() {
   const xs = M.nodes.filter(v => !v.frontier).map(v => v.x), ys = M.nodes.filter(v => !v.frontier).map(v => v.y);
   let x0 = Math.min(...xs) - 4, y0 = Math.min(...ys) - 4, span = Math.max(Math.max(...xs) - x0 + 4, Math.max(...ys) - y0 + 4, 16);
   if (S.mapView) ({ x: x0, y: y0, span } = S.mapView);
-  const fs = span / 32;
+  const fs = MAP_PX * span / mapSide();
   const E = M.edges.map(e => {
     const A = M.nodes[e.a], B = M.nodes[e.b], mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, len = Math.hypot(A.x - B.x, A.y - B.y);
     let ang = Math.atan2(B.y - A.y, B.x - A.x) * 180 / Math.PI;
     if (ang > 90) ang -= 180; if (ang < -90) ang += 180; // keep the time label upright, along the line
     return `<line class="edge ${e.certainty}${e.stub ? ' stub' : ''}" data-link="${e.kind}" data-a="${e.a}" data-b="${e.b}" x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke-width="${fs * 0.12}"><title>${esc(typo(`${cap(A.name)} – ${B.name}: ${timeWords(e.hours, e.certainty)}${e.crossings.length ? `, crossing ${e.crossings.map(c => c.name).join(' and ')}` : ''}`))}</title></line>`
-      + (len > span / 9 ? `<text class="etime" x="${mx}" y="${my}" dy="${-fs * 0.3}" font-size="${fs * 0.7}" text-anchor="middle" transform="rotate(${ang.toFixed(1)} ${mx} ${my})">${esc(timeWords(e.hours, e.certainty))}</text>` : '')
+      + (len > fs * 4.5 ? `<text class="etime" x="${mx}" y="${my}" dy="${-fs * 0.3}" font-size="${fs * 0.8}" text-anchor="middle" transform="rotate(${ang.toFixed(1)} ${mx} ${my})">${esc(timeWords(e.hours, e.certainty))}</text>` : '')
       + e.crossings.map(c => `<circle class="xing${c.walked ? ' walked' : ''}" cx="${c.at.x}" cy="${c.at.y}" r="${fs * 0.32}"><title>${esc(typo(`${c.walked ? 'Crossed' : 'Probably crosses'} ${c.name}`))}</title></circle>`).join('');
   }).join('');
   const Nd = M.nodes.map((v, i) => {
@@ -1598,9 +1605,9 @@ function mapHTML() {
     const t = timeWords(e ? e.hours : lineHours(S.L, here, v), e ? e.certainty : v.certainty === 'known' ? 'guess' : v.certainty);
     const say = i === hi ? `${cap(v.name)} (here)` : `${v.site !== undefined ? 'Head back to' : 'Head for'} ${v.name} (${t})`;
     const label = v.frontier ? '' : `<text x="${v.x + fs * 0.8}" y="${v.y + fs * 0.35}" font-size="${fs}">${esc(typo(v.name.replace(/^the /, '')))}${v.certainty === 'unknown' ? '?' : ''}</text>`;
-    return `<g ${i === hi ? '' : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" class="node ${v.site !== undefined ? 'site' : v.frontier ? 'frontier' : 'sus'} ${v.certainty}${i === hi ? ' here' : ''}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${fs * (i === hi ? 0.65 : v.frontier ? 0.35 : 0.45)}" stroke-width="${fs * 0.12}"/>${label}</g>`;
+    return `<g ${i === hi ? '' : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" class="node ${v.site !== undefined ? 'site' : v.frontier ? 'frontier' : 'sus'} ${v.certainty}${i === hi ? ' here' : ''}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${fs * (i === hi ? 0.65 : v.frontier ? 0.35 : 0.45)}" stroke-width="${fs * 0.12}"/>${i === hi ? '' : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${label}</g>`; // hit: a finger-sized target (about 44 px across)
   }).join('');
-  const svg = `<svg class="mapsvg" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map of places and landmarks; north is up. Tap one to hike there.">${E}${Nd}</svg>`;
+  const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map of places and landmarks; north is up. Tap one to hike there.">${E}${Nd}</svg>`;
   const tools = `<div class="map-tools"><small class="hint">Tap a place to hike there; tap several in turn to pick a route. Drag to pan; pinch or scroll to zoom.</small>${S.mapView ? '<button class="ghost" data-mapfit="1">Fit</button>' : ''}</div>`;
   return `${svg}${tools}<p class="hint">North is up. Filled dots: places I’ve been. Rings: things I’ve seen or heard. Small dotted rings: unexplored ground. Blue marks: streams I crossed, or think I’d cross. Times are walking times; “~” is a guess, “?” I can’t say.</p>`;
 }
@@ -1895,6 +1902,12 @@ if (typeof document !== 'undefined') {
     setView(svg, { x: at.x - (at.x - v.x) * k, y: at.y - (at.y - v.y) * k, span: v.span * k });
     clearTimeout(wheelTimer); wheelTimer = setTimeout(render, 160);
   }, { passive: false });
+  // a new window size, or the map's tab coming into view, re-sizes its text
+  const box = document.querySelector('#map');
+  if (box && typeof ResizeObserver !== 'undefined') {
+    let last = 0;
+    new ResizeObserver(() => { const side = mapSide(); if (S && Math.abs(side - last) > 2) { last = side; setHTML('#map', mapHTML()); } }).observe(box);
+  }
 }
 
 // ------------------------------------------------------------ events

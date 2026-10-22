@@ -119,27 +119,29 @@ section + section { margin-top: 1.5rem; }
 .tests { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .35rem; }
 .test { font-size: .78rem; padding: .2rem .45rem; }
 
-.mapsvg { width: 100%; height: auto; max-height: 26rem; aspect-ratio: 1; display: block; font-family: var(--sans); touch-action: none; cursor: grab; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+/* --u: one map label size, in the map's own units (set by mapHTML), so dashes and halos scale with the text */
+.mapsvg { --u: 1px; width: 100%; height: auto; max-height: min(36rem, 75vh); aspect-ratio: 1; display: block; font-family: var(--sans); touch-action: none; cursor: grab; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
 .mapsvg:active { cursor: grabbing; }
-.mapsvg .node.frontier circle { fill: none; stroke: var(--muted); stroke-dasharray: .15 .15; }
+.mapsvg .node.frontier circle { fill: none; stroke: var(--muted); stroke-dasharray: calc(.15 * var(--u)) calc(.15 * var(--u)); }
 .mapsvg .node.frontier text { fill: var(--muted); font-style: italic; }
 .map-tools { display: flex; gap: .4rem; align-items: center; margin: .3rem 0; }
 button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 600; }
 .mapsvg .edge { stroke: var(--muted); stroke-linecap: round; }
-.mapsvg .edge.guess { stroke-dasharray: .5 .4; }
-.mapsvg .edge.unknown { stroke-dasharray: .15 .5; opacity: .7; }
-.mapsvg .edge.stub { stroke-dasharray: .15 .3; opacity: .6; }
+.mapsvg .edge.guess { stroke-dasharray: calc(.5 * var(--u)) calc(.4 * var(--u)); }
+.mapsvg .edge.unknown { stroke-dasharray: calc(.15 * var(--u)) calc(.5 * var(--u)); opacity: .7; }
+.mapsvg .edge.stub { stroke-dasharray: calc(.15 * var(--u)) calc(.3 * var(--u)); opacity: .6; }
 .mapsvg .edge.route { stroke: var(--ochre); }
 .mapsvg .etime { fill: var(--muted); }
 .mapsvg .xing { fill: var(--water); }
-.mapsvg .xing:not(.walked) { fill: none; stroke: var(--water); stroke-width: .12; }
+.mapsvg .xing:not(.walked) { fill: none; stroke: var(--water); stroke-width: calc(.12 * var(--u)); }
 .mapsvg .node { cursor: pointer; }
 .mapsvg .node circle { fill: var(--surface); stroke: var(--ochre); }
 .mapsvg .node.site circle { fill: var(--ink); stroke: var(--ink); }
-.mapsvg .node.unknown circle { stroke-dasharray: .2 .2; }
+.mapsvg .node.unknown circle { stroke-dasharray: calc(.2 * var(--u)) calc(.2 * var(--u)); }
 .mapsvg .node.here circle { fill: var(--ochre); stroke: var(--ochre); }
 .mapsvg .node.sel text { font-weight: 600; fill: var(--ochre); }
-.mapsvg .node text { fill: var(--ink); paint-order: stroke; stroke: var(--bg); stroke-width: .25; }
+.mapsvg .node text { fill: var(--ink); paint-order: stroke; stroke: var(--bg); stroke-width: calc(.25 * var(--u)); }
+.mapsvg .node circle.hit { fill: transparent; stroke: none; }
 .map-list li { padding: .45rem 0; border-top: 1px solid var(--rule); }
 .map-list li.sel { background: var(--ochre-wash); }
 .map-list .place-head { display: flex; gap: .4rem; align-items: baseline; flex-wrap: wrap; }

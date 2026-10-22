@@ -119,27 +119,29 @@ section + section { margin-top: 1.5rem; }
 .tests { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .35rem; }
 .test { font-size: .78rem; padding: .2rem .45rem; }
 
-.mapsvg { width: 100%; height: auto; max-height: 26rem; aspect-ratio: 1; display: block; font-family: var(--sans); touch-action: none; cursor: grab; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+/* --u: one map label size, in the map's own units (set by mapHTML), so dashes and halos scale with the text */
+.mapsvg { --u: 1px; width: 100%; height: auto; max-height: min(36rem, 75vh); aspect-ratio: 1; display: block; font-family: var(--sans); touch-action: none; cursor: grab; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
 .mapsvg:active { cursor: grabbing; }
-.mapsvg .node.frontier circle { fill: none; stroke: var(--muted); stroke-dasharray: .15 .15; }
+.mapsvg .node.frontier circle { fill: none; stroke: var(--muted); stroke-dasharray: calc(.15 * var(--u)) calc(.15 * var(--u)); }
 .mapsvg .node.frontier text { fill: var(--muted); font-style: italic; }
 .map-tools { display: flex; gap: .4rem; align-items: center; margin: .3rem 0; }
 button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 600; }
 .mapsvg .edge { stroke: var(--muted); stroke-linecap: round; }
-.mapsvg .edge.guess { stroke-dasharray: .5 .4; }
-.mapsvg .edge.unknown { stroke-dasharray: .15 .5; opacity: .7; }
-.mapsvg .edge.stub { stroke-dasharray: .15 .3; opacity: .6; }
+.mapsvg .edge.guess { stroke-dasharray: calc(.5 * var(--u)) calc(.4 * var(--u)); }
+.mapsvg .edge.unknown { stroke-dasharray: calc(.15 * var(--u)) calc(.5 * var(--u)); opacity: .7; }
+.mapsvg .edge.stub { stroke-dasharray: calc(.15 * var(--u)) calc(.3 * var(--u)); opacity: .6; }
 .mapsvg .edge.route { stroke: var(--ochre); }
 .mapsvg .etime { fill: var(--muted); }
 .mapsvg .xing { fill: var(--water); }
-.mapsvg .xing:not(.walked) { fill: none; stroke: var(--water); stroke-width: .12; }
+.mapsvg .xing:not(.walked) { fill: none; stroke: var(--water); stroke-width: calc(.12 * var(--u)); }
 .mapsvg .node { cursor: pointer; }
 .mapsvg .node circle { fill: var(--surface); stroke: var(--ochre); }
 .mapsvg .node.site circle { fill: var(--ink); stroke: var(--ink); }
-.mapsvg .node.unknown circle { stroke-dasharray: .2 .2; }
+.mapsvg .node.unknown circle { stroke-dasharray: calc(.2 * var(--u)) calc(.2 * var(--u)); }
 .mapsvg .node.here circle { fill: var(--ochre); stroke: var(--ochre); }
 .mapsvg .node.sel text { font-weight: 600; fill: var(--ochre); }
-.mapsvg .node text { fill: var(--ink); paint-order: stroke; stroke: var(--bg); stroke-width: .25; }
+.mapsvg .node text { fill: var(--ink); paint-order: stroke; stroke: var(--bg); stroke-width: calc(.25 * var(--u)); }
+.mapsvg .node circle.hit { fill: transparent; stroke: none; }
 .map-list li { padding: .45rem 0; border-top: 1px solid var(--rule); }
 .map-list li.sel { background: var(--ochre-wash); }
 .map-list .place-head { display: flex; gap: .4rem; align-items: baseline; flex-wrap: wrap; }
@@ -7151,6 +7153,11 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     S.ch.focus = clamp(S.ch.focus + 0.12 * hours);
     log(choice === "dusk" ? "Rested in the shade until dusk." : `Rested for ${hours === 1 ? "an hour" : `${hours} hours`}.`);
   }
+  var MAP_PX = 15;
+  function mapSide() {
+    const r = document.querySelector("#map .mapsvg")?.getBoundingClientRect(), side = r ? Math.min(r.width, r.height) : 0;
+    return side > 0 ? side : Math.min(document.querySelector("#map")?.clientWidth || 400, 576);
+  }
   function mapHTML() {
     const M2 = mentalMap();
     const hi = M2.nodes.findIndex((v) => v.site === S.here), here = M2.nodes[hi];
@@ -7160,7 +7167,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     let x0 = Math.min(...xs) - 4, y0 = Math.min(...ys) - 4, span = Math.max(Math.max(...xs) - x0 + 4, Math.max(...ys) - y0 + 4, 16);
     if (S.mapView)
       ({ x: x0, y: y0, span } = S.mapView);
-    const fs = span / 32;
+    const fs = MAP_PX * span / mapSide();
     const E = M2.edges.map((e) => {
       const A = M2.nodes[e.a], B = M2.nodes[e.b], mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, len = Math.hypot(A.x - B.x, A.y - B.y);
       let ang = Math.atan2(B.y - A.y, B.x - A.x) * 180 / Math.PI;
@@ -7168,16 +7175,16 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         ang -= 180;
       if (ang < -90)
         ang += 180;
-      return `<line class="edge ${e.certainty}${e.stub ? " stub" : ""}" data-link="${e.kind}" data-a="${e.a}" data-b="${e.b}" x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke-width="${fs * 0.12}"><title>${esc(typo(`${cap3(A.name)} \u2013 ${B.name}: ${timeWords(e.hours, e.certainty)}${e.crossings.length ? `, crossing ${e.crossings.map((c) => c.name).join(" and ")}` : ""}`))}</title></line>` + (len > span / 9 ? `<text class="etime" x="${mx}" y="${my}" dy="${-fs * 0.3}" font-size="${fs * 0.7}" text-anchor="middle" transform="rotate(${ang.toFixed(1)} ${mx} ${my})">${esc(timeWords(e.hours, e.certainty))}</text>` : "") + e.crossings.map((c) => `<circle class="xing${c.walked ? " walked" : ""}" cx="${c.at.x}" cy="${c.at.y}" r="${fs * 0.32}"><title>${esc(typo(`${c.walked ? "Crossed" : "Probably crosses"} ${c.name}`))}</title></circle>`).join("");
+      return `<line class="edge ${e.certainty}${e.stub ? " stub" : ""}" data-link="${e.kind}" data-a="${e.a}" data-b="${e.b}" x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke-width="${fs * 0.12}"><title>${esc(typo(`${cap3(A.name)} \u2013 ${B.name}: ${timeWords(e.hours, e.certainty)}${e.crossings.length ? `, crossing ${e.crossings.map((c) => c.name).join(" and ")}` : ""}`))}</title></line>` + (len > fs * 4.5 ? `<text class="etime" x="${mx}" y="${my}" dy="${-fs * 0.3}" font-size="${fs * 0.8}" text-anchor="middle" transform="rotate(${ang.toFixed(1)} ${mx} ${my})">${esc(timeWords(e.hours, e.certainty))}</text>` : "") + e.crossings.map((c) => `<circle class="xing${c.walked ? " walked" : ""}" cx="${c.at.x}" cy="${c.at.y}" r="${fs * 0.32}"><title>${esc(typo(`${c.walked ? "Crossed" : "Probably crosses"} ${c.name}`))}</title></circle>`).join("");
     }).join("");
     const Nd = M2.nodes.map((v, i) => {
       const e = M2.edges.find((x) => x.a === hi && x.b === i || x.b === hi && x.a === i);
       const t = timeWords(e ? e.hours : lineHours2(S.L, here, v), e ? e.certainty : v.certainty === "known" ? "guess" : v.certainty);
       const say = i === hi ? `${cap3(v.name)} (here)` : `${v.site !== void 0 ? "Head back to" : "Head for"} ${v.name} (${t})`;
       const label = v.frontier ? "" : `<text x="${v.x + fs * 0.8}" y="${v.y + fs * 0.35}" font-size="${fs}">${esc(typo(v.name.replace(/^the /, "")))}${v.certainty === "unknown" ? "?" : ""}</text>`;
-      return `<g ${i === hi ? "" : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" class="node ${v.site !== void 0 ? "site" : v.frontier ? "frontier" : "sus"} ${v.certainty}${i === hi ? " here" : ""}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${fs * (i === hi ? 0.65 : v.frontier ? 0.35 : 0.45)}" stroke-width="${fs * 0.12}"/>${label}</g>`;
+      return `<g ${i === hi ? "" : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" class="node ${v.site !== void 0 ? "site" : v.frontier ? "frontier" : "sus"} ${v.certainty}${i === hi ? " here" : ""}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${fs * (i === hi ? 0.65 : v.frontier ? 0.35 : 0.45)}" stroke-width="${fs * 0.12}"/>${i === hi ? "" : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${label}</g>`;
     }).join("");
-    const svg = `<svg class="mapsvg" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map of places and landmarks; north is up. Tap one to hike there.">${E}${Nd}</svg>`;
+    const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map of places and landmarks; north is up. Tap one to hike there.">${E}${Nd}</svg>`;
     const tools = `<div class="map-tools"><small class="hint">Tap a place to hike there; tap several in turn to pick a route. Drag to pan; pinch or scroll to zoom.</small>${S.mapView ? '<button class="ghost" data-mapfit="1">Fit</button>' : ""}</div>`;
     return `${svg}${tools}<p class="hint">North is up. Filled dots: places I\u2019ve been. Rings: things I\u2019ve seen or heard. Small dotted rings: unexplored ground. Blue marks: streams I crossed, or think I\u2019d cross. Times are walking times; \u201C~\u201D is a guess, \u201C?\u201D I can\u2019t say.</p>`;
   }
@@ -7568,6 +7575,17 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       clearTimeout(wheelTimer);
       wheelTimer = setTimeout(render, 160);
     }, { passive: false });
+    const box = document.querySelector("#map");
+    if (box && typeof ResizeObserver !== "undefined") {
+      let last = 0;
+      new ResizeObserver(() => {
+        const side = mapSide();
+        if (S && Math.abs(side - last) > 2) {
+          last = side;
+          setHTML("#map", mapHTML());
+        }
+      }).observe(box);
+    }
   }
   var BUILD = "hk-2026-10-21e";
   function record(d) {
