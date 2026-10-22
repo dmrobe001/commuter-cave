@@ -27,7 +27,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   console.log('\nMAP MARKERS:\n' + [...d.querySelectorAll('.mapsvg .node')].map(g => '  ' + g.getAttribute('aria-label')).join('\n'));
   console.log('TIME LABELS ROTATED: ' + [...d.querySelectorAll('.etime')].filter(t => /rotate/.test(t.getAttribute('transform'))).length + ' of ' + d.querySelectorAll('.etime').length);
   const svg = d.querySelector('.mapsvg');
-  console.log(`\nMESH: ${svg.querySelectorAll('.node').length} nodes, ${svg.querySelectorAll('line.edge').length} edges (${svg.querySelectorAll('line.edge.known').length} walked), ${svg.querySelectorAll('.xing.walked').length} crossings walked, ${svg.querySelectorAll('.xing:not(.walked)').length} suspected`);
+  console.log(`\nMESH: ${svg.querySelectorAll('.node').length} nodes, ${svg.querySelectorAll('line.edge').length} edges (${svg.querySelectorAll('line.edge.known').length} walked), ${svg.querySelectorAll('.stream').length} streams drawn`);
   console.log('EDGES: ' + [...svg.querySelectorAll('line.edge title')].map(t => t.textContent).join(' | '));
   console.log('errors:', errors.length ? errors : 'none');
 })();

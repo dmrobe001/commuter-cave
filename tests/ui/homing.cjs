@@ -1,5 +1,6 @@
 // Regression: heading for water I've heard or seen ends in the water, where I can drink, not short of
-// it or across it; and nothing I've noticed is drawn as a landmark on the spot where I stand.
+// it or across it; nothing I've noticed is drawn as a landmark on the spot where I stand; tapping a
+// stream on the map ends in it or says why not.
 // Usage: node tests/ui/homing.cjs [seed ...]
 const { JSDOM } = require('jsdom');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
@@ -8,7 +9,7 @@ const seeds = process.argv.slice(2).length ? process.argv.slice(2) : ['wgxdd', '
 
 (async () => {
   const fails = [];
-  let trips = 0, wet = 0;
+  let trips = 0, wet = 0, streamTaps = 0;
   for (const seed of seeds) {
     const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
     const w = dom.window, d = w.document, errs = [];
@@ -42,9 +43,20 @@ const seeds = process.argv.slice(2).length ? process.argv.slice(2) : ['wgxdd', '
       const back = [...d.querySelectorAll('.mapsvg .node.site[data-hike]')].find(g => /lake|stream|brook|river/.test(g.getAttribute('aria-label')));
       if (back) { click(back); const top2 = onTop(); if (top2) fails.push(`${seed}: back at ${back.getAttribute('aria-label')}, a landmark drawn where I stand: ${top2}`); }
     }
+    // streams on the map: tapping one ends in the water (where I can drink) or says why not
+    for (let n = 0; n < 3; n++) {
+      const g = d.querySelector('.mapsvg .stream[data-hike]');
+      if (!g) break;
+      const before = entries().length;
+      click(g);
+      const now = entries().slice(before).join(' | ');
+      streamTaps++;
+      if (!d.querySelector('[data-here="drink"]') && !/doesn’t run this way|Didn’t reach|already/.test(now)) fails.push(`${seed}: tapped ${g.getAttribute('aria-label')} and ended dry, unexplained: ${now}`);
+    }
+    if (d.querySelector('[data-here="follow"]')) fails.push(`${seed}: Follow the water is still offered`);
     if (errs.length) fails.push(`${seed}: ${errs.join('; ')}`);
   }
-  console.log(`homing: ${trips} hikes toward water, ${wet} found it`);
+  console.log(`homing: ${trips} hikes toward water, ${wet} found it; ${streamTaps} taps on streams`);
   if (fails.length) { console.log('FAIL\n  ' + fails.join('\n  ')); process.exit(1); }
   console.log('homing: all passed');
 })();

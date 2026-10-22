@@ -13,7 +13,7 @@
 //              of unexplored ground off the nearest visited place; failing that (the link would
 //              cross the map), off the nearest place it can reach without crossing
 // Streams are marked on the links they are believed to cross: crossings actually walked, plus where a
-// link cuts the line through a stream's known points.
+// link cuts a stream as drawn.
 // Pure functions; game.js supplies the state.
 
 // ------------------------------------------------------------ trails and shortcuts
@@ -118,19 +118,10 @@ function segCross(p1, p2, q1, q2) { // intersection point of two segments, or nu
   const u = ((q1.x - p1.x) * (p2.y - p1.y) - (q1.y - p1.y) * (p2.x - p1.x)) / d;
   return t > 0 && t < 1 && u >= 0 && u <= 1 ? { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y) } : null;
 }
-// The believed course of a stream: its known points ordered along their main axis.
-export function streamLine(points) {
-  if (points.length < 2) return [];
-  const mx = points.reduce((s, p) => s + p.x, 0) / points.length, my = points.reduce((s, p) => s + p.y, 0) / points.length;
-  let sxx = 0, syy = 0, sxy = 0;
-  for (const p of points) { sxx += (p.x - mx) ** 2; syy += (p.y - my) ** 2; sxy += (p.x - mx) * (p.y - my); }
-  const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), ux = Math.cos(ang), uy = Math.sin(ang);
-  return [...points].sort((a, b) => (a.x - mx) * ux + (a.y - my) * uy - ((b.x - mx) * ux + (b.y - my) * uy));
-}
-export function suspectedCrossings(a, b, streams) { // streams: [{ key, name, line }]
+export function suspectedCrossings(a, b, streams) { // streams: [{ key, name, segs: [[p, q], ...] }]
   const out = [];
-  for (const s of streams) for (let i = 1; i < s.line.length; i++) {
-    const x = segCross(a, b, s.line[i - 1], s.line[i]);
+  for (const s of streams) for (const [p, q] of s.segs) {
+    const x = segCross(a, b, p, q);
     if (x) { out.push({ key: s.key, name: s.name, at: x }); break; }
   }
   return out;

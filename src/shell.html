@@ -132,8 +132,11 @@ button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 6
 .mapsvg .edge.stub { stroke-dasharray: calc(.15 * var(--u)) calc(.3 * var(--u)); opacity: .6; }
 .mapsvg .edge.route { stroke: var(--ochre); }
 .mapsvg .etime { fill: var(--muted); }
-.mapsvg .xing { fill: var(--water); }
-.mapsvg .xing:not(.walked) { fill: none; stroke: var(--water); stroke-width: calc(.12 * var(--u)); }
+.mapsvg .stream { cursor: pointer; }
+.mapsvg .stream .flow { stroke: var(--water); stroke-linecap: round; stroke-dasharray: calc(.6 * var(--u)) calc(.35 * var(--u)); }
+.mapsvg .stream .flow.lone { stroke-dasharray: none; }
+.mapsvg .stream .chev { fill: none; stroke: var(--water); stroke-linecap: round; stroke-linejoin: round; }
+.mapsvg .stream .hit { stroke: transparent; pointer-events: stroke; }
 .mapsvg .node { cursor: pointer; }
 .mapsvg .node circle { fill: var(--surface); stroke: var(--ochre); }
 .mapsvg .node.site circle { fill: var(--ink); stroke: var(--ink); }
