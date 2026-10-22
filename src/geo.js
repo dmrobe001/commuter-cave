@@ -218,11 +218,13 @@ export const distWords = (d, channel) => (channel === 'sound'
 // ------------------------------------------------------------ walking
 
 // Tobler's hiking function (km/h) slowed by vegetation; uphill and steep ground are slow.
+// getting over a stream or river: about five minutes of wading, a minute at a ford, log or boulders
+export const crossHours = (L, c) => (L.chan[c] >= 2 ? (L.crossing?.[c] ? 0.015 : 0.08) : 0);
 export function stepHours(L, a, b) {
   const d = Math.hypot(b.x - a.x, b.y - a.y) * CELL;
   const slope = (L.elev[idx(b.x, b.y)] - L.elev[idx(a.x, a.y)]) / d;
   const kmh = 6 * Math.exp(-3.5 * Math.abs(slope + 0.05)) * (1 - 0.5 * L.veg[idx(b.x, b.y)]);
-  return d / 1000 / Math.max(kmh, 0.6) + (L.chan[idx(b.x, b.y)] >= 2 ? 0.08 : 0);
+  return d / 1000 / Math.max(kmh, 0.6) + crossHours(L, idx(b.x, b.y));
 }
 
 // Walk toward a believed target. Heading error accumulates (path integration) unless `resense`
@@ -363,7 +365,7 @@ export function followStage(L, from, dir, { branch = null, maxHours = 0.25 } = {
     }
     if (L.lake[idx(next.x, next.y)]) return { end: p, hours, path, why: 'lake' };
     // picking a way along the bank (no wading across, so none of stepHours's crossing time)
-    hours += (stepHours(L, p, next) - (L.chan[idx(next.x, next.y)] >= 2 ? 0.08 : 0)) * 1.15;
+    hours += (stepHours(L, p, next) - crossHours(L, idx(next.x, next.y))) * 1.15;
     p = next;
     path.push(p);
     const n = idx(p.x, p.y);
@@ -372,6 +374,49 @@ export function followStage(L, from, dir, { branch = null, maxHours = 0.25 } = {
     if (near(L.features.waterfalls, p, 0)) return { end: p, hours, path, why: 'falls' };
     if (near(L.features.springs, p, 0)) return { end: p, hours, path, why: 'spring' };
     if (dir === 'up' && fromLake(n)) return { end: p, hours, path, why: 'outlet' };
+    if (hours >= maxHours) break;
+  }
+  return { end: p, hours, path, why: null };
+}
+
+// Walk a lake's shore a stage: from shore cell to shore cell (dry land next to the lake), keeping the
+// water on one side ('left' or 'right' as I walk), going back over a cell walked this stage only out of a dead end. Stops
+// after about a quarter of an hour, or early where a stream runs in (a mouth), where one leaves (an
+// outlet), back where I started (all the way round), or where the shore can't be followed (the edge of
+// the land, or a corner with nowhere new to go).
+export function shoreStage(L, from, side, { maxHours = 0.25 } = {}) {
+  const path = [{ ...from }];
+  const start = NB.map(([dx, dy]) => ({ x: from.x + dx, y: from.y + dy })).find(q => inside(q.x, q.y) && L.lake[idx(q.x, q.y)]);
+  if (!start) return { end: from, hours: 0, path, why: 'no lake here' };
+  const mine = new Uint8Array(N * N), st = [idx(start.x, start.y)]; // this lake's cells
+  mine[st[0]] = 1;
+  while (st.length) { const c = st.pop(); for (const [dx, dy] of NB) { const x = (c % N) + dx, y = ((c / N) | 0) + dy; if (inside(x, y) && L.lake[idx(x, y)] && !mine[idx(x, y)]) { mine[idx(x, y)] = 1; st.push(idx(x, y)); } } }
+  const wet = (x, y) => NB.filter(([dx, dy]) => inside(x + dx, y + dy) && mine[idx(x + dx, y + dy)]).map(([dx, dy]) => ({ x: x + dx, y: y + dy }));
+  // the shore: dry cells sharing an edge with the lake (a ring walkable in steps of eight directions)
+  const isShore = (x, y) => inside(x, y) && !L.lake[idx(x, y)] && NB.slice(0, 4).some(([dx, dy]) => inside(x + dx, y + dy) && mine[idx(x + dx, y + dy)]);
+  const fromLake = (x, y) => L.chan[idx(x, y)] > 0 && NB.some(([dx, dy]) => inside(x + dx, y + dy) && mine[idx(x + dx, y + dy)] && L.down[idx(x + dx, y + dy)] === idx(x, y));
+  const isMouth = (x, y) => L.chan[idx(x, y)] > 0 && L.down[idx(x, y)] >= 0 && mine[L.down[idx(x, y)]] === 1;
+  const sign = side === 'left' ? 1 : -1, walked = new Map([[idx(from.x, from.y), 1]]);
+  let p = { ...from }, hours = 0;
+  for (let steps = 0; steps < 60; steps++) {
+    let best = null;
+    for (const [dx, dy] of NB) {
+      const q = { x: p.x + dx, y: p.y + dy };
+      if (!isShore(q.x, q.y)) continue;
+      const home = steps > 2 && q.x === from.x && q.y === from.y, again = home ? 0 : walked.get(idx(q.x, q.y)) ?? 0; // back over a cell only out of a dead end (a spit of land)
+      // which side of the step the water lies: + left, - right (y runs south, so left of (vx, vy) is (vy, -vx))
+      const w = [...wet(p.x, p.y), ...wet(q.x, q.y)].reduce((a, c) => ({ x: a.x + c.x - (p.x + q.x) / 2, y: a.y + c.y - (p.y + q.y) / 2 }), { x: 0, y: 0 });
+      const lean = sign * (dy * w.x - dx * w.y) / (Math.hypot(w.x, w.y) || 1) / Math.hypot(dx, dy);
+      const score = lean + 0.15 * wet(q.x, q.y).length - (dx && dy ? 0.05 : 0) - 3 * again; // keep the water on my side, hug the shore
+      if (!best || score > best.score) best = { q, score };
+    }
+    if (!best || best.score < -7) return { end: p, hours, path, why: steps ? 'blocked' : 'no shore' };
+    hours += stepHours(L, p, best.q);
+    p = best.q; path.push(p); walked.set(idx(p.x, p.y), (walked.get(idx(p.x, p.y)) ?? 0) + 1);
+    if (p.x === from.x && p.y === from.y) return { end: p, hours, path, why: 'round' };
+    if (isMouth(p.x, p.y)) return { end: p, hours, path, why: 'mouth' };
+    if (fromLake(p.x, p.y)) return { end: p, hours, path, why: 'outlet' };
+    if (p.x === 0 || p.y === 0 || p.x === N - 1 || p.y === N - 1) return { end: p, hours, path, why: 'edge' };
     if (hours >= maxHours) break;
   }
   return { end: p, hours, path, why: null };

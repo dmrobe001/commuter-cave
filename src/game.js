@@ -9,7 +9,7 @@ import { generateLandscape, N as GN, CELL } from './landscape.js';
 import { outlook } from './outlook.js';
 import { windFor, smellSources, smellAt } from './smell.js';
 import { cloneChem, expose, nutrients, harm, tasteWords, smellWords, textureWords, describeState, COMPOUNDS, PREP } from './food.js';
-import { chooseSpawn, perceive, suspicionFrom, walk, followStage, stepHours, CLIFF_COST, sightline, lookoutEye, isLookout, bearingWord, bearing, distM, CUE_WORDS, loudWords, waterKeyAt, waterKeyOf, lineHours as rawLineHours } from './geo.js';
+import { chooseSpawn, perceive, suspicionFrom, walk, followStage, shoreStage, stepHours, CLIFF_COST, sightline, lookoutEye, isLookout, bearingWord, bearing, distM, CUE_WORDS, loudWords, waterKeyAt, waterKeyOf, lineHours as rawLineHours } from './geo.js';
 import { trailGraph, firstClear, placeLabels, suspectedCrossings, timeWords, awayWords, explainTrip } from './mentalmap.js';
 import { materialsOf, expandGoal, thought, ITEMS, lookHint, PROCESSES } from './process.js';
 import { newCharacter, rest, dry, ROLES, knapFlakes, notchHearth, refineNotch, carveSpindle, makeTinder, handDrill, lightFire, searchNaturalEdge, splinterBone, estimateFire } from './craft.js';
@@ -96,10 +96,10 @@ function lineHours(L, a, b) {
 function microAt(x, y) { const m = S.L.micro[cellOf(x, y)]; return m === 'lake' ? 'pond' : m; }
 // ------------------------------------------------------------ names for places and landmarks
 //
-// Like species: the first hill is "the hill". A second gets a word for how it looks ("the wooded
-// hill"), or, lacking anything distinctive, something noticed recently ("the grouse hill") or its
-// direction from its namesake ("the north hill"). Water is named by body: every crossing of one stream
-// shares its name. A second place on the same water is "upstream" or "downstream" of the first.
+// Things are called what they are, with no modifier: the hill, the falls, the crossing, the cliff, the
+// lake, the stream bank. Proper names come in two ways: I name a place myself (renaming where I stand,
+// or naming where something I collected came from), or a stretch of stream gets a name once I've walked
+// every cell of it from end to end (see "names for streams"). A name I gave is never replaced.
 const SITE_NOUN = { woodland: 'wood', edge: 'thicket', glade: 'clearing', streambank: 'stream bank', streambed: 'gravel bar', pond: 'marsh', outcrop: 'rocks', scree: 'scree', claybank: 'clay bank', spring: 'spring', deadfall: 'deadfall' };
 const LANDMARK_NOUN = { hill: 'hill', cliff: 'cliff', lake: 'lake', waterfowl: 'lake', falls: 'falls', cascade: 'cascade', rapids: 'river', river: 'river', stream: 'stream', brook: 'brook', 'river trace': 'tree line' };
 const namesInUse = () => new Set([...S.sites.map(t => t.name), ...S.suspects.map(u => u.label), ...Object.values(S.waterNames), ...Object.values(S.cliffNames ?? {})]);
@@ -119,23 +119,14 @@ function looksOf(kind, x, y) {
   }
   return tags.filter(Boolean);
 }
-function uniqueName(base, pos, visual = []) {
-  const used = namesInUse(), plain = `the ${base}`;
+function uniqueName(base) { // things are called what they are: "the hill", however many hills there are
   S.lastTag = null;
-  if (!used.has(plain)) return plain;
-  const namesake = [...S.sites, ...S.suspects.map(u => ({ ...u.est, name: u.label }))].find(t => t.name === plain);
-  const dir = namesake && (namesake.x !== pos.x || namesake.y !== pos.y) ? bearingWord(bearing(namesake, pos)) : null;
-  const nearby = S.sites.length && Math.hypot(site().x - pos.x, site().y - pos.y) * CELL < 1000; // a recent sighting only tags somewhere close
-  const tags = [...visual.map(t => [t, 'visual']), [nearby ? S.recentNotice : null, 'notice'], [dir, 'dir']];
-  for (const [t, why] of tags) if (t && !used.has(`the ${t} ${base}`)) { S.lastTag = { tag: t, why }; return `the ${t} ${base}`; }
-  S.lastTag = { why: 'other' };
-  for (const o of ['other', 'third', 'fourth', 'fifth']) if (!used.has(`the ${o} ${base}`)) return `the ${o} ${base}`;
-  return `${plain} ${used.size}`;
+  return `the ${base}`;
 }
 function waterName(wkey, kind, pos) {
   if (S.waterNames[wkey]) return S.waterNames[wkey];
   const noun = /^lake/.test(wkey) ? 'lake' : /^falls/.test(wkey) ? (kind === 'cascade' ? 'cascade' : 'falls') : /^brook/.test(wkey) ? 'brook' : ['river', 'rapids'].includes(kind) ? 'river' : 'stream';
-  return (S.waterNames[wkey] = uniqueName(noun, pos, looksOf(noun, pos.x, pos.y)));
+  return (S.waterNames[wkey] = uniqueName(noun));
 }
 
 // ------------------------------------------------------------ streams as I know them
@@ -194,7 +185,7 @@ function matchStream(fix) {
 }
 function newStream(size, pos) {
   const id = `s${S.streams.length + 1}`, noun = SIZE_NOUN[size];
-  const st = { id, name: uniqueName(noun, pos, looksOf(noun, pos.x, pos.y)), size, fixes: [] };
+  const st = { id, name: `the ${noun}`, size, fixes: [] };
   S.waterNames[id] = st.name;
   S.streams.push(st);
   return st;
@@ -274,22 +265,95 @@ function nearestOnStream(t, from) {
   }
   return best;
 }
-function waterSiteName(wname, x, y) {
-  const first = S.sites.find(t => t.name === wname || t.name.startsWith(`${wname},`));
-  if (!first) return wname;
-  const up = S.L.elev[cellOf(x, y)] > S.L.elev[cellOf(first.x, first.y)];
-  const tag = up ? 'upstream' : 'downstream';
-  return S.sites.some(t => t.name === `${wname}, ${tag}`) ? `${wname}, ${bearingWord(bearing(first, { x, y }))}` : `${wname}, ${tag}`;
-}
+// A place where I found a landmark takes its name ("the hill"); water I reach leaves the place its own.
+const placeNameFor = u => (u.group === 'water' ? null : u.label);
 
-const placeNameFor = (u, x, y) => (u.group === 'water' && u.kind !== 'river trace' ? waterSiteName(u.label, x, y) : u.label);
+// ------------------------------------------------------------ names for streams
+//
+// A stream is "the brook", "the stream" or "the river" until I've walked one stretch of it from end to
+// end. A stretch is an unbranched run of water between two of: a spring or other source (where the
+// water starts), a fork (where streams join), a mouth (where it runs into a lake), an outlet (where it
+// leaves one). Once every cell of a stretch is one I've stood in, crossed or walked along, it gets a
+// name: the name of the water it carries on from, if that has one (a stretch above a fork carries the
+// name of the stretch below it if it's the bigger branch, and the stretch below a fork carries the name
+// of the bigger branch above it), or else a new one from something about it (a tree I know growing
+// along it, something it runs from or to, its direction). A fork then bears the name of the stretch
+// below it. Names I gave myself are never replaced. S.segNames: { "top>bottom" (cells): { name,
+// top, bottom: {x, y}, cells: [cell, ...] } }.
+const isSegTop = c => { const x = c % GN, y = Math.floor(c / GN); return inflowsAt(x, y).length !== 1 || isOutlet(x, y); };
+function segmentFrom(top) { // the stretch from a top cell down to the next fork or mouth; null if it runs off the land
+  const cells = [top];
+  for (let c = top, n = 0; n < 400; n++) {
+    const d = S.L.down[c];
+    if (d < 0) return null; // off the edge of the land
+    if (S.L.lake[d]) return cells.length > 1 ? cells : null; // c is a mouth
+    c = d; cells.push(c);
+    if (inflowsAt(c % GN, Math.floor(c / GN)).length >= 2) return cells; // a fork
+  }
+  return null;
+}
+const segAt = c => Object.values(S.segNames ?? {}).find(g => g.cells.includes(c)) ?? null;
+// What to call the water at a cell: the name of its stretch, if it has one, else what it is.
+function waterNameAt(st, x, y) { const g = segAt(cellOf(x, y)); return g ? g.name : st?.name ?? 'the stream'; }
+const titleCase = w => w.split(/[\s-]+/).map(cap).join(' ');
+function newSegmentName(cells) {
+  const bottom = cells[cells.length - 1], noun = titleCase(SIZE_NOUN[S.L.chan[bottom] || 1]);
+  const used = new Set(Object.values(S.segNames ?? {}).map(g => g.name));
+  const at = c => ({ x: c % GN, y: Math.floor(c / GN) });
+  const trees = new Map(); // trees and bushes I know by name, along it
+  for (const c of cells) { const t = looksOf('site', at(c).x, at(c).y)[0]; if (t) trees.set(t, (trees.get(t) ?? 0) + 1); }
+  const top = at(cells[0]), end = at(bottom);
+  const words = [...[...trees].sort((a, b) => b[1] - a[1]).map(([t]) => t), cells.some(c => nearFeature(S.L.features.waterfalls, at(c), 0)) ? 'falls' : null,
+    nearFeature(S.L.features.springs, top, 0) ? 'spring' : null, isOutlet(top.x, top.y) || isMouth(end.x, end.y) ? 'lake' : null, S.recentNotice, bearingWord(bearing({ x: GN / 2, y: GN / 2 }, top))];
+  for (const w of words) if (w && !used.has(`${titleCase(w)} ${noun}`)) return `${titleCase(w)} ${noun}`;
+  for (let k = 2; ; k++) if (!used.has(`${noun} ${k}`)) return `${noun} ${k}`;
+}
+// Name every stretch I've now walked from end to end. Called on arriving anywhere.
+function nameSegments() {
+  const walkedCells = new Set(S.streams.flatMap(st => st.fixes.filter(f => f.how !== 'near').map(f => cellOf(f.x, f.y))));
+  if (S.segMemo === walkedCells.size) return;
+  S.segMemo = walkedCells.size;
+  S.segNames ??= {};
+  const fresh = [];
+  for (const top of [...walkedCells].sort((a, b) => a - b)) {
+    if (!isSegTop(top)) continue;
+    const cells = segmentFrom(top);
+    if (!cells || !cells.every(c => walkedCells.has(c))) continue;
+    const key = `${cells[0]}>${cells[cells.length - 1]}`;
+    if (S.segNames[key]) continue;
+    S.segNames[key] = { key, cells, top: { x: cells[0] % GN, y: Math.floor(cells[0] / GN) }, bottom: { x: cells[cells.length - 1] % GN, y: Math.floor(cells[cells.length - 1] / GN) }, name: null };
+    fresh.push(S.segNames[key]);
+  }
+  if (!fresh.length) return;
+  // names carry on along the bigger branch: settle those first, both ways, until nothing changes
+  const all = Object.values(S.segNames), bigger = c => inflowsAt(c % GN, Math.floor(c / GN)).sort((a, b) => S.L.acc[cellOf(b.x, b.y)] - S.L.acc[cellOf(a.x, a.y)])[0];
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const g of fresh.filter(g => !g.name)) {
+      const bot = g.cells[g.cells.length - 1], top = g.cells[0], below = all.find(h => h.name && h.cells[0] === bot), main = bigger(bot);
+      if (below && main && cellOf(main.x, main.y) === g.cells[g.cells.length - 2]) { g.name = below.name; changed = true; continue; }
+      const up = bigger(top), above = up && all.find(h => h.name && h.cells[h.cells.length - 1] === top && h.cells[h.cells.length - 2] === cellOf(up.x, up.y));
+      if (above && inflowsAt(top % GN, Math.floor(top / GN)).length >= 2) { g.name = above.name; changed = true; }
+    }
+  }
+  for (const g of fresh) {
+    const named = !!g.name;
+    g.name ??= newSegmentName(g.cells);
+    const what = c => { const x = c % GN, y = Math.floor(c / GN); return isOutlet(x, y) ? 'where it leaves the lake' : isMouth(x, y) ? 'where it runs into the lake' : inflowsAt(x, y).length >= 2 ? 'the fork' : nearFeature(S.L.features.springs, { x, y }, 0) ? 'the spring' : 'its source'; };
+    log(`I’ve walked all of this stretch now, from ${what(g.cells[0])} to ${what(g.cells[g.cells.length - 1])}${named ? `: more of ${g.name}` : `. I’ll call it ${g.name}`}.`, 'note');
+    // the fork at its head bears its name
+    const fork = S.sites.find(t => t.x === g.top.x && t.y === g.top.y && inflowsAt(t.x, t.y).length >= 2);
+    if (fork && !fork.renamed) fork.name = g.name;
+  }
+}
 
 // ------------------------------------------------------------ places worth a marker
 //
 // Every cell I've stood on is a place (the game remembers what I found there, and trails run through
 // it), but once I've left it, it keeps a marker only if it's of interest in its own right, on that
 // cell: a landmark I reached there, a stream's mouth or outlet, a fork, a spring, a waterfall, a
-// lookout, a clay bank, where I woke, a hut or a fire, a name I gave it, or something I gathered there.
+// crossing, a lookout, a clay bank, where I woke, a hut or a fire, or a name I gave it (naming where
+// something I collected came from is how to keep a marker on a good patch).
 // Anything else is marked only while I stand on it.
 const NB8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 function inflowsAt(x, y) { // channel cells that drain into this one
@@ -305,11 +369,23 @@ function waterMark(t) { // what makes a place by water worth a marker, if anythi
   if (S.L.chan[cellOf(t.x, t.y)] && inflowsAt(t.x, t.y).length >= 2) return 'fork';
   if (t.micro === 'spring' || nearFeature(S.L.features.springs, t, 0)) return 'spring';
   if (nearFeature(S.L.features.waterfalls, t, 0)) return 'falls';
+  if (crossingAt(t.x, t.y)) return 'crossing';
   return null;
+}
+// Crossings (a ford, a tree down across the water, a rockfall): seen when I pass within a cell of one.
+const CROSSING_WORDS = { ford: 'a ford, the water wide and shallow over gravel', deadfall: 'a tree down across the water', rockfall: 'boulders tumbled across the water' };
+const crossingAt = (x, y) => S.L.features.crossings.find(q => q.x === x && q.y === y) ?? null;
+function noticeCrossings(path) {
+  S.crossingsKnown ??= [];
+  for (const p of path) for (const q of S.L.features.crossings) {
+    if (Math.max(Math.abs(q.x - p.x), Math.abs(q.y - p.y)) > 1 || S.crossingsKnown.some(k => k.x === q.x && k.y === q.y)) continue;
+    S.crossingsKnown.push({ x: q.x, y: q.y, kind: q.kind });
+    log(`A way over without wading: ${CROSSING_WORDS[q.kind]}. Marked the crossing.`, 'note');
+  }
 }
 const lakeside = t => NB8.some(([dx, dy]) => { const x = t.x + dx, y = t.y + dy; return x >= 0 && y >= 0 && x < GN && y < GN && S.L.lake[cellOf(x, y)]; });
 function unmarked(t) {
-  return !(t === site() || waterMark(t) || t.landmark || isLookout(S.L, t.x, t.y) || t.micro === 'claybank' || t.name === 'where I woke' || t.hut || t.fireUntil > 0 || t.renamed || t.gathered);
+  return !(t === site() || waterMark(t) || t.landmark || isLookout(S.L, t.x, t.y) || t.micro === 'claybank' || t.name === 'where I woke' || t.hut || t.fireUntil > 0 || t.renamed);
 }
 
 // ------------------------------------------------------------ the mental map
@@ -394,8 +470,9 @@ function newSite(x, y, name) {
   const micro = microAt(x, y);
   const same = S.sites.find(t => t.x === x && t.y === y);
   if (same) return same;
-  const noun = { fork: 'fork', falls: 'falls', spring: 'spring', mouth: 'mouth', outlet: 'outlet' }[waterMark({ x, y, micro })] ?? SITE_NOUN[micro] ?? micro; // a place by water named for what makes it one
-  const s = { key: `p${x}_${y}`, x, y, micro, name: name ?? uniqueName(noun, { x, y }, looksOf('site', x, y)), known: new Set(), visits: 0, hut: false, fireUntil: -1 };
+  const noun = { fork: 'fork', falls: 'falls', spring: 'spring', mouth: 'mouth', outlet: 'outlet', crossing: 'crossing' }[waterMark({ x, y, micro })] ?? SITE_NOUN[micro] ?? micro; // a place by water named for what makes it one
+  const headOf = noun === 'fork' ? Object.values(S.segNames ?? {}).find(g => g.top.x === x && g.top.y === y) : null; // a fork bears the name of the stretch below it
+  const s = { key: `p${x}_${y}`, x, y, micro, name: name ?? headOf?.name ?? uniqueName(noun), known: new Set(), visits: 0, hut: false, fireUntil: -1 };
   S.sites.push(s);
   return s;
 }
@@ -426,7 +503,7 @@ function associateSmell(c, from) {
   if (sus) { if (sus.lost) Object.assign(sus, fix(), { lost: false }); sus.obs++; noteSeenFrom(sus, from); return { sus, isNew: false }; }
   const { est, err } = fix();
   S.lastTag = null;
-  const label = wkey ? waterName(wkey, 'lake', est) : uniqueName(SMELL_NOUN[c.kind] ?? 'smell', est, []);
+  const label = wkey ? waterName(wkey, 'lake', est) : uniqueName(SMELL_NOUN[c.kind] ?? 'smell');
   sus = { id: `u${S.suspects.length + 1}`, kind: wkey ? 'lake' : c.kind, group: wkey ? 'water' : 'smell', trueKey: wkey ?? c.key, truePos: { x: c.x, y: c.y }, est, err, seenAt: { x: from.x, y: from.y }, channel: 'smell', obs: 1, label, reached: false, source: c.source };
   S.suspects.push(sus);
   return { sus, isNew: true };
@@ -466,7 +543,7 @@ function associate(c, from) {
   const known = named && (heardSize ? !!knownStream : S.waterNames[waterKeyOf(c.key)]);
   S.lastTag = null;
   const heard = heardSize ? knownStream ?? newStream(heardSize, g.est) : null;
-  const label = heard ? heard.name : named ? waterName(waterKeyOf(c.key), c.kind, g.est) : S.cliffNames?.[c.key] ?? uniqueName(LANDMARK_NOUN[c.kind] ?? c.kind, g.est, looksOf(c.kind, c.x, c.y));
+  const label = heard ? heard.name : named ? waterName(waterKeyOf(c.key), c.kind, g.est) : S.cliffNames?.[c.key] ?? uniqueName(LANDMARK_NOUN[c.kind] ?? c.kind);
   // another of a kind I named here or at the last place: say how this one differs
   const noun = named ? label.split(' ').pop() : LANDMARK_NOUN[c.kind] ?? c.kind, recent = (S.mem.trail ?? []).slice(-2);
   let another = null;
@@ -528,6 +605,7 @@ function sense(s, lookout = false, { scan = false, focus = null } = {}) {
 function arrive(x, y, how, onTheWay = null) {
   const s = newSite(x, y);
   markSeen(x, y, 20, { eye: 1.7 });
+  noticeCrossings([{ x, y }]);
   if (S.L.chan[cellOf(x, y)]) addFix({ x, y }, 'stood', S.travelHint);
   noteSeenFeatures();
   noteTrail(S.mem, s.key);
@@ -537,7 +615,7 @@ function arrive(x, y, how, onTheWay = null) {
   for (const u of S.suspects) if (!u.reached && atTarget({ x, y }, { truePos: u.truePos, sus: u })) {
     u.reached = true;
     s.landmark ??= u.label;
-    if (fresh && s.name !== 'where I woke' && !waterMark(s)) s.name = placeNameFor(u, x, y); // a mouth, spring or the like keeps its own name // the place takes the landmark's name
+    if (fresh && s.name !== 'where I woke' && !waterMark(s) && placeNameFor(u)) s.name = placeNameFor(u); // the place takes the landmark's name; a mouth, spring or the like keeps its own
     log(`Found ${u.label}.`, 'act');
     if (u.kind === 'carcass') {
       const a = entity(u.source?.animal), fresh = u.source?.epoch === Math.floor((S.day - 1) / 4);
@@ -548,12 +626,10 @@ function arrive(x, y, how, onTheWay = null) {
     else if (u.kind === 'musk') log('A burrow under a root, reeking of musk. Whatever lives here, I’ll leave it be.', 'note');
   }
   if (onTheWay) onTheWay();
-  if (fresh && lakeside(s)) { // a stretch of shore I haven't stood on: a good look across the water
-    pass(0.5, 120);
-    for (const [dx, dy] of NB8) { const x2 = s.x + dx, y2 = s.y + dy; if (x2 >= 0 && y2 >= 0 && x2 < GN && y2 < GN && S.L.lake[cellOf(x2, y2)]) revealFeature(waterKeyAt(S.L, x2, y2), s, 1.7, true); } // from the water's edge
+  if (lakeside(s)) { // on a shore: all the water in view from the water's edge goes on the map
+    const keys = new Set(NB8.map(([dx, dy]) => ({ x: s.x + dx, y: s.y + dy })).filter(q => q.x >= 0 && q.y >= 0 && q.x < GN && q.y < GN && S.L.lake[cellOf(q.x, q.y)]).map(q => waterKeyAt(S.L, q.x, q.y)));
+    for (const k of keys) revealFeature(k, s, 1.7, true);
     noteSeenFeatures();
-    log('New shore: I take a good look across the water.', 'thought');
-    sense(s, false, { scan: true });
   }
   if (waterHere(s) || S.crossedWater) { S.crossedWater = false; waterFound(); }
   if (!waterHere(s)) { // water within about 200 m gets noticed and marked
@@ -593,6 +669,7 @@ function arrive(x, y, how, onTheWay = null) {
   // Something first noticed just now (heard on arrival, say) that I'm already standing at isn't a
   // landmark to head for: it's here.
   for (const u of S.suspects) if (!u.reached && atTarget({ x, y }, { truePos: u.truePos, sus: u })) u.reached = true;
+  nameSegments();
 }
 
 // The first water of the game, however it is met: arriving at it, crossing it, or spotting it nearby.
@@ -722,18 +799,19 @@ function followOptions() {
   if (!S.L.chan[cellOf(h.x, h.y)] && !['streambank', 'streambed'].includes(h.micro)) return [];
   const at = S.L.chan[cellOf(h.x, h.y)] ? h : NB8.map(([dx, dy]) => ({ x: h.x + dx, y: h.y + dy })).find(q => q.x >= 0 && q.y >= 0 && q.x < GN && q.y < GN && S.L.chan[cellOf(q.x, q.y)] && !S.L.lake[cellOf(q.x, q.y)]);
   if (!at) return [];
-  const name = (S.streams.find(st => st.fixes.some(f => Math.hypot(f.x - at.x, f.y - at.y) <= 1.5)) ?? matchStream(makeFix(at)))?.name ?? 'the stream';
+  const st = S.streams.find(x => x.fixes.some(f => Math.hypot(f.x - at.x, f.y - at.y) <= 1.5)) ?? matchStream(makeFix(at));
+  const nameOf = c => waterNameAt(st, c % GN, Math.floor(c / GN)); // the stretch that way: below me, or up a branch
   // offered only where a stage would get me to a new place (not straight into a lake, say)
   const goes = (dir, branch) => { const t = followStage(S.L, h, dir, { branch }); return t.hours > 0 && (t.end.x !== h.x || t.end.y !== h.y); };
   const out = [], down = flowAt(at.x, at.y);
-  if (down != null && !isMouth(at.x, at.y) && goes('down')) out.push({ key: 'follow:down', dir: down, say: `Follow ${name} downstream (up to 15 min)` });
+  if (down != null && !isMouth(at.x, at.y) && goes('down')) out.push({ key: 'follow:down', dir: down, say: `Follow ${nameOf(S.L.down[cellOf(at.x, at.y)])} downstream (up to 15 min)` });
   const ins = inflowsAt(at.x, at.y);
   for (const b of ins) {
     if (!goes('up', b)) continue;
     let c = cellOf(b.x, b.y); // the way this branch comes from, over a few cells
     for (let n = 0; n < 3; n++) { const up = inflowsAt(c % GN, Math.floor(c / GN)).sort((p, q) => S.L.acc[cellOf(q.x, q.y)] - S.L.acc[cellOf(p.x, p.y)])[0]; if (!up) break; c = cellOf(up.x, up.y); }
     const dir = bearing(at, { x: c % GN, y: Math.floor(c / GN) });
-    out.push({ key: `follow:up:${b.x}_${b.y}`, dir, say: `Follow ${name} upstream${ins.length > 1 ? `, the branch from the ${bearingWord(dir)}` : ''} (up to 15 min)` });
+    out.push({ key: `follow:up:${b.x}_${b.y}`, dir, say: `Follow ${nameOf(cellOf(b.x, b.y))} upstream${ins.length > 1 ? `, the branch from the ${bearingWord(dir)}` : ''} (up to 15 min)` });
   }
   return out;
 }
@@ -755,10 +833,42 @@ function followStream(dir, branch) {
   });
   if (st && run.length > 1) { (st.runs ??= []).push(dir === 'down' ? run : run.reverse()); S.streamVer = (S.streamVer ?? 0) + 1; }
   trip.path.forEach((p, i) => { if (i % 2 === 0) markSeen(p.x, p.y, 3); });
+  noticeCrossings(trip.path);
   const stop = STOP_WORDS[trip.why];
   S.travelHint = st?.id ?? null;
-  arrive(trip.end.x, trip.end.y, `Followed ${st?.name ?? 'the stream'} ${dir === 'down' ? 'downstream' : 'upstream'} for ${timeWords(trip.hours, 'known')}${stop ? `, ${stop}` : ''}.`);
+  const way = trip.path.find(p => (p.x !== from.x || p.y !== from.y) && S.L.chan[cellOf(p.x, p.y)]) ?? from; // the stretch I set off along, not the one I left (at a fork)
+  arrive(trip.end.x, trip.end.y, `Followed ${waterNameAt(st, way.x, way.y)} ${dir === 'down' ? 'downstream' : 'upstream'} for ${timeWords(trip.hours, 'known')}${stop ? `, ${stop}` : ''}.`);
   S.travelHint = null;
+  rememberTrip(from, trip.path, trip.hours, [], knownBefore);
+}
+
+// On a lake's shore: walk it a stage either way, keeping the water on my left or my right.
+function shoreOptions() {
+  const h = site();
+  if (!lakeside(h)) return [];
+  const lake = NB8.map(([dx, dy]) => ({ x: h.x + dx, y: h.y + dy })).find(q => q.x >= 0 && q.y >= 0 && q.x < GN && q.y < GN && S.L.lake[cellOf(q.x, q.y)]);
+  const name = waterName(waterKeyAt(S.L, lake.x, lake.y), 'lake', lake);
+  return ['left', 'right'].map(side => {
+    const t = shoreStage(S.L, h, side);
+    if (!t.hours || (t.end.x === h.x && t.end.y === h.y)) return null;
+    const ahead = t.path[Math.min(3, t.path.length - 1)];
+    return { key: `shore:${side}`, dir: bearing(h, ahead), say: `Walk the shore of ${name}, the water on my ${side} (up to 15 min)` };
+  }).filter(Boolean);
+}
+const SHORE_STOPS = { mouth: 'to where a stream runs in', outlet: 'to where a stream leaves it', round: 'all the way round, back where I started', edge: 'as far as I dare go that way', blocked: 'as far as the shore goes this way' };
+// Walk the shore a stage: every cell of shore on the way, the lake in view from each cell of it.
+function walkShore(side) {
+  const from = site(), knownBefore = S.sites.length;
+  const trip = shoreStage(S.L, from, side);
+  if (!trip.hours) return log('There’s no shore here to walk.', 'warn');
+  pass(trip.hours, 240);
+  const lake = trip.path.map(p => NB8.map(([dx, dy]) => ({ x: p.x + dx, y: p.y + dy })).find(q => q.x >= 0 && q.y >= 0 && q.x < GN && q.y < GN && S.L.lake[cellOf(q.x, q.y)])).find(Boolean);
+  const key = waterKeyAt(S.L, lake.x, lake.y);
+  trip.path.forEach((p, i) => { markSeen(p.x, p.y, 3); if (i % 2 === 0 || i === trip.path.length - 1) revealFeature(key, p, 1.7, true); });
+  noteSeenFeatures();
+  noticeCrossings(trip.path);
+  const stop = SHORE_STOPS[trip.why];
+  arrive(trip.end.x, trip.end.y, `Walked the shore of ${waterName(key, 'lake', lake)} for ${timeWords(trip.hours, 'known')}${stop ? `, ${stop}` : ''}.`);
   rememberTrip(from, trip.path, trip.hours, [], knownBefore);
 }
 
@@ -795,6 +905,7 @@ function travelTo(target, label) {
   const reached = st || area ? arrived(trip.end) : atTarget(trip.end, targetInfo(target));
   S.travelHint = reached ? st?.id ?? sus?.stream ?? null : null; // the stream I was after, only if this is it
   const { names, keys, ids } = noteCrossings(trip, S.travelHint);
+  noticeCrossings(trip.path);
   const dur = timeWords(hours, 'known');
   const last = trip.crossings[trip.crossings.length - 1], endsOnWater = !!last && trip.end.x === last.x && trip.end.y === last.y;
   const stoppedAtWater = thirsty && endsOnWater;
@@ -942,7 +1053,7 @@ function addItem(name, kind, props, from, extra = {}) {
 // level: gathering, every preparation, eating, and (slowly) carrying things together. Moist food
 // breeds more over time, faster in warmth; drying stops it. Heat kills; washing in water helps but
 // leaves the water's own germs behind. Eating germs risks a sour gut a day later. (Lye: later.)
-const GERMS = { fruit: 0.05, nut: 0.05, seed: 0.05, grain: 0.08, pod: 0.06, storage: 0.3, root: 0.3, leaf: 0.12, stem: 0.1, flower: 0.05, innerBark: 0.08, invertebrate: 0.3, fattyGrub: 0.3, shellfish: 0.45, mushroom: 0.15, lichen: 0.1, honey: 0.02,
+const GERMS = { egg: 0.15, fruit: 0.05, nut: 0.05, seed: 0.05, grain: 0.08, pod: 0.06, storage: 0.3, root: 0.3, leaf: 0.12, stem: 0.1, flower: 0.05, innerBark: 0.08, invertebrate: 0.3, fattyGrub: 0.3, shellfish: 0.45, mushroom: 0.15, lichen: 0.1, honey: 0.02,
   stone: 0.05, edge: 0.05, wood: 0.04, shoot: 0.03, stalk: 0.03, tindermat: 0.05, tinder: 0.05, bone: 0.4, finebone: 0.4, moss: 0.15, diggingstick: 0.15, board: 0.03, spindle: 0.03 };
 function touch(items, k = 0.4, hands = true) {
   const xs = items.filter(Boolean);
@@ -1052,6 +1163,10 @@ function gatherOptions(s) {
     if (e?.traits?.key === 'bee') {
       if (s.hive) opts.push({ label: 'Honeycomb from the hive', part: 'Honeycomb', species: e.name, hours: 0.5, kcal: 250, fn: () => { stung(e); return foodItem('honeycomb', e.honeyChem, e.honeyChem.gather, { raw: 'safe', cooked: 'safe' }, { id: e.id, name: e.name, part: 'honeycomb', site: s.key }, { animal: true }); } });
       continue;
+    }
+    if (e?.eggs && !s.eggsTaken?.includes(e.id) && e.habitats.some(h => h.micro === s.micro)) { // a clutch, once found here, is gone once taken
+      const lore = S.lore[loreKey(e, 'eggs')];
+      opts.push({ label: `${cap(e.eggs.nest)} (${e.name})${lore ? ` · ${loreWords(lore)}` : ''}`, part: 'Eggs', species: e.name, hours: 0.4, kcal: 120, fn: () => { (s.eggsTaken ??= []).push(e.id); return foodItem(`${e.name} eggs`, e.eggs.chem, e.eggs.chem.gather, e.eggs.food, { id: e.id, name: e.name, part: 'eggs', site: s.key }, { animal: true }); } });
     }
     if (e?.kind === 'animal' && e.cls === 'invertebrate' && e.food) {
       const lore = S.lore[loreKey(e, 'whole')];
@@ -1596,7 +1711,7 @@ function pointNear(s, F, lines) {
   if (best) {
     const dir = bearingWord(bearing(s, best));
     let u = S.suspects.find(v => v.kind === 'patch' && Math.hypot(v.truePos.x - best.x, v.truePos.y - best.y) < 3);
-    if (!u) S.suspects.push(u = { id: `u${S.suspects.length + 1}`, kind: 'patch', group: 'patch', trueKey: `patch-${best.x}-${best.y}`, truePos: { x: best.x, y: best.y }, est: { x: best.x, y: best.y }, err: 0.5, seenAt: { x: s.x, y: s.y }, channel: 'sight', obs: 1, label: uniqueName(SITE_NOUN[microAt(best.x, best.y)] ?? 'patch', best, []), reached: false });
+    if (!u) S.suspects.push(u = { id: `u${S.suspects.length + 1}`, kind: 'patch', group: 'patch', trueKey: `patch-${best.x}-${best.y}`, truePos: { x: best.x, y: best.y }, est: { x: best.x, y: best.y }, err: 0.5, seenAt: { x: s.x, y: s.y }, channel: 'sight', obs: 1, label: uniqueName(SITE_NOUN[microAt(best.x, best.y)] ?? 'patch'), reached: false });
     lines.push(`nothing here, but ${F.nearLabel} ${timeWords(lineHours(S.L, s, best))} ${dir} (${u.label})`);
   } else lines.push(`nothing here, and no ${F.nearLabel} anywhere close`);
 }
@@ -1948,7 +2063,7 @@ function noteSeenFeatures() {
     if (S.L.lake[c]) { const key = waterKeyAt(S.L, x, y); if (!S.waterNames[key]) waterName(key, 'lake', { x, y }); }
     else if (esc[c] >= 0 && !S.cliffNames[`cliff-${esc[c]}`]) {
       const key = `cliff-${esc[c]}`, u = S.suspects.find(v => v.trueKey === key);
-      S.cliffNames[key] = u ? u.label : uniqueName('cliff', { x, y }, looksOf('cliff', x, y));
+      S.cliffNames[key] = u ? u.label : uniqueName('cliff');
     }
   }
 }
@@ -2084,6 +2199,9 @@ function mapHTML() {
   items.push({ i: hi, rank: 0 });
   if (pin) items.push({ pin: true, rank: 0 });
   for (const q of [...lakes, ...cliffs].sort((a, b) => b.cells.length - a.cells.length)) if (!items.some(t => t.feature?.key === q.key)) items.push({ feature: q, rank: 1 });
+  // crossings I know of and haven't stood on (one I've stood on is a place, marked as such)
+  const crossings = (S.crossingsKnown ?? []).filter(q => !S.sites.some(t => t.x === q.x && t.y === q.y)).map(q => ({ ...q, key: `crossing:${q.x}_${q.y}`, name: 'crossing', cells: [q] }));
+  for (const q of crossings) items.push({ feature: q, rank: 1.5 });
   M.nodes.forEach((v, i) => { if (i === hi || v.unmarked) return; if (v.site !== undefined) items.push({ i, rank: 2, weight: S.sites[v.site].visits ?? 0 }); else items.push({ i, rank: v.certainty === 'unknown' ? 4 : 3, weight: S.suspects.find(x => x.id === v.sus)?.obs ?? 0 }); });
   items.sort((a, b) => a.rank - b.rank || (b.weight ?? 0) - (a.weight ?? 0));
   for (const t of items) {
@@ -2091,7 +2209,7 @@ function mapHTML() {
     else if (t.feature) { const q = t.feature; t.text = typo(q.name.replace(/^the /, '')); t.at = q.kind === 'cliff' ? q.line.pts[Math.floor(q.line.pts.length / 2)] : { x: q.x, y: q.y }; t.r = fs * 0.3; t.h = fs * 0.9; }
     else { const v = M.nodes[t.i]; t.text = `${typo(v.name.replace(/^the /, ''))}${v.certainty === 'unknown' ? '?' : ''}`; t.at = v; t.r = radius(t.i); t.h = fs; }
   }
-  const follows = followOptions();
+  const follows = followOptions().concat(shoreOptions());
   const segs = trees.flatMap(t => t.segs).concat(routes ? M.edges.map(e => [M.nodes[e.a], M.nodes[e.b]]) : [])
     .concat(follows.map(o => { const r = o.dir * Math.PI / 180; return [here, { x: here.x + Math.sin(r) * fs * 2.6, y: here.y - Math.cos(r) * fs * 2.6 }]; }));
   const spots = placeLabels(items.map(t => ({ x: t.at.x, y: t.at.y, r: t.r, w: textW(t.text) * (t.feature ? 0.9 : 1), h: t.h, optional: t.rank > 0 })), {
@@ -2112,6 +2230,29 @@ function mapHTML() {
   const Lk = lakes.map(q => area(q, 'lake') + q.circles.map(k => `<circle cx="${k.x.toFixed(2)}" cy="${k.y.toFixed(2)}" r="${k.r.toFixed(2)}"/>`).join('') + '</g>').join('');
   const Cl = cliffs.map(q => { const { pts, nx, ny } = q.line, d = pts.map((p, k) => `${k ? 'L' : 'M'}${p.x} ${p.y}`).join(''), t = u(7);
     return area(q, 'cliff') + `<path class="face" d="${d}" stroke-width="${u(3.5)}"/>` + along(pts, 16).marks.map(m => `<line class="tick" x1="${m.x}" y1="${m.y}" x2="${m.x + nx * t}" y2="${m.y + ny * t}" stroke-width="${u(2)}"/>`).join('') + `<path class="hit" d="${d}" stroke-width="${fs * 2.2}"/></g>`; }).join('');
+  // names of stretches of stream: along the straight line from one end of the stretch to the other,
+  // turned to read left to right, just beside it; left off where the stretch is too short to hold it
+  const SL = Object.values(S.segNames ?? {}).map(g => {
+    const dx = g.bottom.x - g.top.x, dy = g.bottom.y - g.top.y, len = Math.hypot(dx, dy), w = textW(g.name) * 0.9;
+    if (len < w * 0.8) return '';
+    let a = Math.atan2(dy, dx) * 180 / Math.PI;
+    if (a > 90) a -= 180; else if (a < -90) a += 180;
+    // beside the line on whichever side keeps the words off the markers there (left off if neither does)
+    const r = a * Math.PI / 180, ux = Math.sin(r), uy = -Math.cos(r), tx = Math.cos(r), ty = Math.sin(r), cx = (g.top.x + g.bottom.x) / 2, cy = (g.top.y + g.bottom.y) / 2;
+    const boxes = spots.filter(Boolean), pad = fs * 0.4;
+    const clear = side => { const ox = cx + ux * side * u(9), oy = cy + uy * side * u(9); return [-0.5, -0.25, 0, 0.25, 0.5].every(k => { const px = ox + tx * k * w, py = oy + ty * k * w; return M.nodes.every(v => v.unmarked || Math.hypot(px - v.x, py - v.y) > radius(M.nodes.indexOf(v)) + fs * 0.55) && boxes.every(b => px < b.x0 - pad || px > b.x1 + pad || py < b.y0 - pad || py > b.y1 + pad); }); };
+    const side = clear(1) ? 1 : clear(-1) ? -1 : 0;
+    if (!side) return '';
+    const mx = cx + ux * (side > 0 ? u(7) : -u(16)), my = cy + uy * (side > 0 ? u(7) : -u(16)); // the text's baseline: above the line, or below it
+    return `<text class="flabel stream" text-anchor="middle" x="${+mx.toFixed(2)}" y="${+my.toFixed(2)}" font-size="${fs * 0.9}" transform="rotate(${+a.toFixed(1)} ${+mx.toFixed(2)} ${+my.toFixed(2)})">${esc(typo(g.name))}</text>`;
+  }).join('');
+  // crossings: a pair of short bars across the water, like a bridge on a map
+  const X = crossings.map(q => {
+    const r = (flowAt(q.x, q.y) ?? 0) * Math.PI / 180, fx = Math.sin(r), fy = -Math.cos(r), k = u(7), g = u(3);
+    const bar = o => `<line x1="${q.x + fx * o - fy * k}" y1="${q.y + fy * o + fx * k}" x2="${q.x + fx * o + fy * k}" y2="${q.y + fy * o - fx * k}"/>`;
+    const say = `Head for the crossing (${timeWords(routeHours(here, q), 'guess')}): ${CROSSING_WORDS[q.kind]}`;
+    return `<g class="crossing" data-hike="go:${q.x}_${q.y}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title><g stroke-width="${u(3)}">${bar(-g)}${bar(g)}</g><circle class="hit" cx="${q.x}" cy="${q.y}" r="${fs * 1.45}"/></g>`;
+  }).join('');
   const land = landImage();
 
   // ---- streams: smooth lines down the drainage, chevrons every 70 px pointing downstream (spaced along
@@ -2176,7 +2317,7 @@ function mapHTML() {
   // far end, each upstream branch a chevron at its far end pointing back downstream, like fletching
   const F = follows.map(o => {
     const r = o.dir * Math.PI / 180, dx = Math.sin(r), dy = -Math.cos(r), a = { x: here.x + dx * fs * 0.8, y: here.y + dy * fs * 0.8 }, b = { x: here.x + dx * fs * 2.6, y: here.y + dy * fs * 2.6 };
-    const head = o.key === 'follow:down' ? chev(b.x - dx * u(4), b.y - dy * u(4), dx, dy, u(6)) : chev(b.x - dx * u(2), b.y - dy * u(2), -dx, -dy, u(6));
+    const head = o.key === 'follow:down' || o.key.startsWith('shore:') ? chev(b.x - dx * u(4), b.y - dy * u(4), dx, dy, u(6)) : chev(b.x - dx * u(2), b.y - dy * u(2), -dx, -dy, u(6));
     const shape = `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/><path d="${head}"/>`;
     return `<g class="follow" data-hike="${o.key}" role="button" tabindex="0" aria-label="${esc(typo(o.say))}"><title>${esc(typo(o.say))}</title><g class="edge-of" stroke-width="${u(6)}">${shape}</g><g class="face" stroke-width="${u(3)}">${shape}</g><line class="hit" x1="${here.x + dx * fs * 0.9}" y1="${here.y + dy * fs * 0.9}" x2="${b.x}" y2="${b.y}" stroke-width="${fs * 2.2}"/></g>`;
   }).join('');
@@ -2202,7 +2343,7 @@ function mapHTML() {
   // ---- a spot I've picked: tap it to go
   const P = !pin ? '' : `<g class="pin" data-hike="go:${pin.x}_${pin.y}" role="button" tabindex="0" aria-label="${esc(typo(pinSay))}"><title>${esc(typo(pinSay))}</title><path d="M${pin.x} ${pin.y}l${-u(7)} ${-u(14)}a${u(7.5)} ${u(7.5)} 0 1 1 ${u(14)} 0z" stroke-width="${u(2)}"/><circle class="hit" cx="${pin.x}" cy="${pin.y - u(14)}" r="${fs * 1.45}"/>${pinLabel}</g>`;
 
-  const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map; north is up. Tap a place to hike there, or tap anywhere to pick a spot.">${land ? `<image class="land" href="${land}" x="-0.5" y="-0.5" width="${GN}" height="${GN}" preserveAspectRatio="none"/>` : ''}${Lk}${E}${Cl}${W}${featureLabels.join('')}${Nd}${F}${P}</svg>`;
+  const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map; north is up. Tap a place to hike there, or tap anywhere to pick a spot.">${land ? `<image class="land" href="${land}" x="-0.5" y="-0.5" width="${GN}" height="${GN}" preserveAspectRatio="none"/>` : ''}${Lk}${E}${Cl}${W}${X}${SL}${featureLabels.join('')}${Nd}${F}${P}</svg>`;
   const tools = `<div class="map-tools">${scaleBar(span)}${S.mapView ? '<button class="ghost" data-mapfit="1">Fit</button>' : ''}<button class="ghost" data-maproutes="1">${routes ? 'Routes: shown' : 'Routes: hidden'}</button><button class="ghost" data-mapland="1">${LAND_MODES[S.mapLand ?? 'seen']}</button></div>`;
   return `${svg}${tools}<p class="hint">North is up. Tap a place, landmark, stream, lake or cliff to head for it; tap anywhere else to drop a pin, then tap the pin to go there. Drag to pan; pinch or scroll to zoom. Filled dots: places I’ve been; rings: things I’ve seen or heard (“?”: heard only). Blue: lakes as I picture them, springs, and streams, solid where I’ve walked along them, chevrons pointing downstream. Lines with ticks: cliffs, ticks on the low side. At a stream, the white arrows by me follow it a stretch. Not every name is shown when the map is crowded; zoom in for more.</p>`;
 }
@@ -2216,6 +2357,7 @@ function hike(key) {
     if (x === h.x && y === h.y) return log('That’s where I am.', 'thought');
     return travelTo({ x, y, point: true, label: 'the spot I picked' }, `toward a spot to the ${bearingWord(bearing(h, { x, y }))}`);
   }
+  if (key.startsWith('shore:')) return walkShore(key.slice(6));
   if (key.startsWith('follow:')) { const [, dir, b] = key.split(':'); return followStream(dir, b ? { x: +b.split('_')[0], y: +b.split('_')[1] } : null); }
   const M = mentalMap(), v = M.nodes.find(n => n.key === key);
   if (!v || v.site === S.here) return;
@@ -2400,6 +2542,7 @@ function itemRow(it) {
   const tests = testsFor(it).filter(([k]) => !it.notes[k]);
   const exact = S.showProps ? exactProps(it) : [];
   return `<li class="item"><div class="item-head"><span class="item-name">${esc(typo(cap(it.name)))}</span>${it.kind === 'food' ? `<button data-eat="${it.uid}">${fireHere() ? 'Roast and eat' : 'Eat'}</button>` : ''}<button class="ghost" data-drop="${it.uid}" aria-label="Drop ${esc(it.name)}">Drop</button></div>
+    ${it.from?.site && S.sites.some(t => t.key === it.from.site) ? `<button class="ghost origin" data-origin="${esc(it.from.site)}">${(() => { const t = S.sites.find(x => x.key === it.from.site); return t.renamed ? `From ${esc(typo(t.name))} · rename` : 'Name where this came from'; })()}</button>` : ''}
     ${imp.length ? `<p class="imp">${esc(typo(imp.join('; ')))}</p>` : ''}
     ${exact.length ? `<ul class="exact">${exact.map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
     ${tests.length ? `<div class="tests">${tests.map(([k]) => `<button class="test" data-test="${it.uid}" data-name="${esc(k)}">${esc(typo(k))}</button>`).join('')}</div>` : ''}</li>`;
@@ -2519,7 +2662,7 @@ if (typeof document !== 'undefined') {
 // Everything that happens follows from the world seed and the player's choices, so a record of the
 // seed and each choice reproduces a game exactly. Each action is the data of what was tapped (or
 // the value chosen); `act` applies one, and replaying a record runs them in order on a fresh game.
-const BUILD = 'hk-2026-10-22j'; // game logic version: a record replays faithfully only on the build that made it
+const BUILD = 'hk-2026-10-23a'; // game logic version: a record replays faithfully only on the build that made it
 function record(d) {
   S.record ??= [];
   S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
@@ -2553,6 +2696,17 @@ document.addEventListener('click', ev => {
   if (d.maproutes) { S.mapRoutes = !S.mapRoutes; return render(); }
   if (d.mapland) { const m = Object.keys(LAND_MODES); S.mapLand = m[(m.indexOf(S.mapLand ?? 'seen') + 1) % m.length]; return render(); }
   if (d.record === 'copy') { const t = gameRecord(); navigator.clipboard?.writeText(t).then(() => log('Copied the game record.', 'thought'), () => {}); $('#record-text').value = t; $('#record-text').select(); return; }
+  if (d.origin) { // name the place an item came from: it keeps a marker on the map from now on
+    const t = S.sites.find(x => x.key === d.origin);
+    const inp = document.createElement('input');
+    inp.className = 'rename'; inp.value = t.renamed ? t.name : ''; inp.placeholder = 'a name for that place';
+    b.replaceWith(inp);
+    inp.focus(); inp.select();
+    const done = () => { const v = inp.value.trim(); if (v && v !== t.name) { const a = { originOf: t.key, nameTo: v }; act(a); record(a); } lastHTML.clear(); render(); };
+    inp.addEventListener('keydown', k => { if (k.key === 'Enter') inp.blur(); if (k.key === 'Escape') { inp.value = ''; inp.blur(); } });
+    inp.addEventListener('blur', done, { once: true });
+    return;
+  }
   if (d.rename) {
     lastHTML.delete('#where'); // the place name is about to be replaced by an input
     const s = site();
@@ -2571,6 +2725,7 @@ document.addEventListener('click', ev => {
 
 // Apply one player action (the data of what was tapped). Returns false if it wasn't an action.
 function act(d) {
+  if (d.originOf) { const t = S.sites.find(x => x.key === d.originOf); if (!t) return false; log(`Decided to call ${t === site() ? 'this place' : 'the place I got that from'} ${d.nameTo}. It goes on my map.`); t.name = d.nameTo; t.renamed = true; return true; }
   if (d.renameTo) { log(`Decided to call this place ${d.renameTo}.`); site().name = d.renameTo; site().renamed = true; return true; }
   if (d.goalPick !== undefined) { S.goal = d.goalPick; S.revealed[S.goal] ??= new Set(); return true; }
   if (d.slotPick) { sel[d.slotPick] = Number(d.value); return true; }

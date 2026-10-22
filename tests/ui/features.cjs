@@ -1,5 +1,5 @@
 // Lakes and cliffs on the map: after a fixed itinerary of hikes and scans, the lakes and cliffs I've
-// seen are drawn (lakes shaded, cliffs as ticked lines), each named once; tapping a lake ends where I
+// seen are drawn (lakes shaded, cliffs as ticked lines), each labelled at most once, by what it is; tapping a lake ends where I
 // can drink or says why not, and tapping a cliff ends by it or says why not.
 // Usage: node tests/ui/features.cjs [seed ...]
 const { JSDOM } = require('jsdom');
@@ -24,8 +24,11 @@ const seeds = process.argv.slice(2).length ? process.argv.slice(2) : ['m', 'pig-
     for (let k = 1; k <= 20; k++) { const o = [...d.querySelectorAll('.mapsvg [data-hike]')]; click(o[(k * 7) % o.length]); if (k % 2) click(d.querySelector('[data-here="scan"]:not([disabled])')); }
     const L = d.querySelectorAll('.mapsvg .feature.lake').length, C = d.querySelectorAll('.mapsvg .feature.cliff').length;
     lakes += L; cliffs += C;
-    const names = [...d.querySelectorAll('.mapsvg .flabel')].map(t => t.textContent);
-    if (new Set(names).size !== names.length) fails.push(`${seed}: a lake or cliff named twice: ${names.join(', ')}`);
+    const names = [...d.querySelectorAll('.mapsvg .flabel:not(.stream)')].map(t => t.textContent);
+    // each lake or cliff labelled at most once, by what it is (no modifiers: "lake", "cliff")
+    const drawn = { lake: L, cliff: C, crossing: d.querySelectorAll('.mapsvg .crossing').length };
+    for (const [kind, n] of Object.entries(drawn)) if (names.filter(t => t === kind).length > n) fails.push(`${seed}: more "${kind}" labels than ${kind}s drawn: ${names.join(', ')}`);
+    for (const t of names) if (!(t in drawn)) fails.push(`${seed}: a feature label that isn't just what it is: "${t}"`);
     if (d.querySelector('.mapsvg .feature.cliff') && !d.querySelector('.mapsvg .feature.cliff .tick')) fails.push(`${seed}: a cliff without ticks`);
     for (const kind of ['lake', 'cliff']) {
       const g = d.querySelector(`.mapsvg .feature.${kind}`);

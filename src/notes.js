@@ -5,7 +5,8 @@
 // Notes are usually the top three salient items plus "more of the same"; when several
 // unknown things turn up at once the note simply runs longer, ordered top-down.
 // Newness is only remarked on ("new to me", "lots of new stuff") once the character has
-// had two visits in a row with nothing new; before that, everything is new.
+// had two visits in a row with nothing new; before that, everything is new. Likewise "the usual" and
+// "as expected": until then, things met again are just "again", "more of those", "pretty common here".
 //
 // Vertebrates are observed through channels (sighting, tracks, calls, scat, damage,
 // dens, snagged hair). Each channel reveals only some traits. Signs must be
@@ -107,6 +108,10 @@ const T = {
   abundUp: [p => `Lots of ${p}.`, p => `${cap(p)} everywhere.`, p => `Thick with ${p}.`, p => `Plenty of ${p}.`],
   abundDown: [p => `Only a scattering of ${p}.`, p => `${cap(p)} sparse here.`, p => `Hardly any ${p}.`, p => `${cap(p)} few and far between.`],
   missing: [p => `No ${p} that I saw, oddly.`, p => `Didn't see any ${p} here.`, p => `Expected ${p} here; none.`],
+  // things seen before, before the character expects anything (no "usual" until newness is remarked on);
+  // `seenBeforeKinds` only when every item is a kind of plant or animal ("damson trees", "minnows")
+  seenBefore: [l => `${cap(l)} again.`, l => `Seen before: ${l}.`],
+  seenBeforeKinds: [l => `More of those ${l}.`, l => `The common ${l}.`, l => `${cap(l)} seem pretty common around here.`, l => `${cap(l)} again.`],
   usual: [l => `More of the same: ${l}.`, l => `The usual ${l}.`, l => `Otherwise ${l}, nothing remarkable.`, l => `Also ${l}, as you'd expect.`],
   usualAware: [l => `Nothing new; ${l}, as expected.`, l => `Nothing I haven't seen: ${l}.`],
   water: [c => `Water: ${c}.`, c => `There's water: ${c}.`],
@@ -497,8 +502,10 @@ export function observeSite(world, memory, { site, micro, skill = 0.5, time = 'd
     if (!namedYet) { out.push(...namingSentences(fresh.map(x => x.e), memory, site, byId, r)); namedYet = true; }
   }
   const chosenEntities = new Set(chosen.map(x => x.e).filter(Boolean));
-  const usualText = [...new Set(usual.filter(u => (!u.e || u.e.kind !== 'stone') && !chosenEntities.has(u.e)).map(u => u.text))].slice(0, 3);
-  if (usualText.length && (chosen.length < 2 || r.chance(0.4)) && !firstVisit) out.push(tpl(memory, r, aware && r.chance(0.4) ? 'usualAware' : 'usual')(joinList(usualText)));
+  const usualItems = usual.filter(u => (!u.e || u.e.kind !== 'stone') && !chosenEntities.has(u.e)).filter((u, i, all) => all.findIndex(v => v.text === u.text) === i).slice(0, 3);
+  const usualText = usualItems.map(u => u.text);
+  const usualKey = aware ? (r.chance(0.4) ? 'usualAware' : 'usual') : usualItems.every(u => u.e && !/ overhead$/.test(u.text)) ? 'seenBeforeKinds' : 'seenBefore';
+  if (usualText.length && (chosen.length < 2 || r.chance(0.4)) && !firstVisit) out.push(tpl(memory, r, usualKey)(joinList(usualText)));
   if (out.length === 1) out.push('Nothing much to note.');
 
   function realize(it) {

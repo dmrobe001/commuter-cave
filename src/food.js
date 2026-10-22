@@ -62,6 +62,7 @@ export const PART_SPECS = {
   shellfish:  { gather: 0.2,  water: R(0.78, 0.85), starch: R(0.02, 0.05), sugar: R(0, 0.01),    fat: R(0.01, 0.03), protein: R(0.1, 0.14), fibre: R(0, 0.01),    access: { starch: R(0.8, 1), fat: R(0.85, 0.95), protein: R(0.8, 0.9) }, extra: [] },
   mushroom:   { gather: 0.2,  water: R(0.88, 0.93), starch: R(0.01, 0.03), sugar: R(0.005, 0.02), fat: R(0, 0.005), protein: R(0.02, 0.04), fibre: R(0.01, 0.03), access: { starch: R(0.4, 0.6), fat: R(0.5, 0.7), protein: R(0.4, 0.6) }, extra: [] },
   lichen:     { gather: 0.15, water: R(0.12, 0.2),  starch: R(0.45, 0.6),  sugar: R(0.01, 0.03), fat: R(0.01, 0.02), protein: R(0.02, 0.04), fibre: R(0.15, 0.25), access: { starch: R(0.03, 0.08), fat: R(0.3, 0.5), protein: R(0.2, 0.4) }, extra: [{ kind: 'lichenAcid', p: 1, dose: R(0.3, 0.7) }] },
+  egg:        { gather: 0.15, water: R(0.73, 0.77), starch: R(0, 0.01),    sugar: R(0.003, 0.01), fat: R(0.09, 0.12), protein: R(0.12, 0.14), fibre: R(0, 0),     access: { starch: R(0.9, 1), fat: R(0.85, 0.95), protein: R(0.45, 0.6) }, extra: [] }, // raw egg white is half digested; cooked, about nine-tenths
   honey:      { gather: 0.4,  water: R(0.17, 0.2),  starch: R(0, 0),       sugar: R(0.6, 0.65),  fat: R(0, 0),       protein: R(0.003, 0.005), fibre: R(0.12, 0.18), access: { starch: R(1, 1), fat: R(1, 1), protein: R(0.5, 0.7) }, extra: [] }, // fibre: wax and comb
 };
 // the plant part names in life.js → spec

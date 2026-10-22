@@ -60,6 +60,12 @@ export function toLong(world) {
     add('animal', a, null, 'yields', a.products);
     add('animal', a, null, 'nutrition', a.nutrition);
     add('animal', a, null, 'danger', a.danger);
+    if (a.eggs) {
+      add('animal', a, 'eggs', 'find', a.eggs.nest);
+      add('animal', a, 'eggs', 'raw', a.eggs.food.raw);
+      add('animal', a, 'eggs', 'cooked', a.eggs.food.cooked);
+      add('animal', a, 'eggs', 'nutrition', `about ${Math.round(a.eggs.chem.fat * 100)}% fat, ${Math.round(a.eggs.chem.protein * 100)}% protein; ${a.eggs.chem.gather} kg in a find`);
+    }
   }
   return rows;
 }

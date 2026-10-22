@@ -148,7 +148,10 @@ button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 6
 .mapsvg .feature.cliff .face, .mapsvg .feature.cliff .tick { stroke: var(--ink); fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
 .mapsvg .feature .hit { stroke: transparent; fill: none; pointer-events: stroke; }
 .mapsvg .flabel { fill: var(--muted); font-style: italic; paint-order: stroke; stroke: var(--bg); stroke-width: calc(.25 * var(--u)); pointer-events: none; }
-.mapsvg .flabel.lake { fill: var(--water); }
+.mapsvg .flabel.lake, .mapsvg .flabel.stream { fill: var(--water); }
+.mapsvg .crossing { cursor: pointer; }
+.mapsvg .crossing line { stroke: var(--ink); stroke-linecap: round; }
+.mapsvg .crossing .hit { fill: transparent; stroke: none; }
 .mapsvg .node.site.spring circle:not(.hit) { fill: var(--water); stroke: var(--water); }
 .mapsvg .follow { cursor: pointer; }
 .mapsvg .follow .edge-of > *, .mapsvg .follow .face > * { fill: none; stroke-linecap: round; stroke-linejoin: round; }

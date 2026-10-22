@@ -26,14 +26,14 @@ const seeds = process.argv.slice(2).length ? process.argv.slice(2) : ['wgxdd', '
     const here = () => { const c = d.querySelector('.mapsvg .node.here circle'); return c ? `${c.getAttribute('cx')},${c.getAttribute('cy')}` : ''; };
     click(d.querySelector('[data-here="scan"]'));
     // get to some water: a stream on the map, else a heard one, else strike out
-    for (let k = 0; k < 6 && !d.querySelector('.mapsvg .follow'); k++) {
+    for (let k = 0; k < 6 && !d.querySelector('.mapsvg .follow[data-hike^="follow:"]'); k++) {
       const g = d.querySelector('.mapsvg .stream[data-hike]') ?? [...d.querySelectorAll('.mapsvg .node.sus[data-hike]')].find(g => /brook|stream|river/.test(g.getAttribute('aria-label'))) ;
       if (g) click(g); else strikeOut(w, d, ['north', 'east', 'south'][k % 3]);
     }
-    if (!d.querySelector('.mapsvg .follow')) { console.log(`${seed}: never got to a stream`); continue; }
+    if (!d.querySelector('.mapsvg .follow[data-hike^="follow:"]')) { console.log(`${seed}: never got to a stream`); continue; }
     const visited = [];
     for (let k = 0; k < 6; k++) {
-      const arrows = [...d.querySelectorAll('.mapsvg .follow')];
+      const arrows = [...d.querySelectorAll('.mapsvg .follow[data-hike^="follow:"]')];
       if (!arrows.length) break;
       const a = arrows.find(g => (k < 3 ? /downstream/ : /upstream/).test(g.getAttribute('aria-label'))) ?? arrows[0];
       const before = here(), n = entries().length;

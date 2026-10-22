@@ -196,6 +196,20 @@ export function generateLandscape(world) {
     const top = drops.reduce((a, b) => (b.drop > a.drop ? b : a));
     return { x: top.x, y: top.y, drop: Math.round(top.drop * 10) / 10, totalDrop: Math.round(drops.reduce((a, b) => a + b.drop, 0)), cells: g.length, size: top.size, kind: top.drop > 20 ? 'falls' : 'cascade' };
   });
+  // Crossings: places a stream of some size can be got over without wading: a ford (wide and shallow,
+  // on gentle ground), a deadfall (a tree down across it, in woods) or a rockfall (boulders, on steep
+  // ground). About one in fifteen stream and river cells, never two within five cells of each other.
+  const crossing = new Uint8Array(N * N); // 0 none, 1 ford, 2 deadfall, 3 rockfall
+  features.crossings = [];
+  { const xr = rng.fork('crossings'), falls = new Set(features.waterfalls.map(f => idx(f.x, f.y)));
+    for (let c = 0; c < N * N; c++) {
+      if (chan[c] < 2 || lake[c] || falls.has(c) || !xr.chance(1 / 15)) continue;
+      const x = c % N, y = (c / N) | 0;
+      if (features.crossings.some(q => Math.max(Math.abs(q.x - x), Math.abs(q.y - y)) < 5)) continue;
+      const kind = slope[c] > 0.15 ? 'rockfall' : veg[c] > 0.55 ? 'deadfall' : 'ford';
+      crossing[c] = { ford: 1, deadfall: 2, rockfall: 3 }[kind];
+      features.crossings.push({ x, y, kind, size: chan[c] });
+    } }
   features.lakes = components(c => lake[c] === 1).filter(g => g.length >= 3).map(g => ({ cells: g.length, x: avg(g, 'x'), y: avg(g, 'y'), areaHa: Math.round(g.length * CELL * CELL / 1e4) }));
   features.escarpments = components(c => slope[c] > 0.35).filter(g => g.length >= 6).map(g => ({ cells: g.length, x: avg(g, 'x'), y: avg(g, 'y') }));
 
@@ -233,7 +247,7 @@ export function generateLandscape(world) {
     if (score < bestScore) { bestScore = score; spawn = { x, y, waterM: Math.round(dW) }; }
   }
 
-  return { N, CELL, A, elev, filled, acc, down, slope, chan, lake, wet, veg, micro, features, spawn, waterDist };
+  return { N, CELL, A, elev, filled, acc, down, slope, chan, lake, crossing, wet, veg, micro, features, spawn, waterDist };
 
   // --- helpers (closures over the grids above)
   function distanceField(isSource) { // breadth-first distance in cells

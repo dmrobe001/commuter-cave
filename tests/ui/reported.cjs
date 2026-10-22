@@ -17,7 +17,7 @@ const lines = () => [...d.querySelectorAll('.entry')].map(e => e.textContent);
 // follow the stream one way until a stage says it stopped for `stop`; every offered arrow must move me
 function follow(way, stop) {
   for (let k = 0; k < 8; k++) {
-    const arrow = [...d.querySelectorAll('.mapsvg .follow')].find(g => new RegExp(way).test(g.getAttribute('aria-label')));
+    const arrow = [...d.querySelectorAll('.mapsvg .follow[data-hike^="follow:"]')].find(g => new RegExp(way).test(g.getAttribute('aria-label')));
     if (!arrow) return false;
     const before = at(), n = lines().length;
     click(arrow);
@@ -37,7 +37,7 @@ setTimeout(() => {
   else if (d.querySelector('.mapsvg .node.spring circle').getAttribute('cx') !== '71') fails.push('the spring is marked off its own cell (71,59)');
   const here = d.querySelector('.mapsvg .node.here')?.getAttribute('aria-label') ?? '';
   if (!/mouth/.test(here)) fails.push(`expected to be at the stream's mouth, but here is: ${here}`);
-  if ([...d.querySelectorAll('.mapsvg .follow')].some(g => /downstream/.test(g.getAttribute('aria-label')))) fails.push('a downstream arrow is offered where the stream runs into the lake');
+  if ([...d.querySelectorAll('.mapsvg .follow[data-hike^="follow:"]')].some(g => /downstream/.test(g.getAttribute('aria-label')))) fails.push('a downstream arrow is offered where the stream runs into the lake');
   if (!d.querySelector('.mapsvg .feature.lake circle')) fails.push('the lake is not drawn');
 
   // A second reported game (seed gbn2f): at a stream's mouth on a lake, taps on the lake and on things

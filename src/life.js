@@ -573,7 +573,7 @@ const ANIMALS = {
   stinker:     { cls: 'small', noun: 'musk animal', mass: 1.5, micro: ['woodland', 'edge', 'glade'], colors: ['black-and-white striped', 'dark brown'], diet: 'omnivore', catch: 'leave it alone: it sprays a stinking, blinding musk', defense: 'sprays musk', parasite: 0.3, nutrition: 'lean meat, if you can stand it', products: ['meat', 'pelt'], signs: ['a rank, musky stink', 'small pits dug in the soil'], activity: 'night', season: 'year-round', smell: 'a rank, burnt-rubber musk' },
   rodent:      { cls: 'small', noun: 'rodent', mass: 0.15, micro: ['glade', 'edge', 'woodland'], colors: ['brown', 'grey', 'sandy'], diet: 'plant', catch: 'hard by hand; easy with deadfall traps or snares', parasite: 0.2, nutrition: 'lean meat, organs', products: ['meat', 'organs', 'small hide'], signs: ['burrow holes', 'gnawed seeds and nuts', 'droppings'], activity: 'night', season: 'year-round' },
   hare:        { cls: 'small', noun: 'hare', mass: 2.5, micro: ['glade', 'edge'], colors: ['brown', 'grey'], diet: 'plant', lean: true, catch: 'not by hand; snares on runs', parasite: 0.25, nutrition: 'very lean meat', products: ['meat', 'organs', 'hide', 'sinew'], signs: ['runs through grass', 'round droppings', 'resting hollows in grass'], activity: 'dawn and dusk', season: 'year-round' },
-  lizard:      { cls: 'small', noun: 'lizard', mass: 0.05, micro: ['outcrop', 'scree', 'glade'], colors: ['brown', 'green', 'grey'], diet: 'insect', minTemp: 8, catch: 'moderate (easy in cool mornings before they warm up)', parasite: 0.25, nutrition: 'lean meat', products: ['meat'], signs: ['basking on warm rocks', 'tracks with a tail drag in dust'], activity: 'day (basking)', season: 'warm season' },
+  lizard:      { cls: 'small', noun: 'lizard', mass: 0.05, micro: ['outcrop', 'scree', 'glade'], colors: ['brown', 'green', 'grey'], diet: 'insect', minTemp: 8, catch: 'moderate (easy in cool mornings before they warm up)', parasite: 0.25, nutrition: 'lean meat', products: ['meat', 'eggs (seasonal)'], signs: ['basking on warm rocks', 'tracks with a tail drag in dust'], activity: 'day (basking)', season: 'warm season' },
   frog:        { cls: 'small', noun: 'frog', mass: 0.04, micro: ['pond', 'streambank'], colors: ['green', 'brown'], aposematic: 0.25, diet: 'insect', catch: 'easy at night', parasite: 0.35, nutrition: 'lean meat (legs)', products: ['legs'], signs: ['calling at night', 'splashes at the water edge'], activity: 'night', season: 'growing season' },
   groundbird:  { cls: 'small', noun: 'ground bird', mass: 0.8, micro: ['glade', 'edge'], colors: ['speckled brown', 'grey'], diet: 'omnivore', catch: 'adults hard by hand; eggs easy in nesting season', parasite: 0.2, nutrition: 'meat; eggs rich in fat and protein', products: ['meat', 'eggs (seasonal)', 'feathers', 'bones'], signs: ['dust-bathing hollows', 'alarm calls when flushed', 'nests on the ground'], activity: 'day', season: 'eggs early in the growing season' },
   fish:        { cls: 'small', noun: 'fish', mass: 0.2, micro: ['streambed', 'pond'], colors: ['silver', 'olive', 'spotted'], diet: 'insect', catch: 'moderate in shallow pools; easy with weirs or traps', parasite: 0.3, nutrition: 'protein and fat', products: ['meat', 'oil', 'bones'], signs: ['rises at dusk', 'shadows in pools'], activity: 'day', season: 'year-round' },
@@ -635,6 +635,12 @@ const ANIMAL_VARYING = [
   { id: 'toxin', label: 'toxicity', kind: 'useful', scale: '01', sd: 0.5, when: t => t.aposematic, prior: {}, median: t => t.toxin },
 ];
 
+// Egg-layers whose clutches can be found and eaten: kg in a find, and where the clutch is.
+const EGGS = {
+  groundbird: { kg: 0.25, nest: 'a clutch in a scrape on the ground' },
+  songbird: { kg: 0.03, nest: 'a few small eggs in a cup nest' },
+  lizard: { kg: 0.02, nest: 'a clutch of leathery eggs under a stone' },
+};
 const parasiteLabel = p => (p < 0.12 ? 'safe' : p < 0.3 ? 'some parasite risk' : 'high parasite risk');
 
 function animalArchetype(r, key, env) {
@@ -704,6 +710,8 @@ function buildAnimal(seed, id, t, env, namer, mc, callsUsed) {
   const chemCls = ['grub', 'termite', 'wasp'].includes(t.key) ? 'fattyGrub' : ['mussel', 'crayfish', 'snail'].includes(t.key) ? 'shellfish' : 'invertebrate';
   const chem = food && !vertebrate ? sampleComposition(cr, chemCls, { extraCompounds: [{ kind: 'parasites', p: 1, dose: [t.parasite * 0.8, t.parasite * 1.4] }, ...(t.biotoxin ? [{ kind: 'biotoxin', p: 0.5, dose: [0.1, 0.4] }] : []), ...(t.toxin > 0 ? [{ kind: 'alkaloid', p: 1, dose: [t.toxin / 1.3, t.toxin / 1.3] }] : [])] }) : null;
   const honeyChem = t.key === 'bee' ? sampleComposition(cr.fork('honey'), 'honey') : null;
+  // eggs: shell-borne germs (killed by cooking) at about half the adults' parasite load
+  const eggs = EGGS[t.key] ? { chem: { ...sampleComposition(cr.fork('egg'), 'egg', { extraCompounds: [{ kind: 'parasites', p: 1, dose: [t.parasite * 0.35, t.parasite * 0.6] }] }), gather: EGGS[t.key].kg }, food: { raw: parasiteLabel(t.parasite * 0.5), cooked: 'safe' }, nest: EGGS[t.key].nest } : null;
 
   const deliberate = [];
   if (food) deliberate.push(['Eat raw / cooked, wait a few days', `${raw} / ${cooked}`]);
@@ -750,7 +758,7 @@ function buildAnimal(seed, id, t, env, namer, mc, callsUsed) {
     unit: T.unit, traits: t, habitats, perKm2,
     varying: t.varying, variation: summarize(seed, id, t.varying, sites, env, mc), signs,
     cues, fieldTests, deliberate, food,
-    catch: T.catch, products: T.products, nutrition: T.nutrition, season: T.season, smell: T.smell ?? null, chem, honeyChem,
+    catch: T.catch, products: T.products, nutrition: T.nutrition, season: T.season, smell: T.smell ?? null, chem, honeyChem, eggs,
     defense: T.defense ?? null, danger: T.danger ?? null,
   };
 }
