@@ -17,15 +17,31 @@ const BASE = 1 / 150; // per hour, easy unfamiliar ground by day, rested
 const UNDERFOOT = { scree: 3, outcrop: 2, deadfall: 1.8, streambed: 1.8, claybank: 1.6, pond: 1.5, spring: 1.3, woodland: 1.2, edge: 1.1, streambank: 1.2, glade: 1, lake: 1 };
 const WEATHER = { rain: 1.6, storm: 2, snow: 2, blizzard: 3, fog: 1.2 };
 
-// injuries per hour on this cell. env: { lux, weather } (sky.js); body: { fatigue, energy, sick, limp };
-// familiar: walked this cell before.
-export function hazard(L, c, env, body, familiar) {
+// The factors behind the risk on this cell, each a multiplier (1: no effect), and the rate itself
+// (injuries per hour). env: { lux, weather, snowCm, litter } (sky.js, ground.js); body: { fatigue,
+// energy, sick, limp }; familiar: walked this cell before.
+export function hazardFactors(L, c, env, body, familiar) {
   const micro = L.micro[c];
-  const ground = (1 + 12 * Math.max(0, L.slope[c] - 0.08)) * (UNDERFOOT[micro] ?? 1) * (L.chan[c] >= 3 ? 1.5 : 1);
-  const light = 1 + 9 * Math.pow(1 - seeingNear(env.lux * (1 - 0.75 * L.veg[c])), 1.5);
-  const weather = (WEATHER[env.weather] ?? 1) * (['rain', 'storm'].includes(env.weather) && ['scree', 'outcrop', 'claybank', 'streambed'].includes(micro) ? 1.4 : 1);
-  const b = (1 + 1.5 * body.fatigue ** 2) * (1 + 2 * Math.max(0, 0.3 - body.energy) / 0.3) * (1 + 1.5 * body.sick) * (1 + (body.limp ?? 0));
-  return BASE * ground * light * weather * b * (familiar ? 0.5 : 1);
+  const f = {
+    steep: 1 + 12 * Math.max(0, L.slope[c] - 0.08),
+    underfoot: (UNDERFOOT[micro] ?? 1) * (L.chan[c] >= 3 ? 1.5 : 1),
+    dark: 1 + 9 * Math.pow(1 - seeingNear(env.lux * (1 - 0.75 * L.veg[c])), 1.5),
+    weather: (WEATHER[env.weather] ?? 1) * (['rain', 'storm'].includes(env.weather) && ['scree', 'outcrop', 'claybank', 'streambed'].includes(micro) ? 1.4 : 1),
+    snow: 1 + Math.min(1, (env.snowCm ?? 0) / 30), // snow hides the holes and the roots
+    litter: 1 + 0.15 * (env.litter ?? 0),
+    tired: 1 + 1.5 * body.fatigue ** 2,
+    hungry: 1 + 2 * Math.max(0, 0.3 - body.energy) / 0.3,
+    sick: 1 + 1.5 * body.sick,
+    limp: 1 + (body.limp ?? 0),
+    unfamiliar: familiar ? 1 : 2,
+  };
+  return { factors: f, rate: BASE / 2 * Object.values(f).reduce((a, b) => a * b, 1) };
+}
+export const hazard = (L, c, env, body, familiar) => hazardFactors(L, c, env, body, familiar).rate;
+// The likeliest reasons, biggest first: the factors adding half again or more to the risk (a strange place counts
+// for less, being nearly everywhere at first), at most two.
+export function injuryReasons(factors) {
+  return Object.entries(factors).map(([k, v]) => [k, k === 'unfamiliar' ? 1.6 : v]).filter(([, v]) => v >= 1.5).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k]) => k);
 }
 
 // What kind of hurt, given where it happened (a cell) and a random stream.

@@ -209,7 +209,10 @@ export function generateLandscape(world) {
       const kind = slope[c] > 0.15 ? 'rockfall' : veg[c] > 0.55 ? 'deadfall' : 'ford';
       crossing[c] = { ford: 1, deadfall: 2, rockfall: 3 }[kind];
       features.crossings.push({ x, y, kind, size: chan[c] });
-    } }
+    }
+    // how high above the stream bed a way over stands: a log 0.5–1.1 m, boulders 0.3–0.7 m; a ford is on the bed
+    const hr = rng.fork('crossing-heights');
+    for (const q of features.crossings) q.height = Math.round((q.kind === 'deadfall' ? hr.uniform(0.5, 1.1) : q.kind === 'rockfall' ? hr.uniform(0.3, 0.7) : 0) * 100) / 100; }
   features.lakes = components(c => lake[c] === 1).filter(g => g.length >= 3).map(g => ({ cells: g.length, x: avg(g, 'x'), y: avg(g, 'y'), areaHa: Math.round(g.length * CELL * CELL / 1e4) }));
   features.escarpments = components(c => slope[c] > 0.35).filter(g => g.length >= 6).map(g => ({ cells: g.length, x: avg(g, 'x'), y: avg(g, 'y') }));
 

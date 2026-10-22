@@ -20,6 +20,7 @@
 // Numbers are judgement anchored on familiar values (full moon about 0.25 lux, overcast noon a few
 // thousand, civil twilight's end about 3), to be tuned, not measurements.
 import { makeRng, clamp } from './rng.js';
+import { windFor } from './smell.js';
 
 const RAD = Math.PI / 180, STEP = 3; // hours per weather step
 export const SYNODIC = 29.53;
@@ -78,7 +79,7 @@ export function moonWords(phase) {
 
 // ------------------------------------------------------------ weather
 // how much more (or less) it rains at this time of year than on average
-function rainFactor(world, doy) {
+export function rainFactor(world, doy) {
   const cal = calendar(world), s = world.environment.seasonality;
   return cal.monsoon ? 1 + 0.9 * s * Math.cos(2 * Math.PI * (doy - 200) / 365) // the wet season peaks in high summer
     : 1 + 0.15 * Math.cos(2 * Math.PI * (doy - 15) / 365); // a little wetter in winter
@@ -131,6 +132,16 @@ export function dailyMeanTemp(world, day) {
 export function temperature(world, day, t, weather = null) {
   const w = weather ?? weatherAt(world, day, t);
   return dailyMeanTemp(world, day) + DIURNAL[w] / 2 * Math.sin(2 * Math.PI * (t - 9) / 24) - (w === 'rain' || w === 'storm' ? 1.5 : 0);
+}
+
+// ------------------------------------------------------------ wind
+// The day's wind (smell.js windFor: a prevailing direction with a daily swing, and a strength), made
+// stronger by storms and calmer on clear nights and in fog. ms: metres per second, about.
+const GUST = { storm: 1.8, blizzard: 2, rain: 1.2, snow: 1.1, fog: 0.3 };
+export function windAt(world, day, t) {
+  const w = windFor(world, day), k = weatherAt(world, day, t), night = sunAltitude(world, day, t) < 0;
+  const strength = clamp(w.strength * (GUST[k] ?? (night && k === 'clear' ? 0.6 : 1)), 0.05, 1);
+  return { from: w.from, strength, ms: Math.round(strength * 120) / 10 };
 }
 
 // ------------------------------------------------------------ light and seeing

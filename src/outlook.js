@@ -5,7 +5,7 @@
 //   water  a handful of quick trial runs of the opening: scan; walk toward the loudest or nearest water
 //          cue; failing that climb to the lookout and look; failing that strike out in a random direction.
 //          Report the median.
-//   food   a back-of-envelope: each attempt is a short walk, a survey and a gathering, at a site drawn from
+//   food   a back-of-envelope (only what's in season on day 1): each attempt is a short walk, a survey and a gathering, at a site drawn from
 //          the microhabitats around the spawn; it succeeds if a meal-sized food that is safe raw is there
 //          and the beginner happens to try it rather than an unsafe one. Report the median wait.
 //   fire   the closed-form fire estimate (craft.js `estimateFire`), median day.
@@ -14,6 +14,9 @@ import { makeRng } from './rng.js';
 import { perceive, suspicionFrom, walk, isLookout } from './geo.js';
 import { N, CELL } from './landscape.js';
 import { nutrients, harm, expose, PREP } from './food.js';
+import { groundAt } from './ground.js';
+import { partNow } from './phenology.js';
+import { animalNow } from './life.js';
 
 const idx = (x, y) => y * N + x;
 const WATER = ['falls', 'cascade', 'rapids', 'river', 'stream', 'brook', 'river trace', 'lake', 'waterfowl'];
@@ -71,9 +74,11 @@ export function estimateFood(world, L, spawn) {
   // what can be had with bare hands, and whether it is safe raw (no fire yet)
   // net energy of half an hour's gathering, eaten raw (no fire yet), from each food's make-up
   const raw = chem => ({ kcal: nutrients(chem, chem.gather).net, safe: harm(chem) < 0.12 && !(chem.compounds.parasites > 0.3) });
+  // only what's in season on day 1 (phenology.js), and creatures that are about (life.js)
+  const g = groundAt(world, 1), cond = { doy: g.doy, meanC: g.meanC, weather: 'cloudy', wet: false };
   const options = [
-    ...world.plants.flatMap(p => p.parts.filter(x => x.food && x.chem && !/cutting edge|digging stick/.test(x.collect ?? '')).map(x => ({ ...raw(x.chem), habitats: p.habitats }))),
-    ...world.animals.filter(a => a.cls === 'invertebrate' && a.chem && /^easy/.test(a.catch ?? '')).map(a => ({ ...raw(a.chem), habitats: a.habitats })),
+    ...world.plants.flatMap(p => p.parts.filter(x => x.food && x.chem && !/cutting edge|digging stick/.test(x.collect ?? '') && partNow(world, p, x.part, g) >= 0.15).map(x => ({ ...raw(x.chem), habitats: p.habitats }))),
+    ...world.animals.filter(a => a.cls === 'invertebrate' && a.chem && /^easy/.test(a.catch ?? '') && animalNow(a, cond).here).map(a => ({ ...raw(a.chem), habitats: a.habitats })),
   ].filter(o => o.kcal >= MEAL);
   // microhabitats within ~1.5 km of the spawn
   const share = {}; let n = 0;

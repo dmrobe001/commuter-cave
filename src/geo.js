@@ -158,7 +158,8 @@ export function hear(L, pos, { time = 'day', boost = 1 } = {}) {
   let closeKey = null;
   for (const a of A) {
     if (a.birds && time === 'night') continue;
-    const R = a.range * quiet * boost * (1 - 0.35 * vegHere) * (a.birds ? (time === 'day' ? 0.45 : 1) : 1);
+    const R = a.range * quiet * boost * (1 - 0.35 * vegHere) * (a.birds ? (time === 'day' ? 0.45 : 1) : L.dyn?.sound(a) ?? 1);
+    if (!R) continue; // a dry bed makes no sound
     const d = Math.max(30, distM(pos, a));
     if (d > 3 * R) continue; // under a ninth of threshold: negligible even when summed
     if (!a.birds && d < 120) closeKey = a.key;
@@ -222,11 +223,15 @@ export const distWords = (d, channel) => (channel === 'sound'
 // Tobler's hiking function (km/h) slowed by vegetation; uphill and steep ground are slow.
 // getting over a stream or river: about five minutes of wading, a minute at a ford, log or boulders
 export const crossHours = (L, c) => (L.chan[c] >= 2 ? (L.crossing?.[c] ? 0.015 : 0.08) : 0);
+// L.dyn (optional): the land as it is now, set by the game from ground.js. cross(c): { hours, swept } for
+// getting over the water at c; slow(c): how much snow or the like slows walking there (1 none);
+// sound(a): how loud a water landmark is now (0 dry .. more in flood). Without it, an average day.
 export function stepHours(L, a, b) {
   const d = Math.hypot(b.x - a.x, b.y - a.y) * CELL;
   const slope = (L.elev[idx(b.x, b.y)] - L.elev[idx(a.x, a.y)]) / d;
   const kmh = 6 * Math.exp(-3.5 * Math.abs(slope + 0.05)) * (1 - 0.5 * L.veg[idx(b.x, b.y)]);
-  return d / 1000 / Math.max(kmh, 0.6) + crossHours(L, idx(b.x, b.y));
+  const c = idx(b.x, b.y), dyn = L.dyn;
+  return d / 1000 / Math.max(kmh, 0.6) * (dyn?.slow(c) ?? 1) + (dyn ? dyn.cross(c).hours : crossHours(L, c));
 }
 
 // Walk toward a believed target. Heading error accumulates (path integration) unless `resense`
@@ -284,7 +289,7 @@ function goalField(L, aim, from, M = 25, shoreWeight = 0.2) {
 // the way is skirted, to the far side nearest the aim. Cliffs are skirted where possible (goalField).
 export function walk(L, from, target, { maxHours = 3, rng, resense = null, arrived = null, stopAtWater = false, driftSd = 2.5, toWater = false } = {}) {
   let p = { ...from }, hours = 0, drift = 0;
-  const path = [p], crossings = [];
+  const path = [p], crossings = [], sweeps = [];
   let aim = { ...target };
   // Cells already trodden on this walk count against stepping there again. Without this, greedy
   // steps get trapped in a bay of a lake (or any concave obstacle), shuttling between two cells until
@@ -325,14 +330,20 @@ export function walk(L, from, target, { maxHours = 3, rng, resense = null, arriv
     p = best;
     path.push(p);
     trod.set(idx(p.x, p.y), (trod.get(idx(p.x, p.y)) ?? 0) + 1);
+    const swept = L.chan[idx(p.x, p.y)] ? L.dyn?.cross(idx(p.x, p.y)).swept ?? 0 : 0;
+    if (swept) { // the current has me: carried downstream until I can claw out (or the water ends)
+      const from = { ...p };
+      for (let k = 0; k < swept; k++) { const d = L.down[idx(p.x, p.y)]; if (d < 0 || L.lake[d]) break; p = { x: d % N, y: (d / N) | 0 }; path.push(p); hours += 0.02; }
+      sweeps.push({ from, to: { ...p } });
+    }
     const ch = L.chan[idx(p.x, p.y)];
     if (ch && (!crossings.length || Math.hypot(crossings[crossings.length - 1].x - p.x, crossings[crossings.length - 1].y - p.y) > 3)) {
       crossings.push({ ...p, size: ch });
-      if (stopAtWater) break;
+      if (stopAtWater && L.dyn?.cross(idx(p.x, p.y)).how !== 'dry') break; // a dry bed won't slake thirst
     }
     if (arrived && arrived(p)) break;
   }
-  return { end: p, hours, path, crossings };
+  return { end: p, hours, path, crossings, sweeps };
 }
 
 // Follow water downstream or up the largest feeder (from a lake shore, up an inflowing stream).
@@ -368,7 +379,7 @@ export function followStage(L, from, dir, { branch = null, maxHours = 0.25 } = {
     }
     if (L.lake[idx(next.x, next.y)]) return { end: p, hours, path, why: 'lake' };
     // picking a way along the bank (no wading across, so none of stepHours's crossing time)
-    hours += (stepHours(L, p, next) - crossHours(L, idx(next.x, next.y))) * 1.15;
+    hours += (stepHours(L, p, next) - (L.dyn ? L.dyn.cross(idx(next.x, next.y)).hours : crossHours(L, idx(next.x, next.y)))) * 1.15;
     p = next;
     path.push(p);
     const n = idx(p.x, p.y);

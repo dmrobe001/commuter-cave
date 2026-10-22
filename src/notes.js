@@ -19,6 +19,7 @@ import { makeRng, clamp } from './rng.js';
 import { samplePatch } from './generator.js';
 import { siteFactors } from './variation.js';
 import { animalNow } from './life.js';
+import { plantNow } from './phenology.js';
 
 export function newMemory() {
   return { visits: 0, factors: {}, entities: {}, micro: {}, water: {}, signs: {}, recent: [], last: null, names: {} };
@@ -313,8 +314,12 @@ export function namingSentences(es, memory, site, byId, r) {
 // cond (optional): { doy, meanC, weather, wet, light (0..1: how well detail close by can be made out),
 // hearing (0..1: what rain leaves of it) }. Sight of anything (plants, animals, tracks, droppings)
 // scales with light; calls don't, but rain drowns them; animals follow their seasons (life.js animalNow).
+// cond may also carry g (ground.js: the season's state, for plants in leaf, flower, fruit or died back),
+// snowCm and litter here (hiding things on the ground; fresh snow showing tracks, leaves hiding them),
+// and freshSnow (fallen in the last day or so).
 export function observeSite(world, memory, { site, micro, skill = 0.5, time = 'day', cond = null }) {
-  const light = cond?.light ?? 1, hearing = cond?.hearing ?? 1;
+  const light = cond?.light ?? 1, hearing = cond?.hearing ?? 1, snow = cond?.snowCm ?? 0, litter = cond?.litter ?? 0;
+  const lowCover = (1 - Math.min(1, snow / 20)) * (1 - 0.5 * litter); // what's left showing of things on the ground
   const env = world.environment;
   const all = [...world.stones, ...world.plants, ...world.animals];
   const byId = id => all.find(x => x.id === id);
@@ -335,6 +340,9 @@ export function observeSite(world, memory, { site, micro, skill = 0.5, time = 'd
     if (z !== null && Math.abs(z) > 1.1) charBits.push({ score: Math.abs(z), key: `f-${k}-${z > 0 ? 'up' : 'down'}-rel`, words: FACTOR_WORDS[k][z > 0 ? 'up' : 'down'].rel });
     else if (z === null && Math.abs(perceived[k]) > 1.4) charBits.push({ score: Math.abs(perceived[k]) - 0.3, key: `f-${k}-${dir}-abs`, words: FACTOR_WORDS[k][dir].abs });
   }
+  if (snow > 3) charBits.push({ score: 2.5, key: 'snow', words: [snow < 12 ? 'a skin of snow on the ground' : snow < 35 ? 'snow over my ankles' : snow < 70 ? 'knee-deep snow' : 'deep snow, heavy going'] });
+  else if (litter > 0.45 && light >= 0.35) charBits.push({ score: 1.6, key: 'litter', words: ['dead leaves thick underfoot', 'ankle-deep in fallen leaves'] });
+  if (cond?.g && cond.g.leaf < 0.3 && ['woodland', 'edge', 'deadfall'].includes(micro) && light >= 0.35 && world.plants.some(x => x.form === 'tree' && x.traits.deciduous)) charBits.push({ score: 1.4, key: 'bare', words: ['bare branches overhead', 'the trees bare'] });
   const sr = makeRng(`${world.seed}/terrain/${site}`);
   const slope = clamp(env.relief + 0.35 * sr.normal() + (['scree', 'outcrop'].includes(micro) ? 0.3 : 0));
   if (slope > 0.8) charBits.push({ score: 1.2, key: 'slope-steep', words: ['steep going', 'a stiff climb'] });
@@ -359,7 +367,9 @@ export function observeSite(world, memory, { site, micro, skill = 0.5, time = 'd
     if (!ar.chance(1 - Math.exp(-count / 2))) continue;
     const now = e.kind === 'animal' && cond ? animalNow(e, cond) : null;
     if (now && !now.here) continue; // overwintering out of sight
-    let p = NOTICE[e.kind === 'stone' ? 'stone' : e.form ?? e.cls] * skillF * light * (now?.seen ?? 1);
+    const low = ['herb', 'grass', 'moss', 'lichen', 'mushroom'].includes(e.form) || e.kind === 'stone' || e.kind === 'animal';
+    const look = cond?.g && e.kind === 'plant' ? plantNow(world, e, cond.g) : null; // flowers and fruit catch the eye; a died-back herb doesn't
+    let p = NOTICE[e.kind === 'stone' ? 'stone' : e.form ?? e.cls] * skillF * light * (now?.seen ?? 1) * (look?.notice ?? 1) * (low ? lowCover : 1);
     if (!r.chance(clamp(p))) continue;
     sightings.push({ e, logCount: Math.log(count + 1) + r.normal(0, 0.2) });
   }
@@ -383,7 +393,7 @@ export function observeSite(world, memory, { site, micro, skill = 0.5, time = 'd
     if (presentNow && !seen && e.traits.wariness > 0.5 && s.speed > 0.6 && r.chance(0.3)) bolted = bolted ?? e;
     if (presentNow && s.call && active && r.chance(clamp(0.6 * (now?.calls ?? 1) * hearing))) signObs.push({ e, channel: 'call', seenToo: seen, callDesc: now ? now.callNow(r) : s.call });
     if (!r.chance(recent)) continue;
-    const trackP = (TRACK_GROUND[micro] ?? 0.4) * (0.4 + 0.6 * skill) * light * (cond?.wet ? 0.3 : 1); // rain fills and blurs prints
+    const trackP = (snow > 2 ? (cond.freshSnow ? 1.2 : 0.8) : (TRACK_GROUND[micro] ?? 0.4) * (1 - 0.6 * litter)) * (0.4 + 0.6 * skill) * light * (cond?.wet ? 0.3 : 1); // prints show in snow, hide under leaves; rain blurs them
     if (s.track && r.chance(trackP)) {
       const g = samplePatch(world, e.id, site, micro).traits.groupSize;
       signObs.push({ e, channel: 'track', seenToo: seen, cm: Math.round(2 * s.track.lengthCm * Math.exp(r.normal(0, 0.08))) / 2, group: g ? Math.max(1, Math.round(g * Math.exp(r.normal(0, 0.25)))) : null });

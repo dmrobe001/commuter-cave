@@ -117,7 +117,7 @@ function step() {
   if (/Very hungry|Starving/.test(b) && !/Full\./.test(b)) { // hungry for days still, but a full stomach can't take more now
     const safe = items().find(i => i.el.querySelector('[data-eat]') && !/sick/.test(i.imp));
     if (safe) { safe.el.querySelector('[data-eat]').click(); return true; }
-    if (collect(/^(Nuts|Fruits|Berries|Pods|Seed heads|Small creatures|Tubers|Bulbs|Corms|Taproots)/, t => !/sick/.test(t))) return true;
+    for (const re of [/^(Eggs|Small creatures|Nuts|Fruits|Berries|Pods|Seed heads|Tubers|Bulbs|Corms|Taproots)/, /^(Flowers|Stems|Leaves)/]) if (collect(re, t => !/sick/.test(t))) return true; // the calorie-dense first; greens only if that's all (in spring there may be nothing ripe)
   }
   // light work when hands or body need a rest
   if (/raw|Exhausted/.test(b)) {
