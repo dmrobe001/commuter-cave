@@ -44,10 +44,12 @@ setTimeout(() => {
   // 3. the water milestone lands on reaching a heard stream (seed wgxdd, first suspect)
   P.d.querySelector('#replay-text').value = JSON.stringify({ game: 'hands-and-knowledge', seed: 'wgxdd', preset: '', actions: [{ d: { hike: 'u1' } }] });
   P.d.querySelector('#replay').click();
-  const L = log(P), i = L.findIndex(t => /^Found water\./.test(t)), j = L.findIndex(t => /There’s water|Stream bank/.test(t));
+  const L = log(P), i = L.findIndex(t => /^Found water\./.test(t)), j = L.findIndex(t => /There’s water|Stream bank|Gravel bar/.test(t));
   check(i >= 0 && i <= j, 'water found on reaching the stream');
 
   // 3b. food: gather, pound, soak or leach, taste, eat; the exact-properties view
+  // (back in the wood where I woke, which has berries; the stream bed has nothing to eat)
+  tap(P, '[data-hike]', /where I woke/);
   const foodBefore = S().inv.filter(i => i.kind === 'food').length;
   tap(P, '[data-here="collect"]'); if (tap(P, '[data-pk="part"]', /to eat/)) tap(P, '.picker [data-gather]'); tap(P, '[data-pk="close"]');
   tap(P, '[data-here="collect"]'); if (tap(P, '[data-pk="part"]', /stone/i)) tap(P, '.picker [data-gather]'); tap(P, '[data-pk="close"]');

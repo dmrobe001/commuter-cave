@@ -241,11 +241,12 @@ function mapHours(from, key, target) {
   return e ? e.hours : lineHours(S.L, from, target);
 }
 
-// Sites are real positions. Reuse a known site within a cell rather than making a near-duplicate.
+// Sites are real positions. Reuse a known site within a cell rather than making a near-duplicate,
+// but only one of the same kind of ground: the bank of a stream is not the wood beside it.
 function newSite(x, y, name) {
-  const near = S.sites.find(t => Math.abs(t.x - x) <= 1 && Math.abs(t.y - y) <= 1);
+  const micro = microAt(x, y), wet = !!S.L.chan[cellOf(x, y)];
+  const near = S.sites.find(t => Math.abs(t.x - x) <= 1 && Math.abs(t.y - y) <= 1 && t.micro === micro && !!S.L.chan[cellOf(t.x, t.y)] === wet);
   if (near) return near;
-  const micro = microAt(x, y);
   const s = { key: `p${x}_${y}`, x, y, micro, name: name ?? uniqueName(SITE_NOUN[micro] ?? micro, { x, y }, looksOf('site', x, y)), known: new Set(), visits: 0, hut: false, fireUntil: -1 };
   S.sites.push(s);
   return s;
@@ -418,6 +419,9 @@ function arrive(x, y, how, onTheWay = null) {
     look(s, 0.4);
     sense(s);
   }
+  // Something first noticed just now (heard on arrival, say) that I'm already standing at isn't a
+  // landmark to head for: it's here.
+  for (const u of S.suspects) if (!u.reached && atTarget({ x, y }, { truePos: u.truePos, sus: u })) u.reached = true;
 }
 
 // The first water of the game, however it is met: arriving at it, crossing it, or spotting it nearby.
@@ -490,6 +494,12 @@ function targetInfo(target) {
   const fr = target.frontier ? frontierPoints().find(f => f.key === target.frontier) : null;
   return { sus, dest, fr, truePos: sus?.truePos ?? dest ?? fr, name: sus?.label ?? dest?.name ?? fr?.name ?? 'there' };
 }
+// Standing in it: on a stream or river of it, or on the shore of a lake of it (where I can drink).
+function onWater(p, want) {
+  if (S.L.chan[cellOf(p.x, p.y)] && waterKeyAt(S.L, p.x, p.y) === want) return true;
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const x = p.x + dx, y = p.y + dy; if (x >= 0 && y >= 0 && x < GN && y < GN && S.L.lake[cellOf(x, y)] && waterKeyAt(S.L, x, y) === want) return true; }
+  return false;
+}
 // Am I at it? For water, being at its edge counts: a lake or a river is bigger than its marker.
 function atTarget(p, info) {
   if (!info.truePos) return false;
@@ -533,18 +543,24 @@ function travelTo(target, label) {
   const thirsty = S.hyd < 0.55;
   let n = 0;
   const { sus, dest, truePos } = targetInfo(target);
-  const resense = sus ? p => { if (++n % 6) return null; const c = perceive(S.L, p, { time: timeOfDay() }).find(k => k.key === sus.trueKey); return c ? suspicionFrom(c, p, S.rng).est : null; } : null;
+  // Homing: every few steps (or when asked outright) a fresh fix on the target, if I can still see or hear it.
+  const resense = sus ? (p, force) => { if (++n % 3 && !force) return null; const c = perceive(S.L, p, { time: timeOfDay() }).find(k => k.key === sus.trueKey); return c ? suspicionFrom(c, p, S.rng).est : null; } : null;
+  const want = sus?.group === 'water' ? waterKeyOf(sus.trueKey) : null;
+  const arrived = sus ? p => (want && /^(lake|river|brook)-/.test(want) ? onWater(p, want) : atTarget(p, { truePos, sus })) : null;
   const predicted = mapHours(from, sus ? sus.id : dest ? dest.key : target.frontier, target);
-  const trip = walk(S.L, from, target, { rng: S.rng, maxHours: 3, resense, stopAtWater: thirsty, driftSd: dest ? 1.5 : 2.5 });
+  const trip = walk(S.L, from, target, { rng: S.rng, maxHours: 3, resense, arrived, stopAtWater: thirsty, driftSd: dest ? 1.5 : 2.5 });
   const knownBefore = S.sites.length;
   const hours = trip.hours * (S.looking ? 1.25 : 1); // looking as I go slows me down
   if (S.looking) S.ch.focus = clamp(S.ch.focus - 0.05);
   pass(hours, 300);
   const { names, keys } = noteCrossings(trip);
   const dur = timeWords(hours, 'known');
-  const stoppedAtWater = thirsty && trip.crossings.length && trip.end.x === trip.crossings[trip.crossings.length - 1].x && trip.end.y === trip.crossings[trip.crossings.length - 1].y;
+  const last = trip.crossings[trip.crossings.length - 1], endsOnWater = !!last && trip.end.x === last.x && trip.end.y === last.y;
+  const stoppedAtWater = thirsty && endsOnWater;
+  const before = new Set(trip.crossings.slice(0, endsOnWater ? -1 : undefined).map(c => waterKeyAt(S.L, c.x, c.y)));
+  const crossed = names.filter((_, i) => before.has(keys[i])); // water I ended up in wasn't crossed
   const where = S.L.veg[cellOf(trip.end.x, trip.end.y)] > 0.55 ? 'thick woodland' : S.L.veg[cellOf(trip.end.x, trip.end.y)] > 0.3 ? 'scrubby woodland' : 'open ground';
-  const text = `${S.looking ? 'Walked, watching for ' + S.looking.label + ',' : 'Pushed'} ${label} for ${dur}, through ${where}${names.length ? `; crossed ${names.join(' and ')}` : ''}.${stoppedAtWater ? ' Parched, I stopped at the water.' : ''}${hours >= 2.9 && !stoppedAtWater ? ' Stopped to get my bearings.' : ''}`;
+  const text = `${S.looking ? 'Walked, watching for ' + S.looking.label + ',' : 'Pushed'} ${label} for ${dur}, through ${where}${crossed.length ? `; crossed ${crossed.join(' and ')}` : ''}.${stoppedAtWater ? ' Parched, I stopped at the water.' : ''}${hours >= 2.9 && !stoppedAtWater ? ' Stopped to get my bearings.' : ''}`;
   const reached = atTarget(trip.end, targetInfo(target));
   arrive(trip.end.x, trip.end.y, text, () => { notePassing(trip.path); lookAlong(trip.path); });
   rememberTrip(from, trip.path, hours, trip.crossings, knownBefore);
@@ -1942,7 +1958,7 @@ if (typeof document !== 'undefined') {
 // Everything that happens follows from the world seed and the player's choices, so a record of the
 // seed and each choice reproduces a game exactly. Each action is the data of what was tapped (or
 // the value chosen); `act` applies one, and replaying a record runs them in order on a fresh game.
-const BUILD = 'hk-2026-10-22a'; // game logic version: a record replays faithfully only on the build that made it
+const BUILD = 'hk-2026-10-22b'; // game logic version: a record replays faithfully only on the build that made it
 function record(d) {
   S.record ??= [];
   S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });

@@ -222,7 +222,9 @@ export function stepHours(L, a, b) {
 }
 
 // Walk toward a believed target. Heading error accumulates (path integration) unless `resense`
-// returns a fresh estimate. Stops on arrival, at maxHours, or (if stopAtWater) at the first water.
+// returns a fresh estimate (it is asked every few steps; with `force`, it must answer now). Stops when
+// `arrived(p)` says I'm there, on reaching the believed spot when nothing sensed says it's further,
+// at maxHours, or (if stopAtWater) at the first water.
 // Walking distance to a point over dry ground: Dijkstra with a binary heap on the 8-neighbour grid.
 // An aim on a lake is reached at its shore. The search covers the ground between here and there
 // with room to go round things, and the whole map if that isn't enough.
@@ -262,7 +264,7 @@ function goalField(L, aim, from, M = 25) {
   return D;
 }
 
-export function walk(L, from, target, { maxHours = 3, rng, resense = null, stopAtWater = false, driftSd = 2.5 } = {}) {
+export function walk(L, from, target, { maxHours = 3, rng, resense = null, arrived = null, stopAtWater = false, driftSd = 2.5 } = {}) {
   let p = { ...from }, hours = 0, drift = 0;
   const path = [p], crossings = [];
   let aim = { ...target };
@@ -274,9 +276,13 @@ export function walk(L, from, target, { maxHours = 3, rng, resense = null, stopA
   // drift) and half by walking distance to the aim through passable ground.
   let field = goalField(L, aim, p), fieldFor = `${Math.round(aim.x)},${Math.round(aim.y)}`;
   for (let steps = 0; steps < 400 && hours < maxHours; steps++) {
-    if (Math.hypot(aim.x - p.x, aim.y - p.y) <= 1.5) { // finish on the spot itself
-      if ((aim.x !== p.x || aim.y !== p.y) && !L.lake[idx(aim.x, aim.y)]) { hours += stepHours(L, p, aim); p = { x: aim.x, y: aim.y }; path.push(p); }
-      break;
+    if (Math.hypot(aim.x - p.x, aim.y - p.y) <= 1.5) { // at the believed spot: still sensing it further on? then home in on that
+      const fresh = resense ? resense(p, true) : null;
+      if (fresh && Math.hypot(fresh.x - p.x, fresh.y - p.y) > 1.5) { aim = fresh; drift = 0; }
+      else { // finish on the spot itself
+        if ((aim.x !== p.x || aim.y !== p.y) && !L.lake[idx(aim.x, aim.y)]) { hours += stepHours(L, p, aim); p = { x: aim.x, y: aim.y }; path.push(p); }
+        break;
+      }
     }
     drift += rng.normal(0, driftSd); // a known landmark in view keeps the heading true (small driftSd)
     if (resense) { const fresh = resense(p); if (fresh) { aim = fresh; drift *= 0.3; } }
@@ -302,6 +308,7 @@ export function walk(L, from, target, { maxHours = 3, rng, resense = null, stopA
       crossings.push({ ...p, size: ch });
       if (stopAtWater) break;
     }
+    if (arrived && arrived(p)) break;
   }
   return { end: p, hours, path, crossings };
 }
