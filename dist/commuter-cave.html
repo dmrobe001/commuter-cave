@@ -142,6 +142,7 @@ button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 6
 .mapsvg .node.sel text { font-weight: 600; fill: var(--ochre); }
 .mapsvg .node text { fill: var(--ink); paint-order: stroke; stroke: var(--bg); stroke-width: calc(.25 * var(--u)); }
 .mapsvg .node circle.hit { fill: transparent; stroke: none; }
+.mapsvg .land { opacity: .65; pointer-events: none; }
 .map-list li { padding: .45rem 0; border-top: 1px solid var(--rule); }
 .map-list li.sel { background: var(--ochre-wash); }
 .map-list .place-head { display: flex; gap: .4rem; align-items: baseline; flex-wrap: wrap; }
@@ -3821,6 +3822,61 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const ok = (c) => !segments.some(([P, Q]) => P !== c && Q !== c && properCross(c, p, P, Q));
     return candidates.find(ok) ?? candidates[0];
   }
+  var SPOTS = [[1, 0], [-1, 0], [1, -1], [1, 1], [-1, -1], [-1, 1], [0, -1], [0, 1]];
+  function overlap(a, b) {
+    return Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)) * Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  }
+  function segHitsBox(a, b, box) {
+    let t0 = 0, t1 = 1;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    for (const [p, q] of [[-dx, a.x - box.x0], [dx, box.x1 - a.x], [-dy, a.y - box.y0], [dy, box.y1 - a.y]]) {
+      if (p === 0) {
+        if (q < 0)
+          return false;
+        continue;
+      }
+      const t = q / p;
+      if (p < 0) {
+        if (t > t1)
+          return false;
+        if (t > t0)
+          t0 = t;
+      } else {
+        if (t < t0)
+          return false;
+        if (t < t1)
+          t1 = t;
+      }
+    }
+    return true;
+  }
+  function placeLabels(labels, { boxes = [], segs = [], discs = [], bounds = null } = {}) {
+    const placed = [...boxes];
+    return labels.map((L) => {
+      let best = null;
+      SPOTS.forEach(([dx, dy], rank) => {
+        const gap = L.r + 0.25 * L.h, lift = dx && dy ? 0.35 : 1;
+        const x0 = dx > 0 ? L.x + gap : dx < 0 ? L.x - gap - L.w : L.x - L.w / 2;
+        const y0 = dy < 0 ? L.y - lift * gap - L.h : dy > 0 ? L.y + lift * gap : L.y - L.h / 2;
+        const box = { x0, y0, x1: x0 + L.w, y1: y0 + L.h }, unit = L.h * L.h;
+        let cost = 0.05 * rank * unit;
+        for (const b of placed)
+          cost += 10 * overlap(box, b);
+        if (bounds)
+          cost += 10 * (L.w * L.h - overlap(box, bounds));
+        for (const d of discs)
+          if (d.x !== L.x || d.y !== L.y)
+            cost += 6 * overlap(box, { x0: d.x - d.r, y0: d.y - d.r, x1: d.x + d.r, y1: d.y + d.r });
+        for (const [a, b] of segs)
+          if (segHitsBox(a, b, box))
+            cost += 0.4 * unit;
+        if (!best || cost < best.cost)
+          best = { cost, box };
+      });
+      placed.push(best.box);
+      return best.box;
+    });
+  }
   function segCross(p1, p2, q1, q2) {
     const d = (p2.x - p1.x) * (q2.y - q1.y) - (p2.y - p1.y) * (q2.x - q1.x);
     if (Math.abs(d) < 1e-9)
@@ -5550,6 +5606,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
   }
   function arrive(x, y, how, onTheWay = null) {
     const s = newSite(x, y);
+    markSeen(x, y, 20, { eye: 1.7 });
     noteTrail(S.mem, s.key);
     S.here = S.sites.indexOf(s);
     if (how)
@@ -5806,6 +5863,10 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       lookAlong(trip.path);
     });
     rememberTrip(from, trip.path, hours, trip.crossings, knownBefore);
+    trip.path.forEach((p, i) => {
+      if (i % 2 === 0)
+        markSeen(p.x, p.y, 3);
+    });
     if (!reached)
       missedTarget(target, from);
     else if (predicted) {
@@ -7201,10 +7262,75 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     S.ch.focus = clamp(S.ch.focus + 0.12 * hours);
     log(choice === "dusk" ? "Rested in the shade until dusk." : `Rested for ${hours === 1 ? "an hour" : `${hours} hours`}.`);
   }
+  function markSeen(x, y, r, view = null) {
+    S.seenLand ?? (S.seenLand = new Uint8Array(N * N));
+    let changed = false;
+    const at = { x: Math.round(x), y: Math.round(y) };
+    for (let dy = -r; dy <= r; dy++)
+      for (let dx = -r; dx <= r; dx++) {
+        const nx = at.x + dx, ny = at.y + dy, d = Math.hypot(dx, dy) / r;
+        if (nx < 0 || ny < 0 || nx >= N || ny >= N || d > 1)
+          continue;
+        let k = Math.min(1, 3.3 * (1 - d));
+        if (view && d * r > 2)
+          k *= Math.min(1, 1.5 * sightline(S.L, at, { x: nx, y: ny }, view.eye, 0.5));
+        const v = Math.round(255 * k), c = cellOf(nx, ny);
+        if (v > S.seenLand[c]) {
+          S.seenLand[c] = v;
+          changed = true;
+        }
+      }
+    if (changed)
+      S.seenVer = (S.seenVer ?? 0) + 1;
+  }
+  var canDraw = typeof document !== "undefined" && typeof navigator !== "undefined" && !/jsdom/i.test(navigator.userAgent);
+  function landImage() {
+    const mode = S.mapLand ?? "seen";
+    if (mode === "off" || !canDraw)
+      return null;
+    for (const t of S.sites)
+      if (!S.seenLand?.[cellOf(t.x, t.y)])
+        markSeen(t.x, t.y, 20, { eye: 1.7 });
+    const key = `${mode}/${S.seenVer ?? 0}`;
+    if (S.landMemo?.key === key)
+      return S.landMemo.url;
+    const cv = document.createElement("canvas");
+    cv.width = cv.height = N;
+    const ctx = cv.getContext("2d");
+    if (!ctx)
+      return null;
+    const img = ctx.createImageData(N, N), L = S.L, at = (x, y) => L.elev[cellOf(clamp(x, 0, N - 1), clamp(y, 0, N - 1))];
+    const CH = [[110, 160, 205], [70, 125, 195], [40, 95, 180]];
+    for (let y = 0; y < N; y++)
+      for (let x = 0; x < N; x++) {
+        const c = cellOf(x, y), shade = Math.max(0.35, Math.min(1.25, 1 - (at(x + 1, y) - at(x - 1, y) + at(x, y + 1) - at(x, y - 1)) / 60));
+        const v = L.veg[c];
+        let col = L.slope[c] > 0.35 ? [150, 140, 130] : [214 - 120 * v, 200 - 60 * v, 150 - 90 * v];
+        col = col.map((k) => k * shade);
+        if (L.lake[c])
+          col = [90, 140, 190];
+        else if (L.chan[c])
+          col = CH[L.chan[c] - 1];
+        img.data.set([...col.map((k) => clamp(Math.round(k), 0, 255)), mode === "all" ? 255 : S.seenLand?.[c] ?? 0], 4 * c);
+      }
+    ctx.putImageData(img, 0, 0);
+    S.landMemo = { key, url: cv.toDataURL() };
+    return S.landMemo.url;
+  }
+  var LAND_MODES = { seen: "Land: as I\u2019ve seen it", all: "Land: the whole map", off: "Land: none" };
   var MAP_PX = 15;
   function mapSide() {
     const r = document.querySelector("#map .mapsvg")?.getBoundingClientRect(), side = r ? Math.min(r.width, r.height) : 0;
     return side > 0 ? side : Math.min(document.querySelector("#map")?.clientWidth || 400, 576);
+  }
+  var measureCtx = null;
+  function textWidth(fs) {
+    if (canDraw && !measureCtx) {
+      measureCtx = document.createElement("canvas").getContext("2d");
+      if (measureCtx)
+        measureCtx.font = `${MAP_PX}px Archivo, "Helvetica Neue", Arial, sans-serif`;
+    }
+    return (t) => (measureCtx ? measureCtx.measureText(t).width / MAP_PX : 0.56 * t.length) * fs;
   }
   function mapHTML() {
     const M2 = mentalMap();
@@ -7213,9 +7339,29 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       return '<p class="hint">Nothing on my map yet but where I stand. Scan or look out.</p>';
     const xs = M2.nodes.filter((v) => !v.frontier).map((v) => v.x), ys = M2.nodes.filter((v) => !v.frontier).map((v) => v.y);
     let x0 = Math.min(...xs) - 4, y0 = Math.min(...ys) - 4, span = Math.max(Math.max(...xs) - x0 + 4, Math.max(...ys) - y0 + 4, 16);
+    x0 -= (span - (Math.max(...xs) + 4 - x0)) / 2;
+    y0 -= (span - (Math.max(...ys) + 4 - y0)) / 2;
     if (S.mapView)
       ({ x: x0, y: y0, span } = S.mapView);
     const fs = MAP_PX * span / mapSide();
+    const textW = textWidth(fs), shown = M2.nodes.map((v, i) => v.frontier ? null : { i, text: `${typo(v.name.replace(/^the /, ""))}${v.certainty === "unknown" ? "?" : ""}` }).filter(Boolean);
+    shown.sort((a, b) => (b.i === hi) - (a.i === hi) || (M2.nodes[b.i].site !== void 0) - (M2.nodes[a.i].site !== void 0));
+    const radius = (i) => fs * (i === hi ? 0.65 : M2.nodes[i].frontier ? 0.35 : 0.45);
+    const timeBoxes = M2.edges.flatMap((e) => {
+      const A = M2.nodes[e.a], B = M2.nodes[e.b], len = Math.hypot(A.x - B.x, A.y - B.y);
+      if (len <= fs * 4.5)
+        return [];
+      const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, w = fs * 2.2;
+      return [{ x0: mx - w / 2, y0: my - fs * 0.8, x1: mx + w / 2, y1: my + fs * 0.2 }];
+    });
+    const spots = placeLabels(shown.map(({ i, text }) => ({ x: M2.nodes[i].x, y: M2.nodes[i].y, r: radius(i), w: textW(text), h: fs })), {
+      boxes: timeBoxes,
+      segs: M2.edges.map((e) => [M2.nodes[e.a], M2.nodes[e.b]]),
+      discs: M2.nodes.map((v, i) => ({ x: v.x, y: v.y, r: radius(i) })),
+      bounds: { x0, y0, x1: x0 + span, y1: y0 + span }
+    });
+    const labelOf = new Map(shown.map((l, k) => [l.i, `<text x="${spots[k].x0}" y="${spots[k].y1 - fs * 0.22}" font-size="${fs}">${esc(l.text)}</text>`]));
+    const land = landImage();
     const E = M2.edges.map((e) => {
       const A = M2.nodes[e.a], B = M2.nodes[e.b], mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, len = Math.hypot(A.x - B.x, A.y - B.y);
       let ang = Math.atan2(B.y - A.y, B.x - A.x) * 180 / Math.PI;
@@ -7229,11 +7375,11 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const e = M2.edges.find((x) => x.a === hi && x.b === i || x.b === hi && x.a === i);
       const t = timeWords(e ? e.hours : lineHours2(S.L, here, v), e ? e.certainty : v.certainty === "known" ? "guess" : v.certainty);
       const say = i === hi ? `${cap3(v.name)} (here)` : `${v.site !== void 0 ? "Head back to" : "Head for"} ${v.name} (${t})`;
-      const label = v.frontier ? "" : `<text x="${v.x + fs * 0.8}" y="${v.y + fs * 0.35}" font-size="${fs}">${esc(typo(v.name.replace(/^the /, "")))}${v.certainty === "unknown" ? "?" : ""}</text>`;
+      const label = labelOf.get(i) ?? "";
       return `<g ${i === hi ? "" : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" class="node ${v.site !== void 0 ? "site" : v.frontier ? "frontier" : "sus"} ${v.certainty}${i === hi ? " here" : ""}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${fs * (i === hi ? 0.65 : v.frontier ? 0.35 : 0.45)}" stroke-width="${fs * 0.12}"/>${i === hi ? "" : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${label}</g>`;
     }).join("");
-    const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map of places and landmarks; north is up. Tap one to hike there.">${E}${Nd}</svg>`;
-    const tools = `<div class="map-tools"><small class="hint">Tap a place to hike there; tap several in turn to pick a route. Drag to pan; pinch or scroll to zoom.</small>${S.mapView ? '<button class="ghost" data-mapfit="1">Fit</button>' : ""}</div>`;
+    const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map of places and landmarks; north is up. Tap one to hike there.">${land ? `<image class="land" href="${land}" x="-0.5" y="-0.5" width="${N}" height="${N}" preserveAspectRatio="none"/>` : ""}${E}${Nd}</svg>`;
+    const tools = `<div class="map-tools"><small class="hint">Tap a place to hike there; tap several in turn to pick a route. Drag to pan; pinch or scroll to zoom.</small>${S.mapView ? '<button class="ghost" data-mapfit="1">Fit</button>' : ""}<button class="ghost" data-mapland="1">${LAND_MODES[S.mapLand ?? "seen"]}</button></div>`;
     return `${svg}${tools}<p class="hint">North is up. Filled dots: places I\u2019ve been. Rings: things I\u2019ve seen or heard. Small dotted rings: unexplored ground. Blue marks: streams I crossed, or think I\u2019d cross. Times are walking times; \u201C~\u201D is a guess, \u201C?\u201D I can\u2019t say.</p>`;
   }
   function hike(key) {
@@ -7310,6 +7456,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       case "lookout":
         pass(0.5, 200);
         sense(s, true);
+        markSeen(s.x, s.y, 50, { eye: lookoutEye(S.L, s) });
         if (!S.milestones.lookout) {
           S.milestones.lookout = true;
           log("A view at last.", "milestone");
@@ -7669,6 +7816,15 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     const d = b.dataset;
     if (d.tab) {
       tab = d.tab;
+      return render();
+    }
+    if (d.mapfit) {
+      S.mapView = null;
+      return render();
+    }
+    if (d.mapland) {
+      const m = Object.keys(LAND_MODES);
+      S.mapLand = m[(m.indexOf(S.mapLand ?? "seen") + 1) % m.length];
       return render();
     }
     if (d.record === "copy") {

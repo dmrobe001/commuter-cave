@@ -67,6 +67,48 @@ export function firstClear(p, candidates, segments) {
   return candidates.find(ok) ?? candidates[0];
 }
 
+// ------------------------------------------------------------ label placement
+
+// Where each label goes: tried at eight spots around its marker, in the order cartographers usually
+// prefer (right, left, above right, below right, above left, below left, above, below), and put at the
+// cheapest. Cost: overlap with labels already placed and with `boxes` (heavily), any part outside
+// `bounds` (the edge of the view; as heavily), markers in `discs`, lines in `segs` it would sit on,
+// and a little for each step down the order of preference.
+// Labels go in the order given, so the important ones get first pick.
+// labels: [{ x, y, r, w, h }] (marker centre and radius, label size); returns [{ x0, y0, x1, y1 }].
+const SPOTS = [[1, 0], [-1, 0], [1, -1], [1, 1], [-1, -1], [-1, 1], [0, -1], [0, 1]];
+function overlap(a, b) { return Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)) * Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0)); }
+function segHitsBox(a, b, box) { // Liang–Barsky: does segment a-b pass through the box?
+  let t0 = 0, t1 = 1;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  for (const [p, q] of [[-dx, a.x - box.x0], [dx, box.x1 - a.x], [-dy, a.y - box.y0], [dy, box.y1 - a.y]]) {
+    if (p === 0) { if (q < 0) return false; continue; }
+    const t = q / p;
+    if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; } else { if (t < t0) return false; if (t < t1) t1 = t; }
+  }
+  return true;
+}
+export function placeLabels(labels, { boxes = [], segs = [], discs = [], bounds = null } = {}) {
+  const placed = [...boxes];
+  return labels.map(L => {
+    let best = null;
+    SPOTS.forEach(([dx, dy], rank) => {
+      const gap = L.r + 0.25 * L.h, lift = dx && dy ? 0.35 : 1; // diagonal spots tuck in closer vertically
+      const x0 = dx > 0 ? L.x + gap : dx < 0 ? L.x - gap - L.w : L.x - L.w / 2;
+      const y0 = dy < 0 ? L.y - lift * gap - L.h : dy > 0 ? L.y + lift * gap : L.y - L.h / 2;
+      const box = { x0, y0, x1: x0 + L.w, y1: y0 + L.h }, unit = L.h * L.h;
+      let cost = 0.05 * rank * unit;
+      for (const b of placed) cost += 10 * overlap(box, b);
+      if (bounds) cost += 10 * (L.w * L.h - overlap(box, bounds));
+      for (const d of discs) if (d.x !== L.x || d.y !== L.y) cost += 6 * overlap(box, { x0: d.x - d.r, y0: d.y - d.r, x1: d.x + d.r, y1: d.y + d.r });
+      for (const [a, b] of segs) if (segHitsBox(a, b, box)) cost += 0.4 * unit;
+      if (!best || cost < best.cost) best = { cost, box };
+    });
+    placed.push(best.box);
+    return best.box;
+  });
+}
+
 // ------------------------------------------------------------ streams on edges
 
 function segCross(p1, p2, q1, q2) { // intersection point of two segments, or null

@@ -40,6 +40,9 @@ setTimeout(() => {
   check(S().sites.length >= 2, 'hikes make places');
   const labels = [...P.d.querySelectorAll('.etime')];
   check(labels.length && labels.every(t => /rotate/.test(t.getAttribute('transform'))), 'edge times are rotated');
+  const landButton = () => P.d.querySelector('[data-mapland]')?.textContent ?? '';
+  const landModes = [landButton()]; for (let k = 0; k < 3; k++) { tap(P, '[data-mapland]'); landModes.push(landButton()); }
+  check(/seen/.test(landModes[0]) && /whole map/.test(landModes[1]) && /none/.test(landModes[2]) && landModes[3] === landModes[0], 'the land button cycles seen, whole map, none');
 
   // 3. the water milestone lands on reaching a heard stream (seed wgxdd, first suspect)
   P.d.querySelector('#replay-text').value = JSON.stringify({ game: 'hands-and-knowledge', seed: 'wgxdd', preset: '', actions: [{ d: { hike: 'u1' } }] });

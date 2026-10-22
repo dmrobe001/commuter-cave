@@ -9,8 +9,8 @@ import { generateLandscape, N as GN, CELL } from './landscape.js';
 import { outlook } from './outlook.js';
 import { windFor, smellSources, smellAt } from './smell.js';
 import { cloneChem, expose, nutrients, harm, tasteWords, smellWords, textureWords, describeState, COMPOUNDS, PREP } from './food.js';
-import { chooseSpawn, perceive, suspicionFrom, walk, followWater, stepHours, isLookout, bearingWord, bearing, distM, CUE_WORDS, loudWords, waterKeyAt, waterKeyOf, lineHours as rawLineHours } from './geo.js';
-import { trailGraph, firstClear, streamLine, suspectedCrossings, timeWords, awayWords, explainTrip } from './mentalmap.js';
+import { chooseSpawn, perceive, suspicionFrom, walk, followWater, stepHours, sightline, lookoutEye, isLookout, bearingWord, bearing, distM, CUE_WORDS, loudWords, waterKeyAt, waterKeyOf, lineHours as rawLineHours } from './geo.js';
+import { trailGraph, firstClear, placeLabels, streamLine, suspectedCrossings, timeWords, awayWords, explainTrip } from './mentalmap.js';
 import { materialsOf, expandGoal, thought, ITEMS, lookHint, PROCESSES } from './process.js';
 import { newCharacter, rest, dry, ROLES, knapFlakes, notchHearth, refineNotch, carveSpindle, makeTinder, handDrill, lightFire, searchNaturalEdge, splinterBone, estimateFire } from './craft.js';
 
@@ -370,6 +370,7 @@ function sense(s, lookout = false, { scan = false, focus = null } = {}) {
 
 function arrive(x, y, how, onTheWay = null) {
   const s = newSite(x, y);
+  markSeen(x, y, 20, { eye: 1.7 });
   noteTrail(S.mem, s.key);
   S.here = S.sites.indexOf(s);
   if (how) log(how); // the walk first, then what it found
@@ -564,6 +565,7 @@ function travelTo(target, label) {
   const reached = atTarget(trip.end, targetInfo(target));
   arrive(trip.end.x, trip.end.y, text, () => { notePassing(trip.path); lookAlong(trip.path); });
   rememberTrip(from, trip.path, hours, trip.crossings, knownBefore);
+  trip.path.forEach((p, i) => { if (i % 2 === 0) markSeen(p.x, p.y, 3); });
   if (!reached) missedTarget(target, from);
   else if (predicted) {
     const why = explainTrip(S.L, trip.path, predicted, hours, { believedDist: distM(from, target), trueDist: distM(from, truePos), idx: cellOf, CELL });
@@ -582,6 +584,7 @@ function followTheWater(dir) {
   const endsInLake = trip.path.some(p => S.L.lake[cellOf(p.x, p.y)]), knownBefore = S.sites.length;
   arrive(trip.end.x, trip.end.y, `Followed the water ${dir === 'down' ? 'downstream' : 'upstream'} for ${dur}${endsInLake ? ', past the edge of a lake' : ''}${trip.stopped ? `; ${trip.stopped}` : ''}.`);
   rememberTrip(from, trip.path, trip.hours, [], knownBefore);
+  trip.path.forEach((p, i) => { if (i % 2 === 0) markSeen(p.x, p.y, 3); });
 }
 
 function waterHere(s) {
@@ -1617,6 +1620,53 @@ function restFor(choice) {
   S.ch.focus = clamp(S.ch.focus + 0.12 * hours);
   log(choice === 'dusk' ? 'Rested in the shade until dusk.' : `Rested for ${hours === 1 ? 'an hour' : `${hours} hours`}.`);
 }
+// ------------------------------------------------------------ the land under the map
+//
+// The landscape drawn as tools/render-landscapes.py draws it (shaded relief, grass to forest, bare
+// steep ground, streams and lakes), one pixel per cell, faded in only where I've seen the land: what
+// was in view from each place I've stood (by the same sightlines that decide what landmarks I see, so
+// a long way over open ground, little in thick forest, nothing behind a ridge), more from a lookout,
+// and the ground close along the way I walked. S.mapLand: 'seen' (the default), 'all' (the whole
+// map, which gives the game away), 'off'.
+function markSeen(x, y, r, view = null) { // view: { eye } to reveal only what's in sight out to r
+  S.seenLand ??= new Uint8Array(GN * GN);
+  let changed = false;
+  const at = { x: Math.round(x), y: Math.round(y) };
+  for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+    const nx = at.x + dx, ny = at.y + dy, d = Math.hypot(dx, dy) / r;
+    if (nx < 0 || ny < 0 || nx >= GN || ny >= GN || d > 1) continue;
+    let k = Math.min(1, 3.3 * (1 - d)); // full strength over the inner 70%, then a soft edge
+    if (view && d * r > 2) k *= Math.min(1, 1.5 * sightline(S.L, at, { x: nx, y: ny }, view.eye, 0.5));
+    const v = Math.round(255 * k), c = cellOf(nx, ny);
+    if (v > S.seenLand[c]) { S.seenLand[c] = v; changed = true; }
+  }
+  if (changed) S.seenVer = (S.seenVer ?? 0) + 1;
+}
+const canDraw = typeof document !== 'undefined' && typeof navigator !== 'undefined' && !/jsdom/i.test(navigator.userAgent);
+function landImage() {
+  const mode = S.mapLand ?? 'seen';
+  if (mode === 'off' || !canDraw) return null;
+  for (const t of S.sites) if (!S.seenLand?.[cellOf(t.x, t.y)]) markSeen(t.x, t.y, 20, { eye: 1.7 });
+  const key = `${mode}/${S.seenVer ?? 0}`;
+  if (S.landMemo?.key === key) return S.landMemo.url;
+  const cv = document.createElement('canvas'); cv.width = cv.height = GN;
+  const ctx = cv.getContext('2d'); if (!ctx) return null;
+  const img = ctx.createImageData(GN, GN), L = S.L, at = (x, y) => L.elev[cellOf(clamp(x, 0, GN - 1), clamp(y, 0, GN - 1))];
+  const CH = [[110, 160, 205], [70, 125, 195], [40, 95, 180]];
+  for (let y = 0; y < GN; y++) for (let x = 0; x < GN; x++) {
+    const c = cellOf(x, y), shade = Math.max(0.35, Math.min(1.25, 1 - (at(x + 1, y) - at(x - 1, y) + at(x, y + 1) - at(x, y - 1)) / 60)); // lit from the northwest
+    const v = L.veg[c];
+    let col = L.slope[c] > 0.35 ? [150, 140, 130] : [214 - 120 * v, 200 - 60 * v, 150 - 90 * v]; // bare rock; tan grass to dark forest
+    col = col.map(k => k * shade);
+    if (L.lake[c]) col = [90, 140, 190]; else if (L.chan[c]) col = CH[L.chan[c] - 1];
+    img.data.set([...col.map(k => clamp(Math.round(k), 0, 255)), mode === 'all' ? 255 : S.seenLand?.[c] ?? 0], 4 * c);
+  }
+  ctx.putImageData(img, 0, 0);
+  S.landMemo = { key, url: cv.toDataURL() };
+  return S.landMemo.url;
+}
+const LAND_MODES = { seen: 'Land: as I’ve seen it', all: 'Land: the whole map', off: 'Land: none' };
+
 // The Map: tap a place or landmark to hike there; tap a sequence of them to choose a route.
 // Text and markers keep one size on screen whatever the zoom or the size of the window: labels are
 // MAP_PX screen pixels, fs is that size in grid cells, and everything else is drawn in fs.
@@ -1625,14 +1675,31 @@ function mapSide() { // the side, in screen pixels, of the square the map is dra
   const r = document.querySelector('#map .mapsvg')?.getBoundingClientRect(), side = r ? Math.min(r.width, r.height) : 0;
   return side > 0 ? side : Math.min(document.querySelector('#map')?.clientWidth || 400, 576);
 }
+let measureCtx = null;
+function textWidth(fs) { // label width in map units, at label size fs
+  if (canDraw && !measureCtx) { measureCtx = document.createElement('canvas').getContext('2d'); if (measureCtx) measureCtx.font = `${MAP_PX}px Archivo, "Helvetica Neue", Arial, sans-serif`; }
+  return t => (measureCtx ? measureCtx.measureText(t).width / MAP_PX : 0.56 * t.length) * fs;
+}
 function mapHTML() {
   const M = mentalMap();
   const hi = M.nodes.findIndex(v => v.site === S.here), here = M.nodes[hi];
   if (M.nodes.length < 2) return '<p class="hint">Nothing on my map yet but where I stand. Scan or look out.</p>';
   const xs = M.nodes.filter(v => !v.frontier).map(v => v.x), ys = M.nodes.filter(v => !v.frontier).map(v => v.y);
   let x0 = Math.min(...xs) - 4, y0 = Math.min(...ys) - 4, span = Math.max(Math.max(...xs) - x0 + 4, Math.max(...ys) - y0 + 4, 16);
+  x0 -= (span - (Math.max(...xs) + 4 - x0)) / 2; y0 -= (span - (Math.max(...ys) + 4 - y0)) / 2; // centre the narrower way
   if (S.mapView) ({ x: x0, y: y0, span } = S.mapView);
   const fs = MAP_PX * span / mapSide();
+  // labels: where I stand first, then places, then landmarks; each where it overlaps least
+  const textW = textWidth(fs), shown = M.nodes.map((v, i) => (v.frontier ? null : { i, text: `${typo(v.name.replace(/^the /, ''))}${v.certainty === 'unknown' ? '?' : ''}` })).filter(Boolean);
+  shown.sort((a, b) => (b.i === hi) - (a.i === hi) || (M.nodes[b.i].site !== undefined) - (M.nodes[a.i].site !== undefined));
+  const radius = i => fs * (i === hi ? 0.65 : M.nodes[i].frontier ? 0.35 : 0.45);
+  const timeBoxes = M.edges.flatMap(e => { const A = M.nodes[e.a], B = M.nodes[e.b], len = Math.hypot(A.x - B.x, A.y - B.y); if (len <= fs * 4.5) return []; const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, w = fs * 2.2; return [{ x0: mx - w / 2, y0: my - fs * 0.8, x1: mx + w / 2, y1: my + fs * 0.2 }]; });
+  const spots = placeLabels(shown.map(({ i, text }) => ({ x: M.nodes[i].x, y: M.nodes[i].y, r: radius(i), w: textW(text), h: fs })), {
+    boxes: timeBoxes, segs: M.edges.map(e => [M.nodes[e.a], M.nodes[e.b]]), discs: M.nodes.map((v, i) => ({ x: v.x, y: v.y, r: radius(i) })),
+    bounds: { x0, y0, x1: x0 + span, y1: y0 + span },
+  });
+  const labelOf = new Map(shown.map((l, k) => [l.i, `<text x="${spots[k].x0}" y="${spots[k].y1 - fs * 0.22}" font-size="${fs}">${esc(l.text)}</text>`]));
+  const land = landImage();
   const E = M.edges.map(e => {
     const A = M.nodes[e.a], B = M.nodes[e.b], mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, len = Math.hypot(A.x - B.x, A.y - B.y);
     let ang = Math.atan2(B.y - A.y, B.x - A.x) * 180 / Math.PI;
@@ -1645,11 +1712,11 @@ function mapHTML() {
     const e = M.edges.find(x => (x.a === hi && x.b === i) || (x.b === hi && x.a === i));
     const t = timeWords(e ? e.hours : lineHours(S.L, here, v), e ? e.certainty : v.certainty === 'known' ? 'guess' : v.certainty);
     const say = i === hi ? `${cap(v.name)} (here)` : `${v.site !== undefined ? 'Head back to' : 'Head for'} ${v.name} (${t})`;
-    const label = v.frontier ? '' : `<text x="${v.x + fs * 0.8}" y="${v.y + fs * 0.35}" font-size="${fs}">${esc(typo(v.name.replace(/^the /, '')))}${v.certainty === 'unknown' ? '?' : ''}</text>`;
+    const label = labelOf.get(i) ?? '';
     return `<g ${i === hi ? '' : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" class="node ${v.site !== undefined ? 'site' : v.frontier ? 'frontier' : 'sus'} ${v.certainty}${i === hi ? ' here' : ''}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${fs * (i === hi ? 0.65 : v.frontier ? 0.35 : 0.45)}" stroke-width="${fs * 0.12}"/>${i === hi ? '' : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${label}</g>`; // hit: a finger-sized target (about 44 px across)
   }).join('');
-  const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map of places and landmarks; north is up. Tap one to hike there.">${E}${Nd}</svg>`;
-  const tools = `<div class="map-tools"><small class="hint">Tap a place to hike there; tap several in turn to pick a route. Drag to pan; pinch or scroll to zoom.</small>${S.mapView ? '<button class="ghost" data-mapfit="1">Fit</button>' : ''}</div>`;
+  const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map of places and landmarks; north is up. Tap one to hike there.">${land ? `<image class="land" href="${land}" x="-0.5" y="-0.5" width="${GN}" height="${GN}" preserveAspectRatio="none"/>` : ''}${E}${Nd}</svg>`;
+  const tools = `<div class="map-tools"><small class="hint">Tap a place to hike there; tap several in turn to pick a route. Drag to pan; pinch or scroll to zoom.</small>${S.mapView ? '<button class="ghost" data-mapfit="1">Fit</button>' : ''}<button class="ghost" data-mapland="1">${LAND_MODES[S.mapLand ?? 'seen']}</button></div>`;
   return `${svg}${tools}<p class="hint">North is up. Filled dots: places I’ve been. Rings: things I’ve seen or heard. Small dotted rings: unexplored ground. Blue marks: streams I crossed, or think I’d cross. Times are walking times; “~” is a guess, “?” I can’t say.</p>`;
 }
 // A tap on the map: hike straight to that node.
@@ -1695,7 +1762,7 @@ function doHere(id) {
     case 'collect': case 'inspect': case 'make': case 'rest': case 'follow': picker = { kind: id, step: 'root' }; break;
     case 'look': if (S.looking) { log(`Stopped looking for ${S.looking.label}.`, 'thought'); S.looking = null; } else picker = { kind: 'look', step: 'root' }; break;
     case 'scan': pass(0.5, 120); S.ch.focus = clamp(S.ch.focus - 0.04); sense(s, false, { scan: true }); break;
-    case 'lookout': pass(0.5, 200); sense(s, true); if (!S.milestones.lookout) { S.milestones.lookout = true; log('A view at last.', 'milestone'); } break;
+    case 'lookout': pass(0.5, 200); sense(s, true); markSeen(s.x, s.y, 50, { eye: lookoutEye(S.L, s) }); if (!S.milestones.lookout) { S.milestones.lookout = true; log('A view at last.', 'milestone'); } break;
     case 'washhands': pass(0.1, 110); S.ch.germs = S.ch.germs * 0.3 + 0.3 * waterGerms(); log('Washed my hands in the water.'); break;
     case 'drink': {
       const w = waterSource(s);
@@ -1983,6 +2050,8 @@ document.addEventListener('click', ev => {
   if (mapGesture.swallowClick && b.closest('.mapsvg')) return; // the end of a drag isn't a click
   const d = b.dataset;
   if (d.tab) { tab = d.tab; return render(); }
+  if (d.mapfit) { S.mapView = null; return render(); } // view settings, not game actions
+  if (d.mapland) { const m = Object.keys(LAND_MODES); S.mapLand = m[(m.indexOf(S.mapLand ?? 'seen') + 1) % m.length]; return render(); }
   if (d.record === 'copy') { const t = gameRecord(); navigator.clipboard?.writeText(t).then(() => log('Copied the game record.', 'thought'), () => {}); $('#record-text').value = t; $('#record-text').select(); return; }
   if (d.rename) {
     lastHTML.delete('#where'); // the place name is about to be replaced by an input
