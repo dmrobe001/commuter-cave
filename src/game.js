@@ -9,7 +9,7 @@ import { generateLandscape, N as GN, CELL } from './landscape.js';
 import { outlook } from './outlook.js';
 import { windFor, smellSources, smellAt } from './smell.js';
 import { cloneChem, expose, nutrients, harm, tasteWords, smellWords, textureWords, describeState, COMPOUNDS, PREP } from './food.js';
-import { chooseSpawn, perceive, suspicionFrom, walk, followStage, stepHours, sightline, lookoutEye, isLookout, bearingWord, bearing, distM, CUE_WORDS, loudWords, waterKeyAt, waterKeyOf, lineHours as rawLineHours } from './geo.js';
+import { chooseSpawn, perceive, suspicionFrom, walk, followStage, stepHours, CLIFF_COST, sightline, lookoutEye, isLookout, bearingWord, bearing, distM, CUE_WORDS, loudWords, waterKeyAt, waterKeyOf, lineHours as rawLineHours } from './geo.js';
 import { trailGraph, firstClear, placeLabels, suspectedCrossings, timeWords, awayWords, explainTrip } from './mentalmap.js';
 import { materialsOf, expandGoal, thought, ITEMS, lookHint, PROCESSES } from './process.js';
 import { newCharacter, rest, dry, ROLES, knapFlakes, notchHearth, refineNotch, carveSpindle, makeTinder, handDrill, lightFire, searchNaturalEdge, splinterBone, estimateFire } from './craft.js';
@@ -326,15 +326,39 @@ function mentalMap() {
   });
   return { nodes, edges, streams };
 }
-// What I expect a trip to take: the time I walked it in (drawn on the map or not), else the mapped
-// link if there is one, else a guess along the line.
+// What I expect a trip to take: the time I walked it in, else my guess at the quickest way there.
 function mapHours(from, key, target) {
   if (S.walked[edgeKey(from.key, key)]) return S.walked[edgeKey(from.key, key)].hours;
-  const M = mentalMap();
-  const a = M.nodes.findIndex(v => v.key === from.key), b = M.nodes.findIndex(v => v.key === key);
-  const e = M.edges.find(x => (x.a === a && x.b === b) || (x.a === b && x.b === a));
-  return e ? e.hours : lineHours(S.L, from, target);
+  return routeHours(from, target);
 }
+// My guess at walking times from a place: the quickest way over the ground as it looks, going round
+// the lakes I know of and, where it pays, the cliffs (a known cliff cell costs CLIFF_COST times its
+// walking time); Dijkstra over the grid; what I haven't seen I take as it looks.
+// One field per place I'm at and per state of what I've seen; a target on a lake or cliff is reached
+// beside it.
+function routeField(from) {
+  const key = `${from.x},${from.y}/${S.seenVer ?? 0}`;
+  if (S.routeMemo?.key === key) return S.routeMemo.D;
+  const esc = cliffIndex(), known = c => (S.seenLand?.[c] ?? 0) >= SEEN;
+  const blocked = c => known(c) && !!S.L.lake[c];
+  const D = new Float64Array(GN * GN).fill(Infinity), heap = [], start = cellOf(from.x, from.y);
+  const push = (c, d) => { heap.push([d, c]); let i = heap.length - 1; while (i > 0) { const j = (i - 1) >> 1; if (heap[j][0] <= heap[i][0]) break; [heap[i], heap[j]] = [heap[j], heap[i]]; i = j; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[i], heap[m]] = [heap[m], heap[i]]; i = m; } } return top; };
+  D[start] = 0; push(start, 0);
+  while (heap.length) {
+    const [d, c] = pop();
+    if (d > D[c] || (blocked(c) && c !== start)) continue; // a blocked cell gets a time (I can reach its edge) but leads nowhere
+    const x = c % GN, y = Math.floor(c / GN);
+    for (const [dx, dy] of NB8) {
+      const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= GN || ny >= GN) continue;
+      const n = cellOf(nx, ny), nd = d + (blocked(n) ? 0 : stepHours(S.L, { x, y }, { x: nx, y: ny }) * (S.L.lake[n] ? 1.6 : known(n) && esc[n] >= 0 ? CLIFF_COST : 1));
+      if (nd < D[n]) { D[n] = nd; push(n, nd); }
+    }
+  }
+  S.routeMemo = { key, D };
+  return D;
+}
+const routeHours = (from, to) => routeField(from)[cellOf(clamp(Math.round(to.x), 0, GN - 1), clamp(Math.round(to.y), 0, GN - 1))];
 
 // Sites are real positions: one place per cell, never merged with the one next to it.
 function newSite(x, y, name) {
@@ -719,7 +743,7 @@ function travelTo(target, label) {
     if (atTarget(from, info)) { info.sus.reached = true; return log(`Found ${info.sus.label}, right here.`, 'act'); }
     return missedTarget(target, from);
   }
-  const thirsty = S.hyd < 0.55;
+  const thirsty = S.hyd < 0.55 && !waterHere(from); // standing at water, thirst is no reason to stop at the next
   let n = 0;
   const { sus, dest, st, area, truePos } = targetInfo(target);
   // Homing: every few steps (or when asked outright) a fresh fix on the target, if I can still see or hear it.
@@ -728,14 +752,19 @@ function travelTo(target, label) {
   const arrived = sus ? p => (want && /^(lake|river|brook)-/.test(want) ? onWater(p, want) : atTarget(p, { truePos, sus }))
     : st ? p => !!S.L.chan[cellOf(p.x, p.y)] && (Math.hypot(p.x - target.x, p.y - target.y) <= 3 || matchStream(makeFix(p)) === st)
     : target.lake ? p => onWater(p, target.lake)
-    : target.cliff ? p => Math.hypot(p.x - target.x, p.y - target.y) <= 2 : null;
+    : target.cliff ? p => { const esc = cliffIndex(), i = +target.cliff.slice(6); return NB8.some(([dx, dy]) => esc[cellOf(clamp(p.x + dx, 0, GN - 1), clamp(p.y + dy, 0, GN - 1))] === i); } : null;
+  if (arrived && arrived(from)) return log(`I’m ${target.lake ? 'on the shore of' : 'at'} ${targetInfo(target).name} already.`, 'thought');
+  // How long I expect it to take, going round what I know is in the way; a walk taking twice that stops.
   const predicted = mapHours(from, sus ? sus.id : dest ? dest.key : target.point ? 'point' : `stream:${target.stream ?? area}`, target);
-  const trip = walk(S.L, from, target, { rng: S.rng, maxHours: 3, resense, arrived, stopAtWater: thirsty, driftSd: dest ? 1.5 : 2.5 });
+  const budget = Number.isFinite(predicted) ? Math.min(3, Math.max(0.25, 2 * predicted)) : 3;
+  const toWater = !!target.lake || (sus?.group === 'water' && /^lake-/.test(waterKeyOf(sus.trueKey)));
+  const trip = walk(S.L, from, target, { rng: S.rng, maxHours: budget, resense, arrived, stopAtWater: thirsty, driftSd: dest ? 1.5 : 2.5, toWater });
   const knownBefore = S.sites.length;
   const hours = trip.hours * (S.looking ? 1.25 : 1); // looking as I go slows me down
   if (S.looking) S.ch.focus = clamp(S.ch.focus - 0.05);
   pass(hours, 300);
-  S.travelHint = st?.id ?? sus?.stream ?? null;
+  const reached = st || area ? arrived(trip.end) : atTarget(trip.end, targetInfo(target));
+  S.travelHint = reached ? st?.id ?? sus?.stream ?? null : null; // the stream I was after, only if this is it
   const { names, keys, ids } = noteCrossings(trip, S.travelHint);
   const dur = timeWords(hours, 'known');
   const last = trip.crossings[trip.crossings.length - 1], endsOnWater = !!last && trip.end.x === last.x && trip.end.y === last.y;
@@ -743,14 +772,16 @@ function travelTo(target, label) {
   const before = new Set(ids.slice(0, endsOnWater ? -1 : undefined));
   const crossed = names.filter((_, i) => before.has(keys[i])); // water I ended up in wasn't crossed
   const where = S.L.veg[cellOf(trip.end.x, trip.end.y)] > 0.55 ? 'thick woodland' : S.L.veg[cellOf(trip.end.x, trip.end.y)] > 0.3 ? 'scrubby woodland' : 'open ground';
-  const text = `${S.looking ? 'Walked, watching for ' + S.looking.label + ',' : 'Pushed'} ${label} for ${dur}, through ${where}${crossed.length ? `; crossed ${crossed.join(' and ')}` : ''}.${stoppedAtWater ? ' Parched, I stopped at the water.' : ''}${hours >= 2.9 && !stoppedAtWater ? ' Stopped to get my bearings.' : ''}`;
-  const reached = st || area ? arrived(trip.end) : atTarget(trip.end, targetInfo(target));
+  const text = `${S.looking ? 'Walked, watching for ' + S.looking.label + ',' : 'Pushed'} ${label} for ${dur}, through ${where}${crossed.length ? `; crossed ${crossed.join(' and ')}` : ''}.${stoppedAtWater ? ' Parched, I stopped at the water.' : ''}${hours >= 2.9 && !stoppedAtWater && budget >= 3 ? ' Stopped to get my bearings.' : ''}`;
   arrive(trip.end.x, trip.end.y, text, () => { notePassing(trip.path); lookAlong(trip.path); });
   S.travelHint = null;
   rememberTrip(from, trip.path, hours, trip.crossings.map((c, i) => ({ ...c, id: ids[i] })), knownBefore);
   trip.path.forEach((p, i) => { if (i % 2 === 0) markSeen(p.x, p.y, 3); });
   noteSeenFeatures();
+  const cutShort = !reached && budget < 3 && trip.hours >= budget - 1e-6;
+  if (cutShort) log(explainTrip(S.L, trip.path, predicted, hours, { believedDist: distM(from, target), trueDist: distM(from, truePos), idx: cellOf, CELL, soFar: true }) ?? `This is taking much longer than I expected (${timeWords(hours, 'known')} so far). I stopped to rethink.`, 'thought');
   if (!reached && st) missedStream(target, st);
+  else if (!reached && target.point && S.L.lake[cellOf(target.x, target.y)]) log('That spot is in the water; this is as near as I can get.', 'thought');
   else if (!reached && area) log(`Didn’t reach ${target.label}. By my reckoning it’s ${awayWords(lineHours(S.L, site(), target), 'guess')}, to the ${bearingWord(bearing(site(), target))}.`, 'thought');
   else if (!reached) missedTarget(target, from);
   else if (predicted) {
@@ -2020,7 +2051,7 @@ function mapHTML() {
 
   // ---- labels, in priority order; all but where I stand are dropped rather than crowd others
   const textW = textWidth(fs), items = [];
-  const pin = S.mapPin, pinSay = pin && `Go here (${timeWords(lineHours(S.L, here, pin), 'guess')})`;
+  const pin = S.mapPin, pinSay = pin && `Go here (${timeWords(routeHours(here, pin), 'guess')})`;
   items.push({ i: hi, rank: 0 });
   if (pin) items.push({ pin: true, rank: 0 });
   for (const q of [...lakes, ...cliffs].sort((a, b) => b.cells.length - a.cells.length)) if (!items.some(t => t.feature?.key === q.key)) items.push({ feature: q, rank: 1 });
@@ -2048,7 +2079,7 @@ function mapHTML() {
 
   // ---- lakes: circles fitted inside their shores; cliffs: a line along them, ticks on the low side every 16 px
   const nearCell = q => q.cells.reduce((a, c) => (Math.hypot(c.x - here.x, c.y - here.y) < Math.hypot(a.x - here.x, a.y - here.y) ? c : a));
-  const area = (q, kind) => { const say = `Head for ${q.name} (${timeWords(lineHours(S.L, here, nearCell(q)), 'guess')})`; return `<g class="feature ${kind}" data-hike="${q.id}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title>`; };
+  const area = (q, kind) => { const say = `Head for ${q.name} (${timeWords(routeHours(here, nearCell(q)), 'guess')})`; return `<g class="feature ${kind}" data-hike="${q.id}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title>`; };
   const Lk = lakes.map(q => area(q, 'lake') + q.circles.map(k => `<circle cx="${k.x.toFixed(2)}" cy="${k.y.toFixed(2)}" r="${k.r.toFixed(2)}"/>`).join('') + '</g>').join('');
   const Cl = cliffs.map(q => { const { pts, nx, ny } = q.line, d = pts.map((p, k) => `${k ? 'L' : 'M'}${p.x} ${p.y}`).join(''), t = u(7);
     return area(q, 'cliff') + `<path class="face" d="${d}" stroke-width="${u(3.5)}"/>` + along(pts, 16).marks.map(m => `<line class="tick" x1="${m.x}" y1="${m.y}" x2="${m.x + nx * t}" y2="${m.y + ny * t}" stroke-width="${u(2)}"/>`).join('') + `<path class="hit" d="${d}" stroke-width="${fs * 2.2}"/></g>`; }).join('');
@@ -2057,7 +2088,7 @@ function mapHTML() {
   // ---- streams: lines down the drainage, chevrons every 70 px pointing downstream (spaced along
   // each stream from its source down, so a long stream keeps one rhythm); lone fixes are short arrows
   const W = trees.map(t => {
-    const near = nearestOnStream(t, here), say = `Head for ${t.name} (${timeWords(lineHours(S.L, here, near), 'guess')})`;
+    const near = nearestOnStream(t, here), say = `Head for ${t.name} (${timeWords(routeHours(here, near), 'guess')})`;
     const downOf = new Map(t.segs.map(sg => [sg[0], sg])), fed = new Set(t.segs.map(sg => sg[1])), drawn = new Set(), marks = [];
     for (const src of t.segs.map(sg => sg[0]).filter(f => !fed.has(f))) {
       let f = src, carry = 35;
@@ -2091,7 +2122,7 @@ function mapHTML() {
   const Nd = M.nodes.map((v, i) => {
     if (v.unmarked) return '';
     const e = M.edges.find(x => (x.a === hi && x.b === i) || (x.b === hi && x.a === i));
-    const t = timeWords(e ? e.hours : lineHours(S.L, here, v), e ? e.certainty : v.certainty === 'known' ? 'guess' : v.certainty);
+    const t = timeWords(e ? e.hours : routeHours(here, v), e ? e.certainty : v.certainty === 'known' ? 'guess' : v.certainty);
     const say = i === hi ? `${cap(v.name)} (here)` : `${v.site !== undefined ? 'Head back to' : 'Head for'} ${v.name} (${t})`;
     return `<g ${i === hi ? '' : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" data-i="${i}" class="node ${v.site !== undefined ? 'site' : 'sus'}${v.spring ? ' spring' : ''} ${v.certainty}${i === hi ? ' here' : ''}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${radius(i)}" stroke-width="${fs * 0.12}"/>${i === hi ? '' : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${labelOf.get(i) ?? ''}</g>`; // hit: a finger-sized target (about 44 px across)
   }).join('');
@@ -2416,7 +2447,7 @@ if (typeof document !== 'undefined') {
 // Everything that happens follows from the world seed and the player's choices, so a record of the
 // seed and each choice reproduces a game exactly. Each action is the data of what was tapped (or
 // the value chosen); `act` applies one, and replaying a record runs them in order on a fresh game.
-const BUILD = 'hk-2026-10-22h'; // game logic version: a record replays faithfully only on the build that made it
+const BUILD = 'hk-2026-10-22i'; // game logic version: a record replays faithfully only on the build that made it
 function record(d) {
   S.record ??= [];
   S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });

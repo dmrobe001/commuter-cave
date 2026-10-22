@@ -229,18 +229,26 @@ export function stepHours(L, a, b) {
 // returns a fresh estimate (it is asked every few steps; with `force`, it must answer now). Stops when
 // `arrived(p)` says I'm there, on reaching the believed spot when nothing sensed says it's further,
 // at maxHours, or (if stopAtWater) at the first water.
-// Walking distance to a point over dry ground: Dijkstra with a binary heap on the 8-neighbour grid.
-// An aim on a lake is reached at its shore. The search covers the ground between here and there
-// with room to go round things, and the whole map if that isn't enough.
-function goalField(L, aim, from, M = 25) {
+// Walking distance to a point over dry ground, a cliff cell counting as CLIFF_COST ordinary ones (so
+// the way goes round a cliff where it can, and up it only where it can't): Dijkstra with a binary
+// heap on the 8-neighbour grid. An aim on a lake is reached at its shore; `shoreWeight` says how much
+// it matters which part of the shore: a little when the lake is where I'm going, a lot when it's
+// only in the way of something beyond (then the walk goes round to the shore nearest the aim). The
+// search covers the ground between here and there with room to go round things, and the whole map if
+// that isn't enough.
+export const CLIFF_SLOPE = 0.35, CLIFF_COST = 8;
+const blocks = (L, c) => !!L.lake[c];
+function goalField(L, aim, from, M = 25, shoreWeight = 0.2) {
+  const start = idx(from.x, from.y);
   const x0 = M >= N ? 0 : Math.max(0, Math.min(aim.x, from.x) - M), x1 = M >= N ? N - 1 : Math.min(N - 1, Math.max(aim.x, from.x) + M);
   const y0 = M >= N ? 0 : Math.max(0, Math.min(aim.y, from.y) - M), y1 = M >= N ? N - 1 : Math.min(N - 1, Math.max(aim.y, from.y) + M);
   const D = new Float64Array(N * N).fill(Infinity), heap = [];
   const push = (c, d) => { heap.push([d, c]); let i = heap.length - 1; while (i > 0) { const j = (i - 1) >> 1; if (heap[j][0] <= heap[i][0]) break; [heap[i], heap[j]] = [heap[j], heap[i]]; i = j; } };
   const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[i], heap[m]] = [heap[m], heap[i]]; i = m; } } return top; };
   const ax = Math.max(0, Math.min(N - 1, Math.round(aim.x))), ay = Math.max(0, Math.min(N - 1, Math.round(aim.y)));
-  if (!L.lake[idx(ax, ay)]) { D[idx(ax, ay)] = 0; push(idx(ax, ay), 0); }
+  if (!blocks(L, idx(ax, ay))) { D[idx(ax, ay)] = 0; push(idx(ax, ay), 0); }
   else { // the shore of the lake the aim is on
+    const same = c => !!L.lake[c];
     const seen = new Set([idx(ax, ay)]), q = [idx(ax, ay)];
     while (q.length) {
       const c = q.pop(), x = c % N, y = (c / N) | 0;
@@ -248,7 +256,7 @@ function goalField(L, aim, from, M = 25) {
         const nx = x + dx, ny = y + dy, n = idx(nx, ny);
         if (!inside(nx, ny) || seen.has(n)) continue;
         seen.add(n);
-        if (L.lake[n]) q.push(n); else if (nx >= x0 && nx <= x1 && ny >= y0 && ny <= y1) { const d = Math.hypot(nx - ax, ny - ay) * 0.2; if (d < D[n]) { D[n] = d; push(n, d); } }
+        if (same(n)) q.push(n); else if (!blocks(L, n) && nx >= x0 && nx <= x1 && ny >= y0 && ny <= y1) { const d = Math.hypot(nx - ax, ny - ay) * shoreWeight; if (d < D[n]) { D[n] = d; push(n, d); } }
       }
     }
   }
@@ -258,17 +266,19 @@ function goalField(L, aim, from, M = 25) {
     const x = c % N, y = (c / N) | 0;
     for (const [dx, dy] of NB) {
       const nx = x + dx, ny = y + dy; if (nx < x0 || nx > x1 || ny < y0 || ny > y1) continue;
-      const n = idx(nx, ny); if (L.lake[n]) continue;
-      const nd = d + Math.hypot(dx, dy);
+      const n = idx(nx, ny); if (blocks(L, n) && n !== start) continue;
+      const nd = d + Math.hypot(dx, dy) * (L.slope[n] > CLIFF_SLOPE ? CLIFF_COST : 1);
       if (nd < D[n]) { D[n] = nd; push(n, nd); }
     }
   }
-  if (!Number.isFinite(D[idx(from.x, from.y)]) && M < N) return goalField(L, aim, from, N); // no way round inside the window
+  if (!Number.isFinite(D[start]) && M < N) return goalField(L, aim, from, N, shoreWeight); // no way round inside the window
   D.onLake = !!L.lake[idx(ax, ay)];
   return D;
 }
 
-export function walk(L, from, target, { maxHours = 3, rng, resense = null, arrived = null, stopAtWater = false, driftSd = 2.5 } = {}) {
+// `toWater`: the lake an aim lies on is where I'm going (stop at its nearest shore); otherwise a lake in
+// the way is skirted, to the far side nearest the aim. Cliffs are skirted where possible (goalField).
+export function walk(L, from, target, { maxHours = 3, rng, resense = null, arrived = null, stopAtWater = false, driftSd = 2.5, toWater = false } = {}) {
   let p = { ...from }, hours = 0, drift = 0;
   const path = [p], crossings = [];
   let aim = { ...target };
@@ -278,25 +288,28 @@ export function walk(L, from, target, { maxHours = 3, rng, resense = null, arriv
   const trod = new Map([[idx(p.x, p.y), 1]]);
   // The way round what can be seen to be in the way: steps are scored half by heading (with its
   // drift) and half by walking distance to the aim through passable ground.
-  let field = goalField(L, aim, p), fieldFor = `${Math.round(aim.x)},${Math.round(aim.y)}`;
+  const shoreWeight = toWater ? 0.2 : 3;
+  let field = goalField(L, aim, p, 25, shoreWeight), fieldFor = `${Math.round(aim.x)},${Math.round(aim.y)}`;
   for (let steps = 0; steps < 400 && hours < maxHours; steps++) {
     if (Math.hypot(aim.x - p.x, aim.y - p.y) <= 1.5) { // at the believed spot: still sensing it further on? then home in on that
       const fresh = resense ? resense(p, true) : null;
       if (fresh && Math.hypot(fresh.x - p.x, fresh.y - p.y) > 1.5) { aim = fresh; drift = 0; }
       else { // finish on the spot itself
-        if ((aim.x !== p.x || aim.y !== p.y) && !L.lake[idx(aim.x, aim.y)]) { hours += stepHours(L, p, aim); p = { x: aim.x, y: aim.y }; path.push(p); }
+        if ((aim.x !== p.x || aim.y !== p.y) && !blocks(L, idx(aim.x, aim.y))) { hours += stepHours(L, p, aim); p = { x: aim.x, y: aim.y }; path.push(p); }
         break;
       }
     }
     drift += rng.normal(0, driftSd); // a known landmark in view keeps the heading true (small driftSd)
     if (resense) { const fresh = resense(p); if (fresh) { aim = fresh; drift *= 0.3; } }
-    if (`${Math.round(aim.x)},${Math.round(aim.y)}` !== fieldFor) { field = goalField(L, aim, p); fieldFor = `${Math.round(aim.x)},${Math.round(aim.y)}`; }
-    if (field.onLake && NB.some(([dx, dy]) => inside(p.x + dx, p.y + dy) && L.lake[idx(p.x + dx, p.y + dy)]) && NB.every(([dx, dy]) => !inside(p.x + dx, p.y + dy) || !(field[idx(p.x + dx, p.y + dy)] < field[idx(p.x, p.y)] - 0.5))) break; // at the water's edge, as near as the shore gets
+    if (`${Math.round(aim.x)},${Math.round(aim.y)}` !== fieldFor) { field = goalField(L, aim, p, 25, shoreWeight); fieldFor = `${Math.round(aim.x)},${Math.round(aim.y)}`; }
+    // the aim is in a lake: stop where no step gets nearer (any shore will do when the lake is where I'm going)
+    const better = NB.some(([dx, dy]) => inside(p.x + dx, p.y + dy) && field[idx(p.x + dx, p.y + dy)] < field[idx(p.x, p.y)] - (toWater ? 0.5 : 0.05));
+    if (blocks(L, idx(Math.round(aim.x), Math.round(aim.y))) && !better && (!toWater || NB.some(([dx, dy]) => inside(p.x + dx, p.y + dy) && L.lake[idx(p.x + dx, p.y + dy)]))) break;
     const want = ((bearing(p, aim) + drift) * Math.PI) / 180;
     let best = null, bestScore = Infinity;
     for (const [dx, dy] of NB) {
       const nx = p.x + dx, ny = p.y + dy;
-      if (!inside(nx, ny) || L.lake[idx(nx, ny)]) continue;
+      if (!inside(nx, ny) || blocks(L, idx(nx, ny))) continue;
       const along = dx * Math.sin(want) - dy * Math.cos(want);
       const len = Math.hypot(dx, dy), fd = field[idx(nx, ny)] - field[idx(p.x, p.y)], gain = Number.isFinite(fd) ? fd / len : -along / len; // -1 straight toward the aim
       const score = -0.5 * along / len + 0.5 * gain + 0.15 * rng.next() + 0.9 * (trod.get(idx(nx, ny)) ?? 0);

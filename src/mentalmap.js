@@ -165,7 +165,7 @@ export const awayWords = (h, certainty) => { const t = timeWords(h, certainty); 
 
 // path: cells walked; predicted: the hours I expected; actual: the hours it took.
 // believedDist / trueDist: distance to where I thought the target was, and to where it really was.
-export function explainTrip(L, path, predicted, actual, { believedDist = null, trueDist = null, idx, CELL } = {}) {
+export function explainTrip(L, path, predicted, actual, { believedDist = null, trueDist = null, idx, CELL, soFar = false } = {}) { // soFar: the walk was cut short at twice the time
   if (!Number.isFinite(predicted) || predicted <= 0 || path.length < 3) return null;
   const ratio = actual / predicted;
   if (Math.abs(actual - predicted) < Math.max(0.25, 0.35 * predicted)) return null;
@@ -194,5 +194,6 @@ export function explainTrip(L, path, predicted, actual, { believedDist = null, t
   }
   const best = reasons.sort((a, b) => b[0] - a[0])[0];
   const why = best && best[0] > 0 ? best[1] : longer ? 'harder going than I guessed' : 'easier going than I guessed';
+  if (soFar) return `This is taking much longer than I expected (${timeWords(actual, 'known')} so far, against ${timeWords(predicted, 'known')} for the whole way): ${why}. I stopped to rethink.`;
   return `${longer ? 'Took longer' : 'Quicker'} than I expected (${timeWords(actual, 'known')}, not ${timeWords(predicted, 'known')}): ${why}.`;
 }

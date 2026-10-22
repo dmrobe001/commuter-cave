@@ -3,7 +3,8 @@
 // went nowhere, and a guessed stream link drawn across the lake. Recreated from map positions (a record
 // of the original would drift as the rules change): onto the stream below the spring, follow it up
 // until it stops at the spring, then down until it stops at the lake. Checks: one spring, marked on
-// the spring's own cell; the mouth marked; no follow arrow that goes nowhere; the lake drawn.
+// the spring's own cell; the mouth marked; no follow arrow that goes nowhere; the lake drawn. And a
+// second reported game (seed gbn2f): getting round a lake (below).
 const { JSDOM } = require('jsdom');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
 const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
@@ -37,7 +38,18 @@ setTimeout(() => {
   if (!/mouth/.test(here)) fails.push(`expected to be at the stream's mouth, but here is: ${here}`);
   if ([...d.querySelectorAll('.mapsvg .follow')].some(g => /downstream/.test(g.getAttribute('aria-label')))) fails.push('a downstream arrow is offered where the stream runs into the lake');
   if (!d.querySelector('.mapsvg .feature.lake circle')) fails.push('the lake is not drawn');
+
+  // A second reported game (seed gbn2f): at a stream's mouth on a lake, taps on the lake and on things
+  // across it didn't move me. Now: the lake says I'm on its shore already; a spot across the water is
+  // walked round to; a spot in the water gets as near as the shore allows.
+  const go = (...hikes) => { d.querySelector('#replay-text').value = JSON.stringify({ game: 'hands-and-knowledge', seed: 'gbn2f', preset: '', actions: hikes.map(hike => ({ d: { hike } })) }); d.querySelector('#replay').click(); return at(); };
+  if (go('go:67_53') !== '67,53') fails.push(`gbn2f: didn't reach the mouth at 67,53 (at ${at()})`);
+  const lake = d.querySelector('.mapsvg .feature.lake'), n = lines().length;
+  if (lake) { click(lake); if (!lines().slice(n).some(t => /shore of .* already/.test(t)) && at() === '67,53') fails.push(`gbn2f: tapping the lake from its shore neither moved me nor said I was there: ${lines().slice(n).join(' | ')}`); }
+  for (const [x, y] of [[62, 53], [64, 47]]) { const end = go('go:67_53', `go:${x}_${y}`); if (end !== `${x},${y}`) fails.push(`gbn2f: a spot across the lake (${x},${y}) wasn't reached; ended at ${end}`); }
+  const wet = go('go:67_53', 'go:66_51'), said = lines().slice(-4).join(' | ');
+  if (wet === '67,53' && !/as near as I can get/.test(said)) fails.push(`gbn2f: a spot in the lake gave neither a move nor an explanation: ${said}`);
   if (errors.length) fails.push(...errors);
-  console.log(fails.length ? 'FAIL\n  ' + fails.join('\n  ') : 'reported (hbgk9): all passed');
+  console.log(fails.length ? 'FAIL\n  ' + fails.join('\n  ') : 'reported (hbgk9, gbn2f): all passed');
   if (fails.length) process.exitCode = 1;
 }, 50);

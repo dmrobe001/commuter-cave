@@ -3355,7 +3355,11 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const kmh = 6 * Math.exp(-3.5 * Math.abs(slope + 0.05)) * (1 - 0.5 * L.veg[idx2(b.x, b.y)]);
     return d / 1e3 / Math.max(kmh, 0.6) + (L.chan[idx2(b.x, b.y)] >= 2 ? 0.08 : 0);
   }
-  function goalField(L, aim, from, M2 = 25) {
+  var CLIFF_SLOPE = 0.35;
+  var CLIFF_COST = 8;
+  var blocks = (L, c) => !!L.lake[c];
+  function goalField(L, aim, from, M2 = 25, shoreWeight = 0.2) {
+    const start = idx2(from.x, from.y);
     const x0 = M2 >= N ? 0 : Math.max(0, Math.min(aim.x, from.x) - M2), x1 = M2 >= N ? N - 1 : Math.min(N - 1, Math.max(aim.x, from.x) + M2);
     const y0 = M2 >= N ? 0 : Math.max(0, Math.min(aim.y, from.y) - M2), y1 = M2 >= N ? N - 1 : Math.min(N - 1, Math.max(aim.y, from.y) + M2);
     const D = new Float64Array(N * N).fill(Infinity), heap = [];
@@ -3391,10 +3395,11 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       return top;
     };
     const ax = Math.max(0, Math.min(N - 1, Math.round(aim.x))), ay = Math.max(0, Math.min(N - 1, Math.round(aim.y)));
-    if (!L.lake[idx2(ax, ay)]) {
+    if (!blocks(L, idx2(ax, ay))) {
       D[idx2(ax, ay)] = 0;
       push(idx2(ax, ay), 0);
     } else {
+      const same = (c) => !!L.lake[c];
       const seen = /* @__PURE__ */ new Set([idx2(ax, ay)]), q = [idx2(ax, ay)];
       while (q.length) {
         const c = q.pop(), x = c % N, y = c / N | 0;
@@ -3403,10 +3408,10 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
           if (!inside(nx, ny) || seen.has(n))
             continue;
           seen.add(n);
-          if (L.lake[n])
+          if (same(n))
             q.push(n);
-          else if (nx >= x0 && nx <= x1 && ny >= y0 && ny <= y1) {
-            const d = Math.hypot(nx - ax, ny - ay) * 0.2;
+          else if (!blocks(L, n) && nx >= x0 && nx <= x1 && ny >= y0 && ny <= y1) {
+            const d = Math.hypot(nx - ax, ny - ay) * shoreWeight;
             if (d < D[n]) {
               D[n] = d;
               push(n, d);
@@ -3425,26 +3430,27 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         if (nx < x0 || nx > x1 || ny < y0 || ny > y1)
           continue;
         const n = idx2(nx, ny);
-        if (L.lake[n])
+        if (blocks(L, n) && n !== start)
           continue;
-        const nd = d + Math.hypot(dx, dy);
+        const nd = d + Math.hypot(dx, dy) * (L.slope[n] > CLIFF_SLOPE ? CLIFF_COST : 1);
         if (nd < D[n]) {
           D[n] = nd;
           push(n, nd);
         }
       }
     }
-    if (!Number.isFinite(D[idx2(from.x, from.y)]) && M2 < N)
-      return goalField(L, aim, from, N);
+    if (!Number.isFinite(D[start]) && M2 < N)
+      return goalField(L, aim, from, N, shoreWeight);
     D.onLake = !!L.lake[idx2(ax, ay)];
     return D;
   }
-  function walk(L, from, target, { maxHours = 3, rng, resense = null, arrived = null, stopAtWater = false, driftSd = 2.5 } = {}) {
+  function walk(L, from, target, { maxHours = 3, rng, resense = null, arrived = null, stopAtWater = false, driftSd = 2.5, toWater = false } = {}) {
     let p = { ...from }, hours = 0, drift = 0;
     const path = [p], crossings = [];
     let aim = { ...target };
     const trod = /* @__PURE__ */ new Map([[idx2(p.x, p.y), 1]]);
-    let field = goalField(L, aim, p), fieldFor = `${Math.round(aim.x)},${Math.round(aim.y)}`;
+    const shoreWeight = toWater ? 0.2 : 3;
+    let field = goalField(L, aim, p, 25, shoreWeight), fieldFor = `${Math.round(aim.x)},${Math.round(aim.y)}`;
     for (let steps = 0; steps < 400 && hours < maxHours; steps++) {
       if (Math.hypot(aim.x - p.x, aim.y - p.y) <= 1.5) {
         const fresh = resense ? resense(p, true) : null;
@@ -3452,7 +3458,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
           aim = fresh;
           drift = 0;
         } else {
-          if ((aim.x !== p.x || aim.y !== p.y) && !L.lake[idx2(aim.x, aim.y)]) {
+          if ((aim.x !== p.x || aim.y !== p.y) && !blocks(L, idx2(aim.x, aim.y))) {
             hours += stepHours(L, p, aim);
             p = { x: aim.x, y: aim.y };
             path.push(p);
@@ -3469,16 +3475,17 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         }
       }
       if (`${Math.round(aim.x)},${Math.round(aim.y)}` !== fieldFor) {
-        field = goalField(L, aim, p);
+        field = goalField(L, aim, p, 25, shoreWeight);
         fieldFor = `${Math.round(aim.x)},${Math.round(aim.y)}`;
       }
-      if (field.onLake && NB2.some(([dx, dy]) => inside(p.x + dx, p.y + dy) && L.lake[idx2(p.x + dx, p.y + dy)]) && NB2.every(([dx, dy]) => !inside(p.x + dx, p.y + dy) || !(field[idx2(p.x + dx, p.y + dy)] < field[idx2(p.x, p.y)] - 0.5)))
+      const better = NB2.some(([dx, dy]) => inside(p.x + dx, p.y + dy) && field[idx2(p.x + dx, p.y + dy)] < field[idx2(p.x, p.y)] - (toWater ? 0.5 : 0.05));
+      if (blocks(L, idx2(Math.round(aim.x), Math.round(aim.y))) && !better && (!toWater || NB2.some(([dx, dy]) => inside(p.x + dx, p.y + dy) && L.lake[idx2(p.x + dx, p.y + dy)])))
         break;
       const want = (bearing(p, aim) + drift) * Math.PI / 180;
       let best = null, bestScore = Infinity;
       for (const [dx, dy] of NB2) {
         const nx = p.x + dx, ny = p.y + dy;
-        if (!inside(nx, ny) || L.lake[idx2(nx, ny)])
+        if (!inside(nx, ny) || blocks(L, idx2(nx, ny)))
           continue;
         const along = dx * Math.sin(want) - dy * Math.cos(want);
         const len = Math.hypot(dx, dy), fd = field[idx2(nx, ny)] - field[idx2(p.x, p.y)], gain = Number.isFinite(fd) ? fd / len : -along / len;
@@ -3989,7 +3996,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const t = timeWords(h, certainty);
     return t === "?" ? "how far, I can\u2019t say" : `${t.replace(/^~/, "about ")} away`;
   };
-  function explainTrip(L, path, predicted, actual, { believedDist = null, trueDist = null, idx: idx5, CELL: CELL2 } = {}) {
+  function explainTrip(L, path, predicted, actual, { believedDist = null, trueDist = null, idx: idx5, CELL: CELL2, soFar = false } = {}) {
     if (!Number.isFinite(predicted) || predicted <= 0 || path.length < 3)
       return null;
     const ratio = actual / predicted;
@@ -4026,6 +4033,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     }
     const best = reasons.sort((a, b) => b[0] - a[0])[0];
     const why = best && best[0] > 0 ? best[1] : longer ? "harder going than I guessed" : "easier going than I guessed";
+    if (soFar)
+      return `This is taking much longer than I expected (${timeWords(actual, "known")} so far, against ${timeWords(predicted, "known")} for the whole way): ${why}. I stopped to rethink.`;
     return `${longer ? "Took longer" : "Quicker"} than I expected (${timeWords(actual, "known")}, not ${timeWords(predicted, "known")}): ${why}.`;
   }
 
@@ -5636,11 +5645,68 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   function mapHours(from, key, target) {
     if (S.walked[edgeKey(from.key, key)])
       return S.walked[edgeKey(from.key, key)].hours;
-    const M2 = mentalMap();
-    const a = M2.nodes.findIndex((v) => v.key === from.key), b = M2.nodes.findIndex((v) => v.key === key);
-    const e = M2.edges.find((x) => x.a === a && x.b === b || x.a === b && x.b === a);
-    return e ? e.hours : lineHours2(S.L, from, target);
+    return routeHours(from, target);
   }
+  function routeField(from) {
+    const key = `${from.x},${from.y}/${S.seenVer ?? 0}`;
+    if (S.routeMemo?.key === key)
+      return S.routeMemo.D;
+    const esc2 = cliffIndex(), known = (c) => (S.seenLand?.[c] ?? 0) >= SEEN;
+    const blocked = (c) => known(c) && !!S.L.lake[c];
+    const D = new Float64Array(N * N).fill(Infinity), heap = [], start = cellOf(from.x, from.y);
+    const push = (c, d) => {
+      heap.push([d, c]);
+      let i = heap.length - 1;
+      while (i > 0) {
+        const j = i - 1 >> 1;
+        if (heap[j][0] <= heap[i][0])
+          break;
+        [heap[i], heap[j]] = [heap[j], heap[i]];
+        i = j;
+      }
+    };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) {
+        heap[0] = last;
+        let i = 0;
+        for (; ; ) {
+          const l = 2 * i + 1, r = l + 1;
+          let m = i;
+          if (l < heap.length && heap[l][0] < heap[m][0])
+            m = l;
+          if (r < heap.length && heap[r][0] < heap[m][0])
+            m = r;
+          if (m === i)
+            break;
+          [heap[i], heap[m]] = [heap[m], heap[i]];
+          i = m;
+        }
+      }
+      return top;
+    };
+    D[start] = 0;
+    push(start, 0);
+    while (heap.length) {
+      const [d, c] = pop();
+      if (d > D[c] || blocked(c) && c !== start)
+        continue;
+      const x = c % N, y = Math.floor(c / N);
+      for (const [dx, dy] of NB8) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= N || ny >= N)
+          continue;
+        const n = cellOf(nx, ny), nd = d + (blocked(n) ? 0 : stepHours(S.L, { x, y }, { x: nx, y: ny }) * (S.L.lake[n] ? 1.6 : known(n) && esc2[n] >= 0 ? CLIFF_COST : 1));
+        if (nd < D[n]) {
+          D[n] = nd;
+          push(n, nd);
+        }
+      }
+    }
+    S.routeMemo = { key, D };
+    return D;
+  }
+  var routeHours = (from, to) => routeField(from)[cellOf(clamp(Math.round(to.x), 0, N - 1), clamp(Math.round(to.y), 0, N - 1))];
   function newSite(x, y, name) {
     const micro = microAt(x, y);
     const same = S.sites.find((t) => t.x === x && t.y === y);
@@ -6114,7 +6180,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       }
       return missedTarget(target, from);
     }
-    const thirsty = S.hyd < 0.55;
+    const thirsty = S.hyd < 0.55 && !waterHere(from);
     let n = 0;
     const { sus, dest, st, area, truePos } = targetInfo(target);
     const resense = sus ? (p, force) => {
@@ -6124,15 +6190,23 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       return c ? suspicionFrom(c, p, S.rng).est : null;
     } : null;
     const want = sus?.group === "water" ? waterKeyOf(sus.trueKey) : null;
-    const arrived = sus ? (p) => want && /^(lake|river|brook)-/.test(want) ? onWater(p, want) : atTarget(p, { truePos, sus }) : st ? (p) => !!S.L.chan[cellOf(p.x, p.y)] && (Math.hypot(p.x - target.x, p.y - target.y) <= 3 || matchStream(makeFix(p)) === st) : target.lake ? (p) => onWater(p, target.lake) : target.cliff ? (p) => Math.hypot(p.x - target.x, p.y - target.y) <= 2 : null;
+    const arrived = sus ? (p) => want && /^(lake|river|brook)-/.test(want) ? onWater(p, want) : atTarget(p, { truePos, sus }) : st ? (p) => !!S.L.chan[cellOf(p.x, p.y)] && (Math.hypot(p.x - target.x, p.y - target.y) <= 3 || matchStream(makeFix(p)) === st) : target.lake ? (p) => onWater(p, target.lake) : target.cliff ? (p) => {
+      const esc2 = cliffIndex(), i = +target.cliff.slice(6);
+      return NB8.some(([dx, dy]) => esc2[cellOf(clamp(p.x + dx, 0, N - 1), clamp(p.y + dy, 0, N - 1))] === i);
+    } : null;
+    if (arrived && arrived(from))
+      return log(`I\u2019m ${target.lake ? "on the shore of" : "at"} ${targetInfo(target).name} already.`, "thought");
     const predicted = mapHours(from, sus ? sus.id : dest ? dest.key : target.point ? "point" : `stream:${target.stream ?? area}`, target);
-    const trip = walk(S.L, from, target, { rng: S.rng, maxHours: 3, resense, arrived, stopAtWater: thirsty, driftSd: dest ? 1.5 : 2.5 });
+    const budget = Number.isFinite(predicted) ? Math.min(3, Math.max(0.25, 2 * predicted)) : 3;
+    const toWater = !!target.lake || sus?.group === "water" && /^lake-/.test(waterKeyOf(sus.trueKey));
+    const trip = walk(S.L, from, target, { rng: S.rng, maxHours: budget, resense, arrived, stopAtWater: thirsty, driftSd: dest ? 1.5 : 2.5, toWater });
     const knownBefore = S.sites.length;
     const hours = trip.hours * (S.looking ? 1.25 : 1);
     if (S.looking)
       S.ch.focus = clamp(S.ch.focus - 0.05);
     pass(hours, 300);
-    S.travelHint = st?.id ?? sus?.stream ?? null;
+    const reached = st || area ? arrived(trip.end) : atTarget(trip.end, targetInfo(target));
+    S.travelHint = reached ? st?.id ?? sus?.stream ?? null : null;
     const { names, keys, ids } = noteCrossings(trip, S.travelHint);
     const dur = timeWords(hours, "known");
     const last = trip.crossings[trip.crossings.length - 1], endsOnWater = !!last && trip.end.x === last.x && trip.end.y === last.y;
@@ -6140,8 +6214,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const before = new Set(ids.slice(0, endsOnWater ? -1 : void 0));
     const crossed = names.filter((_, i) => before.has(keys[i]));
     const where = S.L.veg[cellOf(trip.end.x, trip.end.y)] > 0.55 ? "thick woodland" : S.L.veg[cellOf(trip.end.x, trip.end.y)] > 0.3 ? "scrubby woodland" : "open ground";
-    const text = `${S.looking ? "Walked, watching for " + S.looking.label + "," : "Pushed"} ${label} for ${dur}, through ${where}${crossed.length ? `; crossed ${crossed.join(" and ")}` : ""}.${stoppedAtWater ? " Parched, I stopped at the water." : ""}${hours >= 2.9 && !stoppedAtWater ? " Stopped to get my bearings." : ""}`;
-    const reached = st || area ? arrived(trip.end) : atTarget(trip.end, targetInfo(target));
+    const text = `${S.looking ? "Walked, watching for " + S.looking.label + "," : "Pushed"} ${label} for ${dur}, through ${where}${crossed.length ? `; crossed ${crossed.join(" and ")}` : ""}.${stoppedAtWater ? " Parched, I stopped at the water." : ""}${hours >= 2.9 && !stoppedAtWater && budget >= 3 ? " Stopped to get my bearings." : ""}`;
     arrive(trip.end.x, trip.end.y, text, () => {
       notePassing(trip.path);
       lookAlong(trip.path);
@@ -6153,8 +6226,13 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
         markSeen(p.x, p.y, 3);
     });
     noteSeenFeatures();
+    const cutShort = !reached && budget < 3 && trip.hours >= budget - 1e-6;
+    if (cutShort)
+      log(explainTrip(S.L, trip.path, predicted, hours, { believedDist: distM(from, target), trueDist: distM(from, truePos), idx: cellOf, CELL, soFar: true }) ?? `This is taking much longer than I expected (${timeWords(hours, "known")} so far). I stopped to rethink.`, "thought");
     if (!reached && st)
       missedStream(target, st);
+    else if (!reached && target.point && S.L.lake[cellOf(target.x, target.y)])
+      log("That spot is in the water; this is as near as I can get.", "thought");
     else if (!reached && area)
       log(`Didn\u2019t reach ${target.label}. By my reckoning it\u2019s ${awayWords(lineHours2(S.L, site(), target), "guess")}, to the ${bearingWord(bearing(site(), target))}.`, "thought");
     else if (!reached)
@@ -7833,7 +7911,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       return { marks: out, carry: next / fs * MAP_PX };
     };
     const textW = textWidth(fs), items = [];
-    const pin = S.mapPin, pinSay = pin && `Go here (${timeWords(lineHours2(S.L, here, pin), "guess")})`;
+    const pin = S.mapPin, pinSay = pin && `Go here (${timeWords(routeHours(here, pin), "guess")})`;
     items.push({ i: hi, rank: 0 });
     if (pin)
       items.push({ pin: true, rank: 0 });
@@ -7894,7 +7972,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     });
     const nearCell = (q) => q.cells.reduce((a, c) => Math.hypot(c.x - here.x, c.y - here.y) < Math.hypot(a.x - here.x, a.y - here.y) ? c : a);
     const area = (q, kind) => {
-      const say = `Head for ${q.name} (${timeWords(lineHours2(S.L, here, nearCell(q)), "guess")})`;
+      const say = `Head for ${q.name} (${timeWords(routeHours(here, nearCell(q)), "guess")})`;
       return `<g class="feature ${kind}" data-hike="${q.id}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title>`;
     };
     const Lk = lakes.map((q) => area(q, "lake") + q.circles.map((k) => `<circle cx="${k.x.toFixed(2)}" cy="${k.y.toFixed(2)}" r="${k.r.toFixed(2)}"/>`).join("") + "</g>").join("");
@@ -7904,7 +7982,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     }).join("");
     const land = landImage();
     const W = trees.map((t) => {
-      const near = nearestOnStream(t, here), say = `Head for ${t.name} (${timeWords(lineHours2(S.L, here, near), "guess")})`;
+      const near = nearestOnStream(t, here), say = `Head for ${t.name} (${timeWords(routeHours(here, near), "guess")})`;
       const downOf = new Map(t.segs.map((sg) => [sg[0], sg])), fed = new Set(t.segs.map((sg) => sg[1])), drawn = /* @__PURE__ */ new Set(), marks = [];
       for (const src of t.segs.map((sg) => sg[0]).filter((f) => !fed.has(f))) {
         let f = src, carry = 35;
@@ -7946,7 +8024,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       if (v.unmarked)
         return "";
       const e = M2.edges.find((x) => x.a === hi && x.b === i || x.b === hi && x.a === i);
-      const t = timeWords(e ? e.hours : lineHours2(S.L, here, v), e ? e.certainty : v.certainty === "known" ? "guess" : v.certainty);
+      const t = timeWords(e ? e.hours : routeHours(here, v), e ? e.certainty : v.certainty === "known" ? "guess" : v.certainty);
       const say = i === hi ? `${cap3(v.name)} (here)` : `${v.site !== void 0 ? "Head back to" : "Head for"} ${v.name} (${t})`;
       return `<g ${i === hi ? "" : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" data-i="${i}" class="node ${v.site !== void 0 ? "site" : "sus"}${v.spring ? " spring" : ""} ${v.certainty}${i === hi ? " here" : ""}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${radius(i)}" stroke-width="${fs * 0.12}"/>${i === hi ? "" : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${labelOf.get(i) ?? ""}</g>`;
     }).join("");
@@ -8367,7 +8445,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       }).observe(box);
     }
   }
-  var BUILD = "hk-2026-10-22h";
+  var BUILD = "hk-2026-10-22i";
   function record(d) {
     S.record ?? (S.record = []);
     S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
