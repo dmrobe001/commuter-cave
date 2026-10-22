@@ -3,6 +3,7 @@
 // edge of the land; the stretch walked is drawn solid; places along a stream that are nothing in
 // their own right get no marker once I've moved on. Usage: node tests/ui/follow.cjs [seed ...]
 const { JSDOM } = require('jsdom');
+const { strikeOut } = require('./tap-map.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const seeds = process.argv.slice(2).length ? process.argv.slice(2) : ['wgxdd', 'a', 'pig-rock', 'm', 'h'];
@@ -24,8 +25,8 @@ const seeds = process.argv.slice(2).length ? process.argv.slice(2) : ['wgxdd', '
     click(d.querySelector('[data-here="scan"]'));
     // get to some water: a stream on the map, else a heard one, else strike out
     for (let k = 0; k < 6 && !d.querySelector('.mapsvg .follow'); k++) {
-      const g = d.querySelector('.mapsvg .stream[data-hike]') ?? [...d.querySelectorAll('.mapsvg .node.sus[data-hike]')].find(g => /brook|stream|river/.test(g.getAttribute('aria-label'))) ?? d.querySelectorAll('.mapsvg .node.frontier[data-hike]')[k % 3];
-      if (g) click(g);
+      const g = d.querySelector('.mapsvg .stream[data-hike]') ?? [...d.querySelectorAll('.mapsvg .node.sus[data-hike]')].find(g => /brook|stream|river/.test(g.getAttribute('aria-label'))) ;
+      if (g) click(g); else strikeOut(w, d, ['north', 'east', 'south'][k % 3]);
     }
     if (!d.querySelector('.mapsvg .follow')) { console.log(`${seed}: never got to a stream`); continue; }
     const visited = [];

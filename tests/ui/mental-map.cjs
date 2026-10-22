@@ -16,6 +16,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   for (let k = 0; k < 50 && !d.querySelector('#begin'); k++) await wait(100);
   d.querySelector('#begin').click();
   click('[data-here="scan"]');
+  click('[data-maproutes]'); // routes are hidden until asked for
   // out to the nearest landmark, on to a second, then home by tapping a route: an earlier place, then home
   click('[data-hike]', /hill|cliff|lake|falls|stream|river|brook/);
   click('[data-hike]', /hill|cliff|lake|falls|stream|river|brook/);

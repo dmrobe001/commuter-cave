@@ -308,10 +308,6 @@ function mentalMap() {
     if (u.reached || u.lost || shown.has(u.group === 'water' ? waterKeyOf(u.trueKey) : u.trueKey)) continue;
     hang({ key: u.id, name: u.label, x: u.est.x, y: u.est.y, sus: u.id, water: u.group === 'water', certainty: (u.channel === 'sound' && u.obs < 2) || u.channel === 'smell' ? 'unknown' : 'guess' }, byDistance(u.seenAt ?? u.est).slice(0, 1), 'sighting');
   }
-  for (const f of frontierPoints()) { // a landmark already marks the way, so no stub beside it
-    if (nodes.some(v => v.sus && Math.hypot(v.x - f.x, v.y - f.y) < HEX_D / 3)) continue;
-    hang({ ...f, frontier: true, certainty: 'guess' }, [], 'stub');
-  }
   const streams = streamTrees().map(t => ({ key: t.id, name: t.name, segs: t.segs }));
   const edges = links.map(({ a, b, hours, walked, kind }) => {
     const A = nodes[a], B = nodes[b], w = walked ? S.walked[edgeKey(A.key, B.key)] : null;
@@ -323,45 +319,6 @@ function mentalMap() {
   });
   return { nodes, edges, streams };
 }
-// The unexplored: a background hexagonal lattice of points about 1 km apart. Points near places I've
-// been count as explored and are ignored; the unexplored points next to explored ones ring the known
-// area. Of that ring, one point per eighth of the compass (seen from the middle of where I've been),
-// the one nearest a place I've been, goes on the map as a direction to strike out in.
-const HEX_D = 13; // cells (~1 km)
-const WIND16 = ['north', 'north-northeast', 'northeast', 'east-northeast', 'east', 'east-southeast', 'southeast', 'south-southeast', 'south', 'south-southwest', 'southwest', 'west-southwest', 'west', 'west-northwest', 'northwest', 'north-northwest'];
-function hexLattice() {
-  if (S.hexPts) return S.hexPts;
-  const pts = [];
-  for (let r = 0, y = 3; y < GN - 2; r++, y = 3 + r * HEX_D * Math.sqrt(3) / 2) {
-    for (let x = 3 + (r % 2 ? HEX_D / 2 : 0); x < GN - 2; x += HEX_D) {
-      const p = { i: pts.length, x: Math.round(x), y: Math.round(y) };
-      if (!S.L.lake[cellOf(p.x, p.y)]) pts.push(p);
-    }
-  }
-  return (S.hexPts = pts);
-}
-function frontierPoints() {
-  const pts = hexLattice();
-  const explored = p => S.sites.some(t => Math.hypot(t.x - p.x, t.y - p.y) < 0.75 * HEX_D);
-  const ex = new Set(pts.filter(explored).map(p => p.i));
-  const cx = S.sites.reduce((s, t) => s + t.x, 0) / S.sites.length, cy = S.sites.reduce((s, t) => s + t.y, 0) / S.sites.length;
-  const pick = new Map(); // sector -> [point, distance to the nearest place I've been]
-  for (const p of pts) {
-    if (ex.has(p.i) || !pts.some(q => ex.has(q.i) && Math.hypot(q.x - p.x, q.y - p.y) < 1.15 * HEX_D)) continue;
-    const sector = Math.round(bearing({ x: cx, y: cy }, p) / 45) % 8, d = Math.min(...S.sites.map(t => Math.hypot(t.x - p.x, t.y - p.y)));
-    if (!pick.has(sector) || d < pick.get(sector)[1]) pick.set(sector, [p, d]);
-  }
-  const out = [], used = new Set();
-  for (const [p] of [...pick.values()].sort((a, b) => a[0].i - b[0].i)) {
-    const near = S.sites.reduce((a, b) => (Math.hypot(b.x - p.x, b.y - p.y) < Math.hypot(a.x - p.x, a.y - p.y) ? b : a));
-    let name = `the unknown ${WIND16[Math.round(bearing(near, p) / 22.5) % 16]}`;
-    for (let k = 2; used.has(name); k++) name = `${name.replace(/ \d+$/, '')} ${k}`;
-    used.add(name);
-    out.push({ key: `hex-${p.i}`, x: p.x, y: p.y, name });
-  }
-  return out;
-}
-
 // What I expect a trip to take: the time I walked it in (drawn on the map or not), else the mapped
 // link if there is one, else a guess along the line.
 function mapHours(from, key, target) {
@@ -531,6 +488,13 @@ function arrive(x, y, how, onTheWay = null) {
     else if (u.kind === 'musk') log('A burrow under a root, reeking of musk. Whatever lives here, I’ll leave it be.', 'note');
   }
   if (onTheWay) onTheWay();
+  if (fresh && lakeside(s)) { // a stretch of shore I haven't stood on: a good look across the water
+    pass(0.5, 120);
+    for (const [dx, dy] of NB8) { const x2 = s.x + dx, y2 = s.y + dy; if (x2 >= 0 && y2 >= 0 && x2 < GN && y2 < GN && S.L.lake[cellOf(x2, y2)]) revealFeature(waterKeyAt(S.L, x2, y2), s, 1.7); }
+    noteSeenFeatures();
+    log('New shore: I take a good look across the water.', 'thought');
+    sense(s, false, { scan: true });
+  }
   if (waterHere(s) || S.crossedWater) { S.crossedWater = false; waterFound(); }
   if (!waterHere(s)) { // water within about 200 m gets noticed and marked
     let best = null;
@@ -638,9 +602,8 @@ function rememberTrip(from, path, hours, crossings, knownBefore) {
 function targetInfo(target) {
   const sus = S.suspects.find(u => u.id === target.suspect);
   const dest = target.site !== undefined ? S.sites[target.site] : null;
-  const fr = target.frontier ? frontierPoints().find(f => f.key === target.frontier) : null;
   const st = target.stream ? S.streams.find(x => x.id === target.stream) : null, area = target.lake || target.cliff;
-  return { sus, dest, fr, st, area, truePos: sus?.truePos ?? dest ?? fr ?? (st || area ? { x: target.x, y: target.y } : null), name: sus?.label ?? dest?.name ?? fr?.name ?? st?.name ?? target.label ?? 'there' };
+  return { sus, dest, st, area, truePos: sus?.truePos ?? dest ?? (st || area || target.point ? { x: target.x, y: target.y } : null), name: sus?.label ?? dest?.name ?? st?.name ?? target.label ?? 'there' };
 }
 // Standing in it: on a stream or river of it, or on the shore of a lake of it (where I can drink).
 function onWater(p, want) {
@@ -738,7 +701,7 @@ function followStream(dir, branch) {
   rememberTrip(from, trip.path, trip.hours, [], knownBefore);
 }
 
-// Head straight for something: a suspected landmark, a known place, or the edge of the unexplored.
+// Head straight for something: a suspected landmark, a known place, or any spot I pick on the map.
 function travelTo(target, label) {
   const from = site();
   if (target.suspect && Math.hypot(target.x - from.x, target.y - from.y) <= 1.5) {
@@ -758,7 +721,7 @@ function travelTo(target, label) {
     : st ? p => !!S.L.chan[cellOf(p.x, p.y)] && (Math.hypot(p.x - target.x, p.y - target.y) <= 3 || matchStream(makeFix(p)) === st)
     : target.lake ? p => onWater(p, target.lake)
     : target.cliff ? p => Math.hypot(p.x - target.x, p.y - target.y) <= 2 : null;
-  const predicted = mapHours(from, sus ? sus.id : dest ? dest.key : target.frontier ?? `stream:${target.stream ?? area}`, target);
+  const predicted = mapHours(from, sus ? sus.id : dest ? dest.key : target.point ? 'point' : `stream:${target.stream ?? area}`, target);
   const trip = walk(S.L, from, target, { rng: S.rng, maxHours: 3, resense, arrived, stopAtWater: thirsty, driftSd: dest ? 1.5 : 2.5 });
   const knownBefore = S.sites.length;
   const hours = trip.hours * (S.looking ? 1.25 : 1); // looking as I go slows me down
@@ -788,7 +751,6 @@ function travelTo(target, label) {
   }
 }
 
-const targetRef = v => (v.sus ? { suspect: v.sus } : v.site !== undefined ? { site: v.site } : v.frontier ? { frontier: v.key } : {});
 
 function waterHere(s) {
   const c = cellOf(s.x, s.y);
@@ -1974,81 +1936,151 @@ function textWidth(fs) { // label width in map units, at label size fs
   if (canDraw && !measureCtx) { measureCtx = document.createElement('canvas').getContext('2d'); if (measureCtx) measureCtx.font = `${MAP_PX}px Archivo, "Helvetica Neue", Arial, sans-serif`; }
   return t => (measureCtx ? measureCtx.measureText(t).width / MAP_PX : 0.56 * t.length) * fs;
 }
+// A lake as I picture it: one ellipse, my best guess from every cell of it I've seen. Its centre is
+// their mean; its axes and tilt come from their spread (a filled ellipse's semi-axis is twice the
+// standard deviation along it).
+function lakeEllipses() {
+  const by = new Map();
+  for (const q of seenPieces('lake')) { const e = by.get(q.key) ?? { key: q.key, name: q.name, id: q.id, cells: [] }; e.cells.push(...q.cells); by.set(q.key, e); }
+  return [...by.values()].map(e => {
+    const n = e.cells.length, mx = e.cells.reduce((a, c) => a + c.x, 0) / n, my = e.cells.reduce((a, c) => a + c.y, 0) / n;
+    let sxx = 1 / 12, syy = 1 / 12, sxy = 0; // a cell's own spread
+    for (const c of e.cells) { sxx += (c.x - mx) ** 2 / n; syy += (c.y - my) ** 2 / n; sxy += (c.x - mx) * (c.y - my) / n; }
+    const tr = sxx + syy, det = sxx * syy - sxy * sxy, l1 = tr / 2 + Math.sqrt(Math.max(0, tr * tr / 4 - det)), l2 = Math.max(0, tr - l1);
+    return { ...e, x: mx, y: my, rx: Math.max(0.8, 2 * Math.sqrt(l1)), ry: Math.max(0.8, 2 * Math.sqrt(l2)), deg: 0.5 * Math.atan2(2 * sxy, sxx - syy) * 180 / Math.PI };
+  });
+}
+// Walking time drawn as a length: a scale bar of a round number of minutes on open, level ground
+// (about 5 km/h), between about 60 and 160 px long at the current zoom.
+function scaleBar(span) {
+  const pxPerCell = mapSide() / span, cellsPerMin = 5000 / 60 / CELL;
+  const mins = [5, 10, 15, 20, 30, 45, 60, 90, 120, 180].find(m => m * cellsPerMin * pxPerCell >= 60) ?? 180;
+  const px = Math.round(mins * cellsPerMin * pxPerCell);
+  return `<span class="scalebar" aria-label="Scale: ${timeWords(mins / 60, 'known')} walking on open ground"><i style="width:${px}px"></i>${timeWords(mins / 60, 'known')} on open ground</span>`;
+}
 function mapHTML() {
   const M = mentalMap();
   const hi = M.nodes.findIndex(v => v.site === S.here), here = M.nodes[hi];
-  if (M.nodes.length < 2) return '<p class="hint">Nothing on my map yet but where I stand. Scan or look out.</p>';
-  const xs = M.nodes.filter(v => !v.frontier).map(v => v.x), ys = M.nodes.filter(v => !v.frontier).map(v => v.y);
+  const xs = M.nodes.map(v => v.x), ys = M.nodes.map(v => v.y);
   let x0 = Math.min(...xs) - 4, y0 = Math.min(...ys) - 4, span = Math.max(Math.max(...xs) - x0 + 4, Math.max(...ys) - y0 + 4, 16);
   x0 -= (span - (Math.max(...xs) + 4 - x0)) / 2; y0 -= (span - (Math.max(...ys) + 4 - y0)) / 2; // centre the narrower way
   if (S.mapView) ({ x: x0, y: y0, span } = S.mapView);
-  const fs = MAP_PX * span / mapSide();
-  const trees = streamTrees();
-  // labels: where I stand first, then places, then landmarks; each where it overlaps least
-  const textW = textWidth(fs), shown = M.nodes.map((v, i) => (v.frontier || v.unmarked ? null : { i, text: `${typo(v.name.replace(/^the /, ''))}${v.certainty === 'unknown' ? '?' : ''}` })).filter(Boolean);
-  shown.sort((a, b) => (b.i === hi) - (a.i === hi) || (M.nodes[b.i].site !== undefined) - (M.nodes[a.i].site !== undefined));
-  const radius = i => fs * (i === hi ? 0.65 : M.nodes[i].frontier ? 0.35 : 0.45);
-  const timeBoxes = M.edges.flatMap(e => { const A = M.nodes[e.a], B = M.nodes[e.b], len = Math.hypot(A.x - B.x, A.y - B.y); if (len <= fs * 4.5) return []; const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, w = fs * 2.2; return [{ x0: mx - w / 2, y0: my - fs * 0.8, x1: mx + w / 2, y1: my + fs * 0.2 }]; });
-  const lakes = seenPieces('lake'), cliffs = seenPieces('cliff').map(q => ({ ...q, line: cliffLine(q) }));
-  const biggest = new Map(); // one name per lake or cliff, on the biggest piece of it I've seen
-  for (const q of [...lakes, ...cliffs]) if (!biggest.has(q.key) || biggest.get(q.key).cells.length < q.cells.length) biggest.set(q.key, q);
-  const featureText = [...biggest.values()].map(q => ({ q, text: typo(q.name.replace(/^the /, '')), at: q.kind === 'lake' ? { x: q.x, y: q.y } : q.line.pts[Math.floor(q.line.pts.length / 2)] }));
-  const spots = placeLabels(shown.map(({ i, text }) => ({ x: M.nodes[i].x, y: M.nodes[i].y, r: radius(i), w: textW(text), h: fs })).concat(featureText.map(f => ({ x: f.at.x, y: f.at.y, r: fs * 0.3, w: textW(f.text) * 0.9, h: fs * 0.9 }))), {
-    boxes: timeBoxes, segs: M.edges.map(e => [M.nodes[e.a], M.nodes[e.b]]).concat(trees.flatMap(t => t.segs)), discs: M.nodes.filter(v => !v.unmarked).map(v => ({ x: v.x, y: v.y, r: radius(M.nodes.indexOf(v)) })),
-    bounds: { x0, y0, x1: x0 + span, y1: y0 + span },
+  const fs = MAP_PX * span / mapSide(), u = px => px * fs / MAP_PX; // u: screen pixels in map units
+  const routes = !!S.mapRoutes, trees = streamTrees(), lakes = lakeEllipses();
+  const cliffs = seenPieces('cliff').map(q => ({ ...q, line: cliffLine(q) }));
+  const radius = i => fs * (i === hi ? 0.65 : 0.45);
+  const chev = (x, y, dx, dy, k = fs * 0.4) => `M${x - dx * k + dy * k} ${y - dy * k - dx * k}L${x + dx * k} ${y + dy * k}L${x - dx * k - dy * k} ${y - dy * k + dx * k}`;
+  // marks every `gap` px of screen along a polyline, starting half a gap in (stream chevrons, cliff ticks)
+  const along = (pts, gapPx, start = gapPx / 2) => {
+    const out = [], gap = u(gapPx);
+    let next = u(start);
+    for (let k = 1; k < pts.length; k++) {
+      const a = pts[k - 1], b = pts[k], l = Math.hypot(b.x - a.x, b.y - a.y);
+      while (next <= l && l > 0) { const t = next / l; out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, dx: (b.x - a.x) / l, dy: (b.y - a.y) / l }); next += gap; }
+      next -= l;
+    }
+    return { marks: out, carry: next / fs * MAP_PX };
+  };
+
+  // ---- labels, in priority order; all but where I stand are dropped rather than crowd others
+  const textW = textWidth(fs), items = [];
+  const pin = S.mapPin, pinSay = pin && `Go here (${timeWords(lineHours(S.L, here, pin), 'guess')})`;
+  items.push({ i: hi, rank: 0 });
+  if (pin) items.push({ pin: true, rank: 0 });
+  for (const q of [...lakes, ...cliffs].sort((a, b) => b.cells.length - a.cells.length)) if (!items.some(t => t.feature?.key === q.key)) items.push({ feature: q, rank: 1 });
+  M.nodes.forEach((v, i) => { if (i === hi || v.unmarked) return; if (v.site !== undefined) items.push({ i, rank: 2, weight: S.sites[v.site].visits ?? 0 }); else items.push({ i, rank: v.certainty === 'unknown' ? 4 : 3, weight: S.suspects.find(x => x.id === v.sus)?.obs ?? 0 }); });
+  items.sort((a, b) => a.rank - b.rank || (b.weight ?? 0) - (a.weight ?? 0));
+  for (const t of items) {
+    if (t.pin) { t.text = pinSay; t.at = { x: pin.x, y: pin.y - u(10) }; t.r = u(9); t.h = fs; }
+    else if (t.feature) { const q = t.feature; t.text = typo(q.name.replace(/^the /, '')); t.at = q.kind === 'cliff' ? q.line.pts[Math.floor(q.line.pts.length / 2)] : { x: q.x, y: q.y }; t.r = fs * 0.3; t.h = fs * 0.9; }
+    else { const v = M.nodes[t.i]; t.text = `${typo(v.name.replace(/^the /, ''))}${v.certainty === 'unknown' ? '?' : ''}`; t.at = v; t.r = radius(t.i); t.h = fs; }
+  }
+  const follows = followOptions();
+  const segs = trees.flatMap(t => t.segs).concat(routes ? M.edges.map(e => [M.nodes[e.a], M.nodes[e.b]]) : [])
+    .concat(follows.map(o => { const r = o.dir * Math.PI / 180; return [here, { x: here.x + Math.sin(r) * fs * 2.6, y: here.y - Math.cos(r) * fs * 2.6 }]; }));
+  const spots = placeLabels(items.map(t => ({ x: t.at.x, y: t.at.y, r: t.r, w: textW(t.text) * (t.feature ? 0.9 : 1), h: t.h, optional: t.rank > 0 })), {
+    segs, discs: M.nodes.filter(v => !v.unmarked).map(v => ({ x: v.x, y: v.y, r: radius(M.nodes.indexOf(v)) })).concat(pin ? [{ x: pin.x, y: pin.y - u(10), r: u(9) }] : []), bounds: { x0, y0, x1: x0 + span, y1: y0 + span },
   });
-  const labelOf = new Map(shown.map((l, k) => [l.i, `<text x="${spots[k].x0}" y="${spots[k].y1 - fs * 0.22}" font-size="${fs}">${esc(l.text)}</text>`]));
-  const featureLabels = featureText.map((f, k) => { const b = spots[shown.length + k]; return `<text class="flabel ${f.q.kind}" x="${b.x0}" y="${b.y1 - fs * 0.2}" font-size="${fs * 0.9}">${esc(f.text)}</text>`; }).join('');
-  // lakes: the cells of them I've seen, shaded in; cliffs: a line along them, ticks on the downhill side
-  const area = q => `<g class="feature ${q.kind}" data-hike="${q.id}" role="button" tabindex="0" aria-label="${esc(typo(`Head for ${q.name} (${timeWords(lineHours(S.L, here, q.cells.reduce((a, c) => (Math.hypot(c.x - here.x, c.y - here.y) < Math.hypot(a.x - here.x, a.y - here.y) ? c : a))), 'guess')})`))}"><title>${esc(typo(cap(q.name)))}</title>`;
-  const Lk = lakes.map(q => area(q) + q.cells.map(c => `<rect x="${c.x - 0.7}" y="${c.y - 0.7}" width="1.4" height="1.4" rx="0.7"/>`).join('') + '</g>').join('');
-  const Cl = cliffs.map(q => { const { pts, nx, ny } = q.line, d = pts.map((p, k) => `${k ? 'L' : 'M'}${p.x} ${p.y}`).join(''), t = fs * 0.45;
-    return area(q) + `<path class="face" d="${d}" stroke-width="${fs * 0.24}"/>` + pts.map(p => `<line class="tick" x1="${p.x}" y1="${p.y}" x2="${p.x + nx * t}" y2="${p.y + ny * t}" stroke-width="${fs * 0.13}"/>`).join('') + `<path class="hit" d="${d}" stroke-width="${fs * 2.2}"/></g>`; }).join('');
+  const labelOf = new Map(), featureLabels = [];
+  let pinLabel = '';
+  items.forEach((t, k) => {
+    const b = spots[k]; if (!b) return;
+    if (t.pin) pinLabel = `<text x="${b.x0}" y="${b.y1 - fs * 0.22}" font-size="${fs}">${esc(typo(t.text))}</text>`;
+    else if (t.feature) featureLabels.push(`<text class="flabel ${t.feature.kind}" x="${b.x0}" y="${b.y1 - fs * 0.2}" font-size="${fs * 0.9}">${esc(t.text)}</text>`);
+    else labelOf.set(t.i, `<text x="${b.x0}" y="${b.y1 - fs * 0.22}" font-size="${fs}">${esc(t.text)}</text>`);
+  });
+
+  // ---- lakes: one ellipse each; cliffs: a line along them, ticks on the low side every 16 px
+  const nearCell = q => q.cells.reduce((a, c) => (Math.hypot(c.x - here.x, c.y - here.y) < Math.hypot(a.x - here.x, a.y - here.y) ? c : a));
+  const area = (q, kind) => { const say = `Head for ${q.name} (${timeWords(lineHours(S.L, here, nearCell(q)), 'guess')})`; return `<g class="feature ${kind}" data-hike="${q.id}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title>`; };
+  const Lk = lakes.map(q => area(q, 'lake') + `<ellipse cx="${q.x}" cy="${q.y}" rx="${q.rx}" ry="${q.ry}" transform="rotate(${q.deg.toFixed(1)} ${q.x} ${q.y})"/></g>`).join('');
+  const Cl = cliffs.map(q => { const { pts, nx, ny } = q.line, d = pts.map((p, k) => `${k ? 'L' : 'M'}${p.x} ${p.y}`).join(''), t = u(7);
+    return area(q, 'cliff') + `<path class="face" d="${d}" stroke-width="${u(3.5)}"/>` + along(pts, 16).marks.map(m => `<line class="tick" x1="${m.x}" y1="${m.y}" x2="${m.x + nx * t}" y2="${m.y + ny * t}" stroke-width="${u(2)}"/>`).join('') + `<path class="hit" d="${d}" stroke-width="${fs * 2.2}"/></g>`; }).join('');
   const land = landImage();
-  // streams: dashed lines down the drainage with a chevron pointing downstream, a short arrow for a
-  // stream known at one spot only; the whole stream is one tap target (head for its nearest point)
-  const chev = (x, y, dx, dy) => { const k = fs * 0.4; return `M${x - dx * k + dy * k} ${y - dy * k - dx * k}L${x + dx * k} ${y + dy * k}L${x - dx * k - dy * k} ${y - dy * k + dx * k}`; };
+
+  // ---- streams: lines down the drainage, chevrons every 70 px pointing downstream (spaced along
+  // each stream from its source down, so a long stream keeps one rhythm); lone fixes are short arrows
   const W = trees.map(t => {
     const near = nearestOnStream(t, here), say = `Head for ${t.name} (${timeWords(lineHours(S.L, here, near), 'guess')})`;
-    const lines = t.segs.map(sg => { const [a, b] = sg, l = Math.hypot(b.x - a.x, b.y - a.y) || 1, dx = (b.x - a.x) / l, dy = (b.y - a.y) / l; return { a, b, known: sg.known, mark: chev((a.x + b.x) / 2, (a.y + b.y) / 2, dx, dy) }; })
-      .concat(t.lone.map(f => { const r = f.flow * Math.PI / 180, dx = f.flow == null ? 0 : Math.sin(r), dy = f.flow == null ? 1 : -Math.cos(r), k = fs * 1.3; return { a: { x: f.x - dx * k, y: f.y - dy * k }, b: { x: f.x + dx * k, y: f.y + dy * k }, mark: chev(f.x + dx * k * 0.7, f.y + dy * k * 0.7, dx, dy), lone: true }; }));
-    return `<g class="stream" data-hike="stream:${t.id}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title>`
-      + lines.map(L => `<line class="flow${L.lone ? ' lone' : ''}${L.known ? ' known' : ''}" x1="${L.a.x}" y1="${L.a.y}" x2="${L.b.x}" y2="${L.b.y}" stroke-width="${fs * 0.24}"/><path class="chev" d="${L.mark}" stroke-width="${fs * 0.24}"/><line class="hit" x1="${L.a.x}" y1="${L.a.y}" x2="${L.b.x}" y2="${L.b.y}" stroke-width="${fs * 2.2}"/>`).join('') + '</g>';
+    const downOf = new Map(t.segs.map(sg => [sg[0], sg])), fed = new Set(t.segs.map(sg => sg[1])), drawn = new Set(), marks = [];
+    for (const src of t.segs.map(sg => sg[0]).filter(f => !fed.has(f))) {
+      let f = src, carry = 35;
+      while (downOf.has(f) && !drawn.has(f)) { const sg = downOf.get(f); drawn.add(f); const r = along(sg, 70, carry); marks.push(...r.marks); carry = r.carry; f = sg[1]; }
+    }
+    for (const sg of t.segs) if (!drawn.has(sg[0])) marks.push(...along(sg, 70).marks); // a loop with no source (rare)
+    const lines = t.segs.map(sg => `<line class="flow${sg.known ? ' known' : ''}" x1="${sg[0].x}" y1="${sg[0].y}" x2="${sg[1].x}" y2="${sg[1].y}" stroke-width="${u(3.5)}"/><line class="hit" x1="${sg[0].x}" y1="${sg[0].y}" x2="${sg[1].x}" y2="${sg[1].y}" stroke-width="${fs * 2.2}"/>`)
+      .concat(t.lone.map(f => { const r = (f.flow ?? 180) * Math.PI / 180, dx = Math.sin(r), dy = -Math.cos(r), k = u(20); marks.push({ x: f.x + dx * k * 0.7, y: f.y + dy * k * 0.7, dx, dy }); return `<line class="flow lone" x1="${f.x - dx * k}" y1="${f.y - dy * k}" x2="${f.x + dx * k}" y2="${f.y + dy * k}" stroke-width="${u(3.5)}"/><line class="hit" x1="${f.x - dx * k}" y1="${f.y - dy * k}" x2="${f.x + dx * k}" y2="${f.y + dy * k}" stroke-width="${fs * 2.2}"/>`; }));
+    return `<g class="stream" data-hike="stream:${t.id}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title>${lines.join('')}${marks.map(m => `<path class="chev" d="${chev(m.x, m.y, m.dx, m.dy, u(6))}" stroke-width="${u(3.5)}"/>`).join('')}</g>`;
   }).join('');
-  // at a stream: short arrows from here, downstream and up each branch, to follow it a stage
-  const F = followOptions().map(o => {
+
+  // ---- at a stream: white arrows from here to follow it a stage; downstream has its head at the
+  // far end, each upstream branch a chevron at its far end pointing back downstream, like fletching
+  const F = follows.map(o => {
     const r = o.dir * Math.PI / 180, dx = Math.sin(r), dy = -Math.cos(r), a = { x: here.x + dx * fs * 0.8, y: here.y + dy * fs * 0.8 }, b = { x: here.x + dx * fs * 2.6, y: here.y + dy * fs * 2.6 };
-    return `<g class="follow" data-hike="${o.key}" role="button" tabindex="0" aria-label="${esc(typo(o.say))}"><title>${esc(typo(o.say))}</title><line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke-width="${fs * 0.24}"/><path d="${chev(b.x - dx * fs * 0.3, b.y - dy * fs * 0.3, dx, dy)}" stroke-width="${fs * 0.24}"/><line class="hit" x1="${here.x + dx * fs * 0.9}" y1="${here.y + dy * fs * 0.9}" x2="${b.x}" y2="${b.y}" stroke-width="${fs * 2.2}"/></g>`;
+    const head = o.key === 'follow:down' ? chev(b.x - dx * u(4), b.y - dy * u(4), dx, dy, u(6)) : chev(b.x - dx * u(2), b.y - dy * u(2), -dx, -dy, u(6));
+    const shape = `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/><path d="${head}"/>`;
+    return `<g class="follow" data-hike="${o.key}" role="button" tabindex="0" aria-label="${esc(typo(o.say))}"><title>${esc(typo(o.say))}</title><g class="edge-of" stroke-width="${u(6)}">${shape}</g><g class="face" stroke-width="${u(3)}">${shape}</g><line class="hit" x1="${here.x + dx * fs * 0.9}" y1="${here.y + dy * fs * 0.9}" x2="${b.x}" y2="${b.y}" stroke-width="${fs * 2.2}"/></g>`;
   }).join('');
-  const E = M.edges.map(e => {
+
+  // ---- routes (behind the Routes button): trails, guessed shortcuts and where landmarks were seen from
+  const E = !routes ? '' : M.edges.map(e => {
     const A = M.nodes[e.a], B = M.nodes[e.b], mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, len = Math.hypot(A.x - B.x, A.y - B.y);
     let ang = Math.atan2(B.y - A.y, B.x - A.x) * 180 / Math.PI;
     if (ang > 90) ang -= 180; if (ang < -90) ang += 180; // keep the time label upright, along the line
     return `<line class="edge ${e.certainty}${e.stub ? ' stub' : ''}" data-link="${e.kind}" data-a="${e.a}" data-b="${e.b}" x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke-width="${fs * 0.12}"><title>${esc(typo(`${cap(A.name)} – ${B.name}: ${timeWords(e.hours, e.certainty)}${e.crossings.length ? `, crossing ${e.crossings.map(c => c.name).join(' and ')}` : ''}`))}</title></line>`
-      + (len > fs * 4.5 ? `<text class="etime" x="${mx}" y="${my}" dy="${-fs * 0.3}" font-size="${fs * 0.8}" text-anchor="middle" transform="rotate(${ang.toFixed(1)} ${mx} ${my})">${esc(timeWords(e.hours, e.certainty))}</text>` : '')
-      ;
+      + (len > fs * 4.5 ? `<text class="etime" x="${mx}" y="${my}" dy="${-fs * 0.3}" font-size="${fs * 0.8}" text-anchor="middle" transform="rotate(${ang.toFixed(1)} ${mx} ${my})">${esc(timeWords(e.hours, e.certainty))}</text>` : '');
   }).join('');
+
+  // ---- places and landmarks
   const Nd = M.nodes.map((v, i) => {
     if (v.unmarked) return '';
     const e = M.edges.find(x => (x.a === hi && x.b === i) || (x.b === hi && x.a === i));
     const t = timeWords(e ? e.hours : lineHours(S.L, here, v), e ? e.certainty : v.certainty === 'known' ? 'guess' : v.certainty);
     const say = i === hi ? `${cap(v.name)} (here)` : `${v.site !== undefined ? 'Head back to' : 'Head for'} ${v.name} (${t})`;
-    const label = labelOf.get(i) ?? '';
-    return `<g ${i === hi ? '' : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" data-i="${i}" class="node ${v.site !== undefined ? 'site' : v.frontier ? 'frontier' : 'sus'}${v.spring ? ' spring' : ''} ${v.certainty}${i === hi ? ' here' : ''}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${fs * (i === hi ? 0.65 : v.frontier ? 0.35 : 0.45)}" stroke-width="${fs * 0.12}"/>${i === hi ? '' : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${label}</g>`; // hit: a finger-sized target (about 44 px across)
+    return `<g ${i === hi ? '' : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" data-i="${i}" class="node ${v.site !== undefined ? 'site' : 'sus'}${v.spring ? ' spring' : ''} ${v.certainty}${i === hi ? ' here' : ''}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${radius(i)}" stroke-width="${fs * 0.12}"/>${i === hi ? '' : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${labelOf.get(i) ?? ''}</g>`; // hit: a finger-sized target (about 44 px across)
   }).join('');
-  const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map of places and landmarks; north is up. Tap one to hike there.">${land ? `<image class="land" href="${land}" x="-0.5" y="-0.5" width="${GN}" height="${GN}" preserveAspectRatio="none"/>` : ''}${Lk}${E}${Cl}${W}${featureLabels}${Nd}${F}</svg>`;
-  const tools = `<div class="map-tools"><small class="hint">Tap a place to hike there; tap several in turn to pick a route. Drag to pan; pinch or scroll to zoom.</small>${S.mapView ? '<button class="ghost" data-mapfit="1">Fit</button>' : ''}<button class="ghost" data-mapland="1">${LAND_MODES[S.mapLand ?? 'seen']}</button></div>`;
-  return `${svg}${tools}<p class="hint">North is up. Filled dots: places I’ve been. Rings: things I’ve seen or heard. Small dotted rings: unexplored ground. Blue shapes: lakes, as much as I’ve seen of them; blue dots: springs; lines with ticks: cliffs, ticks on the low side. Blue lines: streams as I know them, solid where I’ve walked along them, chevrons pointing downstream; tap one to head for it. At a stream, the arrows by me follow it a stretch, downstream or up a branch. Times are walking times; “~” is a guess, “?” I can’t say.</p>`;
+
+  // ---- a spot I've picked: tap it to go
+  const P = !pin ? '' : `<g class="pin" data-hike="go:${pin.x}_${pin.y}" role="button" tabindex="0" aria-label="${esc(typo(pinSay))}"><title>${esc(typo(pinSay))}</title><path d="M${pin.x} ${pin.y}l${-u(7)} ${-u(14)}a${u(7.5)} ${u(7.5)} 0 1 1 ${u(14)} 0z" stroke-width="${u(2)}"/><circle class="hit" cx="${pin.x}" cy="${pin.y - u(14)}" r="${fs * 1.45}"/>${pinLabel}</g>`;
+
+  const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map; north is up. Tap a place to hike there, or tap anywhere to pick a spot.">${land ? `<image class="land" href="${land}" x="-0.5" y="-0.5" width="${GN}" height="${GN}" preserveAspectRatio="none"/>` : ''}${Lk}${E}${Cl}${W}${featureLabels.join('')}${Nd}${F}${P}</svg>`;
+  const tools = `<div class="map-tools">${scaleBar(span)}${S.mapView ? '<button class="ghost" data-mapfit="1">Fit</button>' : ''}<button class="ghost" data-maproutes="1">${routes ? 'Routes: shown' : 'Routes: hidden'}</button><button class="ghost" data-mapland="1">${LAND_MODES[S.mapLand ?? 'seen']}</button></div>`;
+  return `${svg}${tools}<p class="hint">North is up. Tap a place, landmark, stream, lake or cliff to head for it; tap anywhere else to drop a pin, then tap the pin to go there. Drag to pan; pinch or scroll to zoom. Filled dots: places I’ve been; rings: things I’ve seen or heard (“?”: heard only). Blue: lakes as I picture them, springs, and streams, solid where I’ve walked along them, chevrons pointing downstream. Lines with ticks: cliffs, ticks on the low side. At a stream, the white arrows by me follow it a stretch. Not every name is shown when the map is crowded; zoom in for more.</p>`;
 }
 // A tap on the map: hike straight to that node.
 function hike(key) {
   if (key.startsWith('stream:')) return headForStream(key.slice(7));
   if (key.startsWith('lake:') || key.startsWith('cliff:')) return headForFeature(key);
+  if (key.startsWith('go:')) { // a spot I picked on the map
+    const [x, y] = key.slice(3).split('_').map(Number), h = site();
+    if (S.mapPin?.x === x && S.mapPin?.y === y) S.mapPin = null;
+    if (Math.hypot(x - h.x, y - h.y) <= 1.5) return log('That’s about where I am already.', 'thought');
+    return travelTo({ x, y, point: true, label: 'the spot I picked' }, `toward a spot to the ${bearingWord(bearing(h, { x, y }))}`);
+  }
   if (key.startsWith('follow:')) { const [, dir, b] = key.split(':'); return followStream(dir, b ? { x: +b.split('_')[0], y: +b.split('_')[1] } : null); }
   const M = mentalMap(), v = M.nodes.find(n => n.key === key);
   if (!v || v.site === S.here) return;
   if (v.sus) { const u = S.suspects.find(x => x.id === v.sus); travelTo({ ...u.est, suspect: u.id }, `toward ${u.label}`); }
-  else if (v.frontier) travelTo({ x: v.x, y: v.y, frontier: v.key }, `toward ${v.name}`);
   else travelTo({ x: v.x, y: v.y, site: v.site }, `back to ${v.name}`);
 }
 function pickerFrame(title, body) {
@@ -2348,7 +2380,7 @@ if (typeof document !== 'undefined') {
 // Everything that happens follows from the world seed and the player's choices, so a record of the
 // seed and each choice reproduces a game exactly. Each action is the data of what was tapped (or
 // the value chosen); `act` applies one, and replaying a record runs them in order on a fresh game.
-const BUILD = 'hk-2026-10-22e'; // game logic version: a record replays faithfully only on the build that made it
+const BUILD = 'hk-2026-10-22f'; // game logic version: a record replays faithfully only on the build that made it
 function record(d) {
   S.record ??= [];
   S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
@@ -2369,11 +2401,17 @@ function replay(text) {
 
 document.addEventListener('click', ev => {
   const b = ev.target.closest('button, [data-rename], [data-hike]');
+  if (!b && S && ev.target.closest?.('.mapsvg') && !mapGesture.swallowClick) { // a tap on open map: drop a pin there
+    const svg = ev.target.closest('.mapsvg'), p = toUser(svg, viewOf(svg), ev.clientX, ev.clientY);
+    S.mapPin = { x: clamp(Math.round(p.x), 0, GN - 1), y: clamp(Math.round(p.y), 0, GN - 1) };
+    return render();
+  }
   if (!b || !S) return;
   if (mapGesture.swallowClick && b.closest('.mapsvg')) return; // the end of a drag isn't a click
   const d = b.dataset;
   if (d.tab) { tab = d.tab; return render(); }
   if (d.mapfit) { S.mapView = null; return render(); } // view settings, not game actions
+  if (d.maproutes) { S.mapRoutes = !S.mapRoutes; return render(); }
   if (d.mapland) { const m = Object.keys(LAND_MODES); S.mapLand = m[(m.indexOf(S.mapLand ?? 'seen') + 1) % m.length]; return render(); }
   if (d.record === 'copy') { const t = gameRecord(); navigator.clipboard?.writeText(t).then(() => log('Copied the game record.', 'thought'), () => {}); $('#record-text').value = t; $('#record-text').select(); return; }
   if (d.rename) {

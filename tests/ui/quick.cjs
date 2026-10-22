@@ -3,6 +3,7 @@
 // thrown errors and the regressions that have bitten before, not balance or prose.
 // Usage: node tests/ui/quick.cjs
 const { JSDOM } = require('jsdom');
+const { strikeOut } = require('./tap-map.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
 const errors = [];
 function page() {
@@ -34,8 +35,9 @@ setTimeout(() => {
 
   // 2. the map: hike to a landmark and to unexplored ground; time labels lie along their lines
   const before = S().t;
-  tap(P, '[data-hike]', /Head for the (?!unknown)/);
-  tap(P, '[data-hike]', /unknown/);
+  tap(P, '[data-hike]', /Head for the /);
+  strikeOut(P.w, P.d, 'east');
+  tap(P, '[data-maproutes]'); // routes are hidden until asked for
   check(S().t > before, 'hikes take time');
   check(S().sites.length >= 2, 'hikes make places');
   const labels = [...P.d.querySelectorAll('.etime')];

@@ -58,6 +58,7 @@ function measure(d) {
     for (let k = 0; k < 50 && !d.querySelector('#begin'); k++) await wait(100);
     d.querySelector('#begin').click();
     const click = el => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    click(d.querySelector('[data-maproutes]')); // routes are hidden until asked for
     const scan = d.querySelector('[data-here="scan"]:not([disabled])'); if (scan) click(scan);
     // a fixed itinerary: out to landmarks and unexplored ground, now and then back to a known place
     for (let move = 1; move <= CHECKPOINTS[CHECKPOINTS.length - 1]; move++) {

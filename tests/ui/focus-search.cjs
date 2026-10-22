@@ -1,4 +1,5 @@
 const { JSDOM } = require('jsdom');
+const { strikeOut } = require('./tap-map.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
 const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
 const w = dom.window, d = w.document, errors = [];
@@ -13,8 +14,8 @@ setTimeout(() => {
     const start = d.querySelectorAll('.entry').length;
     click('[data-here="look"]'); click('[data-look="focus:spindle"]');
     console.log('look button: ' + d.querySelector('[data-here="look"]').textContent);
-    click('[data-hike]', /unknown east/);
-    click('[data-hike]', /unknown south/);
+    strikeOut(w, d, 'east');
+    strikeOut(w, d, 'south');
     click('[data-here="look"]'); // stop looking
     click('[data-here="look"]'); click('[data-look="distant:water"]');
     click('[data-here="look"]');

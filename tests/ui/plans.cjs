@@ -1,4 +1,5 @@
 const { JSDOM } = require('jsdom');
+const { strikeOut } = require('./tap-map.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
 const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
 const w = dom.window, d = w.document, errors = [];
@@ -17,7 +18,7 @@ setTimeout(() => {
     setGoal('spindle'); click('[data-think="root"]');
     setGoal('proc:hand-drill-ember'); click('[data-think="root"]');
     click('[data-here="look"]'); click('[data-look="focus:hearth"]'); // keeps looking along the way
-    for (let k = 0; k < 4; k++) click('[data-hike]', [/unknown north/, /unknown east/, /unknown south/, /unknown west/][k]);
+    for (const dir of ['north', 'east', 'south', 'west']) strikeOut(w, d, dir);
     click('[data-here="look"]'); // stop
     click('[data-here="look"]'); click('[data-look="focus:stone"]'); click('[data-here="look"]');
     console.log([...d.querySelectorAll('.entry')].slice(start).map(e => e.textContent.replace(/^(\d\d:\d\d)/, '[$1] ')).filter(t => /To get|To spin|Looking for|On the way|nothing|best|Didn’t reach/.test(t)).join('\n'));

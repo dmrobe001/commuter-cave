@@ -10,6 +10,7 @@
 //   then the fire plan: edges → hearth board → spindle → tinder → spare wood → test, choose, drill.
 
 const { JSDOM } = require('jsdom');
+const { strikeOut } = require('./tap-map.cjs');
 const path = require('path');
 const html = require('fs').readFileSync(path.join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
 const [seed = 'pig-rock', preset = '', maxStepsArg] = process.argv.slice(2);
@@ -93,10 +94,7 @@ let dirTurn = 0;
 function explore(want, focus = '') {
   closePicker();
   if (want && click('[data-hike]', want)) return true;
-  const out = all('[data-hike]').filter(b => !b.disabled && /unknown/.test(b.getAttribute('aria-label') ?? ''));
-  if (!out.length) return false;
-  out[(dirTurn++ * 3) % out.length].dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
-  return true;
+  return strikeOut(w, d, ['north', 'east', 'south', 'west', 'northeast', 'southwest', 'southeast', 'northwest'][(dirTurn++ * 3) % 8]); // about 1 km
 }
 
 const WATER = /water|river|stream|brook|lake|falls|cascade|tree line/;
