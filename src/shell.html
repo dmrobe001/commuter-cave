@@ -143,7 +143,8 @@ button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 6
 .scalebar i { display: inline-block; height: .35rem; border: 1.5px solid var(--muted); border-top: 0; }
 .mapsvg .stream .flow.known { stroke-dasharray: none; }
 .mapsvg .feature { cursor: pointer; }
-.mapsvg .feature.lake ellipse { fill: var(--water); opacity: .45; stroke: var(--water); stroke-width: calc(.12 * var(--u)); }
+.mapsvg .feature.lake { opacity: .5; } /* the whole lake faded at once, so overlapping circles don't darken */
+.mapsvg .feature.lake circle { fill: var(--water); }
 .mapsvg .feature.cliff .face, .mapsvg .feature.cliff .tick { stroke: var(--ink); fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
 .mapsvg .feature .hit { stroke: transparent; fill: none; pointer-events: stroke; }
 .mapsvg .flabel { fill: var(--muted); font-style: italic; paint-order: stroke; stroke: var(--bg); stroke-width: calc(.25 * var(--u)); pointer-events: none; }

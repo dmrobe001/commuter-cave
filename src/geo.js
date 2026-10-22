@@ -25,7 +25,8 @@ const CANOPY_H = 18; // metres of canopy at full vegetation
 // ------------------------------------------------------------ sight
 
 // Fraction of light reaching the target: 0 if terrain blocks, reduced by canopy along the way.
-export function sightline(L, a, b, eyeH = 1.7, targetH = 2) {
+// `fromEdge`: looking out from the edge of my own cell (as at a shore), so its trees don't count.
+export function sightline(L, a, b, eyeH = 1.7, targetH = 2, { fromEdge = false } = {}) {
   const d = Math.hypot(b.x - a.x, b.y - a.y);
   const steps = Math.max(2, Math.ceil(d * 2));
   const e0 = L.elev[idx(a.x, a.y)] + eyeH + CANOPY_H * 0.15 * L.veg[idx(a.x, a.y)] * 0; // eye height above ground
@@ -36,7 +37,8 @@ export function sightline(L, a, b, eyeH = 1.7, targetH = 2) {
     const c = idx(Math.round(a.x + (b.x - a.x) * t), Math.round(a.y + (b.y - a.y) * t));
     const line = e0 + (e1 - e0) * t;
     if (L.elev[c] > line) return 0;
-    if (L.elev[c] + CANOPY_H * L.veg[c] > line) trans *= Math.exp(-1.2 * L.veg[c] * (CELL / 2) / 40);
+    if (fromEdge && c === idx(a.x, a.y)) continue;
+    if (!L.lake[c] && L.elev[c] + CANOPY_H * L.veg[c] > line) trans *= Math.exp(-1.2 * L.veg[c] * (CELL / 2) / 40); // no trees on open water
     if (trans < 0.01) return 0;
   }
   return trans;

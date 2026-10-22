@@ -143,7 +143,8 @@ button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 6
 .scalebar i { display: inline-block; height: .35rem; border: 1.5px solid var(--muted); border-top: 0; }
 .mapsvg .stream .flow.known { stroke-dasharray: none; }
 .mapsvg .feature { cursor: pointer; }
-.mapsvg .feature.lake ellipse { fill: var(--water); opacity: .45; stroke: var(--water); stroke-width: calc(.12 * var(--u)); }
+.mapsvg .feature.lake { opacity: .5; } /* the whole lake faded at once, so overlapping circles don't darken */
+.mapsvg .feature.lake circle { fill: var(--water); }
 .mapsvg .feature.cliff .face, .mapsvg .feature.cliff .tick { stroke: var(--ink); fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
 .mapsvg .feature .hit { stroke: transparent; fill: none; pointer-events: stroke; }
 .mapsvg .flabel { fill: var(--muted); font-style: italic; paint-order: stroke; stroke: var(--bg); stroke-width: calc(.25 * var(--u)); pointer-events: none; }
@@ -3129,7 +3130,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   var bearing = (a, b) => (Math.atan2(b.x - a.x, -(b.y - a.y)) * 180 / Math.PI + 360) % 360;
   var distM = (a, b) => Math.hypot(b.x - a.x, b.y - a.y) * CELL;
   var CANOPY_H = 18;
-  function sightline(L, a, b, eyeH = 1.7, targetH = 2) {
+  function sightline(L, a, b, eyeH = 1.7, targetH = 2, { fromEdge = false } = {}) {
     const d = Math.hypot(b.x - a.x, b.y - a.y);
     const steps = Math.max(2, Math.ceil(d * 2));
     const e0 = L.elev[idx2(a.x, a.y)] + eyeH + CANOPY_H * 0.15 * L.veg[idx2(a.x, a.y)] * 0;
@@ -3141,7 +3142,9 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       const line = e0 + (e1 - e0) * t;
       if (L.elev[c] > line)
         return 0;
-      if (L.elev[c] + CANOPY_H * L.veg[c] > line)
+      if (fromEdge && c === idx2(a.x, a.y))
+        continue;
+      if (!L.lake[c] && L.elev[c] + CANOPY_H * L.veg[c] > line)
         trans *= Math.exp(-1.2 * L.veg[c] * (CELL / 2) / 40);
       if (trans < 0.01)
         return 0;
@@ -5436,8 +5439,10 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     if (a.flow != null && angDiff(way, a.flow) > 85 || b.flow != null && angDiff(way, b.flow) > 85)
       return false;
     for (let i = 1; i < d; i++) {
-      const t = i / d;
-      if (S.L.elev[cellOf(Math.round(a.x + (b.x - a.x) * t), Math.round(a.y + (b.y - a.y) * t))] > a.elev + (b.elev - a.elev) * t + 5)
+      const t = i / d, c = cellOf(Math.round(a.x + (b.x - a.x) * t), Math.round(a.y + (b.y - a.y) * t));
+      if (S.L.elev[c] > a.elev + (b.elev - a.elev) * t + 5)
+        return false;
+      if (S.L.lake[c] && (S.seenLand?.[c] ?? 0) >= SEEN)
         return false;
     }
     return true;
@@ -5500,7 +5505,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
           }
         }
       for (const f of st.fixes) {
-        if (walked.has(f))
+        if (walked.has(f) || isMouth(f.x, f.y))
           continue;
         let best = null;
         for (const g of st.fixes)
@@ -5545,13 +5550,20 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     return NB8.map(([dx, dy]) => ({ x: x + dx, y: y + dy })).filter((q) => q.x >= 0 && q.y >= 0 && q.x < N && q.y < N && S.L.chan[cellOf(q.x, q.y)] && !S.L.lake[cellOf(q.x, q.y)] && S.L.down[cellOf(q.x, q.y)] === c);
   }
   var nearFeature = (list, p, r) => list.some((f) => Math.abs(f.x - p.x) <= r && Math.abs(f.y - p.y) <= r);
+  var isMouth = (x, y) => {
+    const c = cellOf(x, y);
+    return !!S.L.chan[c] && !S.L.lake[c] && S.L.down[c] >= 0 && !!S.L.lake[S.L.down[c]];
+  };
   function waterMark(t) {
+    if (isMouth(t.x, t.y))
+      return "mouth";
     if (S.L.chan[cellOf(t.x, t.y)] && inflowsAt(t.x, t.y).length >= 2)
       return "fork";
-    if (nearFeature(S.L.features.waterfalls, t, 1))
-      return "falls";
-    if (t.micro === "spring" || nearFeature(S.L.features.springs, t, 1))
+    if (t.micro === "spring" || nearFeature(S.L.features.springs, t, 0))
       return "spring";
+    const fall = S.L.features.waterfalls.find((f) => Math.abs(f.x - t.x) <= 1 && Math.abs(f.y - t.y) <= 1);
+    if (fall && !S.sites.some((o) => o !== t && Math.hypot(o.x - fall.x, o.y - fall.y) < Math.hypot(t.x - fall.x, t.y - fall.y)))
+      return "falls";
     return null;
   }
   var lakeside = (t) => NB8.some(([dx, dy]) => {
@@ -5615,10 +5627,11 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   }
   function newSite(x, y, name) {
     const micro = microAt(x, y), wet = !!S.L.chan[cellOf(x, y)];
-    const near = S.sites.find((t) => Math.abs(t.x - x) <= 1 && Math.abs(t.y - y) <= 1 && t.micro === micro && !!S.L.chan[cellOf(t.x, t.y)] === wet);
+    const mark = isMouth(x, y) || nearFeature(S.L.features.springs, { x, y }, 0);
+    const near = S.sites.find((t) => t.x === x && t.y === y) ?? (!mark && S.sites.find((t) => Math.abs(t.x - x) <= 1 && Math.abs(t.y - y) <= 1 && t.micro === micro && !!S.L.chan[cellOf(t.x, t.y)] === wet && !isMouth(t.x, t.y)));
     if (near)
       return near;
-    const noun = { fork: "fork", falls: "falls", spring: "spring" }[waterMark({ x, y, micro })] ?? SITE_NOUN[micro] ?? micro;
+    const noun = { fork: "fork", falls: "falls", spring: "spring", mouth: "mouth" }[waterMark({ x, y, micro })] ?? SITE_NOUN[micro] ?? micro;
     const s = { key: `p${x}_${y}`, x, y, micro, name: name ?? uniqueName(noun, { x, y }, looksOf("site", x, y)), known: /* @__PURE__ */ new Set(), visits: 0, hut: false, fireUntil: -1 };
     S.sites.push(s);
     return s;
@@ -5803,7 +5816,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       for (const [dx, dy] of NB8) {
         const x2 = s.x + dx, y2 = s.y + dy;
         if (x2 >= 0 && y2 >= 0 && x2 < N && y2 < N && S.L.lake[cellOf(x2, y2)])
-          revealFeature(waterKeyAt(S.L, x2, y2), s, 1.7);
+          revealFeature(waterKeyAt(S.L, x2, y2), s, 1.7, true);
       }
       noteSeenFeatures();
       log("New shore: I take a good look across the water.", "thought");
@@ -6026,11 +6039,17 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     if (!at)
       return [];
     const name = (S.streams.find((st) => st.fixes.some((f) => Math.hypot(f.x - at.x, f.y - at.y) <= 1.5)) ?? matchStream(makeFix(at)))?.name ?? "the stream";
-    const out = [], down = flowAt(at.x, at.y), next = S.L.down[cellOf(at.x, at.y)];
-    if (down != null && !S.L.lake[next])
+    const goes = (dir, branch) => {
+      const t = followStage(S.L, h, dir, { branch });
+      return t.hours > 0 && Math.max(Math.abs(t.end.x - h.x), Math.abs(t.end.y - h.y)) > 1;
+    };
+    const out = [], down = flowAt(at.x, at.y);
+    if (down != null && !isMouth(at.x, at.y) && goes("down"))
       out.push({ key: "follow:down", dir: down, say: `Follow ${name} downstream (up to 15 min)` });
     const ins = inflowsAt(at.x, at.y);
     for (const b of ins) {
+      if (!goes("up", b))
+        continue;
       let c = cellOf(b.x, b.y);
       for (let n = 0; n < 3; n++) {
         const up = inflowsAt(c % N, Math.floor(c / N)).sort((p, q) => S.L.acc[cellOf(q.x, q.y)] - S.L.acc[cellOf(p.x, p.y)])[0];
@@ -6043,7 +6062,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     }
     return out;
   }
-  var STOP_WORDS = { fork: "to where streams join", falls: "to a waterfall", spring: "to a spring, where it rises", lake: "to the edge of a lake", source: "until it gave out at its source", edge: "as far as I dare go that way" };
+  var STOP_WORDS = { fork: "to where streams join", lake: "to where it runs into a lake", falls: "to a waterfall", spring: "to a spring, where it rises", source: "until it gave out at its source", edge: "as far as I dare go that way" };
   function followStream(dir, branch) {
     const from = site(), knownBefore = S.sites.length;
     const trip = followStage(S.L, from, dir, { branch });
@@ -7521,6 +7540,10 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     S.ch.focus = clamp(S.ch.focus + 0.12 * hours);
     log(choice === "dusk" ? "Rested in the shade until dusk." : `Rested for ${hours === 1 ? "an hour" : `${hours} hours`}.`);
   }
+  var waterUp = (x, y) => {
+    const c = cellOf(x, y);
+    return S.L.lake[c] ? S.L.filled[c] - S.L.elev[c] : 0;
+  };
   function markSeen(x, y, r, view = null) {
     S.seenLand ?? (S.seenLand = new Uint8Array(N * N));
     let changed = false;
@@ -7532,7 +7555,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
           continue;
         let k = Math.min(1, 3.3 * (1 - d));
         if (view && d * r > 2)
-          k *= Math.min(1, 1.5 * sightline(S.L, at, { x: nx, y: ny }, view.eye, 0.5));
+          k *= Math.min(1, 1.5 * sightline(S.L, at, { x: nx, y: ny }, view.eye, waterUp(nx, ny) + 0.5));
         const v = Math.round(255 * k), c = cellOf(nx, ny);
         if (v > S.seenLand[c]) {
           S.seenLand[c] = v;
@@ -7603,7 +7626,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     }
     return S.L._escOf = esc2;
   }
-  function revealFeature(key, from, eye) {
+  function revealFeature(key, from, eye, fromEdge = false) {
     const esc2 = cliffIndex(), cliff = key.startsWith("cliff-"), want = cliff ? +key.slice(6) : key;
     S.seenLand ?? (S.seenLand = new Uint8Array(N * N));
     let changed = false;
@@ -7615,7 +7638,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const q = { x: c % N, y: Math.floor(c / N) };
       if (Math.hypot(q.x - from.x, q.y - from.y) * CELL > 4e3)
         continue;
-      if (sightline(S.L, { x: Math.round(from.x), y: Math.round(from.y) }, q, eye, cliff ? 8 : 0.5) > 0.1) {
+      if (sightline(S.L, { x: Math.round(from.x), y: Math.round(from.y) }, q, eye, cliff ? 8 : waterUp(q.x, q.y) + 0.5, { fromEdge }) > 0.1) {
         S.seenLand[c] = 255;
         changed = true;
       }
@@ -7716,30 +7739,60 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     }
     return (t) => (measureCtx ? measureCtx.measureText(t).width / MAP_PX : 0.56 * t.length) * fs;
   }
-  function lakeEllipses() {
-    const by = /* @__PURE__ */ new Map();
+  function lakeDistance() {
+    if (S.L._lakeDist)
+      return S.L._lakeDist;
+    const D = new Float32Array(N * N);
+    for (let c = 0; c < N * N; c++) {
+      if (!S.L.lake[c])
+        continue;
+      const x = c % N, y = Math.floor(c / N);
+      let best = 16;
+      for (let r = 1; r < best; r++)
+        for (let dy = -r; dy <= r; dy++)
+          for (let dx = -r; dx <= r; dx++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r)
+              continue;
+            const nx = x + dx, ny = y + dy;
+            if ((nx < 0 || ny < 0 || nx >= N || ny >= N || !S.L.lake[cellOf(nx, ny)]) && Math.hypot(dx, dy) < best)
+              best = Math.hypot(dx, dy);
+          }
+      D[c] = best - 0.5;
+    }
+    return S.L._lakeDist = D;
+  }
+  function lakeShapes() {
+    const memo = `${S.seenVer ?? 0}`;
+    if (S.lakeMemo?.key === memo)
+      return S.lakeMemo.lakes;
+    const D = lakeDistance(), by = /* @__PURE__ */ new Map();
     for (const q of seenPieces("lake")) {
       const e = by.get(q.key) ?? { key: q.key, name: q.name, id: q.id, cells: [] };
       e.cells.push(...q.cells);
       by.set(q.key, e);
     }
-    return [...by.values()].map((e) => {
-      const n = e.cells.length, mx = e.cells.reduce((a, c) => a + c.x, 0) / n, my = e.cells.reduce((a, c) => a + c.y, 0) / n;
-      let sxx = 1 / 12, syy = 1 / 12, sxy = 0;
-      for (const c of e.cells) {
-        sxx += (c.x - mx) ** 2 / n;
-        syy += (c.y - my) ** 2 / n;
-        sxy += (c.x - mx) * (c.y - my) / n;
+    const lakes = [...by.values()].map((e) => {
+      const jit = (x, y, k) => (Math.sin(x * 12.9898 + y * 78.233 + k * 37.719) * 43758.5453 % 1 + 1) % 1 - 0.5;
+      const order = [...e.cells].sort((p, q) => D[cellOf(q.x, q.y)] - D[cellOf(p.x, p.y)] || p.y - q.y || p.x - q.x);
+      const circles = [];
+      for (const c of order) {
+        if (circles.some((k) => Math.hypot(k.x - c.x, k.y - c.y) <= k.r))
+          continue;
+        const r = Math.max(0.6, D[cellOf(c.x, c.y)]), j = Math.min(0.35, r * 0.2);
+        circles.push({ x: c.x + jit(c.x, c.y, 1) * j, y: c.y + jit(c.x, c.y, 2) * j, r: r * (0.92 + 0.16 * (jit(c.x, c.y, 3) + 0.5)) });
       }
-      const tr = sxx + syy, det = sxx * syy - sxy * sxy, l1 = tr / 2 + Math.sqrt(Math.max(0, tr * tr / 4 - det)), l2 = Math.max(0, tr - l1);
-      return { ...e, x: mx, y: my, rx: Math.max(0.8, 2 * Math.sqrt(l1)), ry: Math.max(0.8, 2 * Math.sqrt(l2)), deg: 0.5 * Math.atan2(2 * sxy, sxx - syy) * 180 / Math.PI };
+      const big = circles[0];
+      return { ...e, circles, x: big.x, y: big.y };
     });
+    S.lakeMemo = { key: memo, lakes };
+    return lakes;
   }
   function scaleBar(span) {
     const pxPerCell = mapSide() / span, cellsPerMin = 5e3 / 60 / CELL;
     const mins = [5, 10, 15, 20, 30, 45, 60, 90, 120, 180].find((m) => m * cellsPerMin * pxPerCell >= 60) ?? 180;
     const px = Math.round(mins * cellsPerMin * pxPerCell);
-    return `<span class="scalebar" aria-label="Scale: ${timeWords(mins / 60, "known")} walking on open ground"><i style="width:${px}px"></i>${timeWords(mins / 60, "known")} on open ground</span>`;
+    const say = mins < 60 ? `${mins} min` : `${mins / 60} h`;
+    return `<span class="scalebar" aria-label="Scale: ${say} walking on open ground"><i style="width:${px}px"></i>${say} on open ground</span>`;
   }
   function mapHTML() {
     const M2 = mentalMap();
@@ -7751,7 +7804,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     if (S.mapView)
       ({ x: x0, y: y0, span } = S.mapView);
     const fs = MAP_PX * span / mapSide(), u = (px) => px * fs / MAP_PX;
-    const routes = !!S.mapRoutes, trees = streamTrees(), lakes = lakeEllipses();
+    const routes = !!S.mapRoutes, trees = streamTrees(), lakes = lakeShapes();
     const cliffs = seenPieces("cliff").map((q) => ({ ...q, line: cliffLine(q) }));
     const radius = (i) => fs * (i === hi ? 0.65 : 0.45);
     const chev = (x, y, dx, dy, k = fs * 0.4) => `M${x - dx * k + dy * k} ${y - dy * k - dx * k}L${x + dx * k} ${y + dy * k}L${x - dx * k - dy * k} ${y - dy * k + dx * k}`;
@@ -7834,7 +7887,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const say = `Head for ${q.name} (${timeWords(lineHours2(S.L, here, nearCell(q)), "guess")})`;
       return `<g class="feature ${kind}" data-hike="${q.id}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title>`;
     };
-    const Lk = lakes.map((q) => area(q, "lake") + `<ellipse cx="${q.x}" cy="${q.y}" rx="${q.rx}" ry="${q.ry}" transform="rotate(${q.deg.toFixed(1)} ${q.x} ${q.y})"/></g>`).join("");
+    const Lk = lakes.map((q) => area(q, "lake") + q.circles.map((k) => `<circle cx="${k.x.toFixed(2)}" cy="${k.y.toFixed(2)}" r="${k.r.toFixed(2)}"/>`).join("") + "</g>").join("");
     const Cl = cliffs.map((q) => {
       const { pts, nx, ny } = q.line, d = pts.map((p, k) => `${k ? "L" : "M"}${p.x} ${p.y}`).join(""), t = u(7);
       return area(q, "cliff") + `<path class="face" d="${d}" stroke-width="${u(3.5)}"/>` + along(pts, 16).marks.map((m) => `<line class="tick" x1="${m.x}" y1="${m.y}" x2="${m.x + nx * t}" y2="${m.y + ny * t}" stroke-width="${u(2)}"/>`).join("") + `<path class="hit" d="${d}" stroke-width="${fs * 2.2}"/></g>`;
@@ -8304,7 +8357,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       }).observe(box);
     }
   }
-  var BUILD = "hk-2026-10-22f";
+  var BUILD = "hk-2026-10-22g";
   function record(d) {
     S.record ?? (S.record = []);
     S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
@@ -8395,7 +8448,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       inp.addEventListener("blur", done, { once: true });
       return;
     }
-    const a = { ...d };
+    const { i: _, ...a } = { ...d };
     if (act(a)) {
       record(a);
       render();

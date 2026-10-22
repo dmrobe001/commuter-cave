@@ -169,9 +169,10 @@ function flowsTo(a, b) { // could water at fix a run down to fix b? (downhill, n
   if (b.size < a.size) return false;
   const way = bearing(a, b);
   if ((a.flow != null && angDiff(way, a.flow) > 85) || (b.flow != null && angDiff(way, b.flow) > 85)) return false;
-  for (let i = 1; i < d; i++) { // the ground between stays within 5 m of a straight descent from a to b
-    const t = i / d;
-    if (S.L.elev[cellOf(Math.round(a.x + (b.x - a.x) * t), Math.round(a.y + (b.y - a.y) * t))] > a.elev + (b.elev - a.elev) * t + 5) return false;
+  for (let i = 1; i < d; i++) { // the ground between stays within 5 m of a straight descent from a to b, and isn't lake I've seen
+    const t = i / d, c = cellOf(Math.round(a.x + (b.x - a.x) * t), Math.round(a.y + (b.y - a.y) * t));
+    if (S.L.elev[c] > a.elev + (b.elev - a.elev) * t + 5) return false;
+    if (S.L.lake[c] && (S.seenLand?.[c] ?? 0) >= SEEN) return false;
   }
   return true;
 }
@@ -209,6 +210,8 @@ function addFix(p, how, hint = null) {
   return { st, isNew, fix: old ?? fix };
 }
 // Each stream as drawn: links from each fix to the nearest one it could flow down to, and lone fixes.
+// The guesses are made afresh each time from what I know now, so one I've since learnt can't be
+// (it would cross a lake I've seen, or leave a mouth) simply isn't drawn.
 function streamTrees() {
   const memo = `${S.streamVer ?? 0}/${[...(S.streamGaps ?? [])].length}`;
   if (S.treeMemo?.key === memo) return S.treeMemo.trees;
@@ -220,7 +223,7 @@ function streamTrees() {
       if (a !== b && !walked.has(a)) { segs.push(Object.assign([a, b], { known: true })); walked.add(a); }
     }
     for (const f of st.fixes) {
-      if (walked.has(f)) continue;
+      if (walked.has(f) || isMouth(f.x, f.y)) continue; // its way down is known: along a walked stretch, or into a lake
       let best = null;
       for (const g of st.fixes) if (g !== f && flowsTo(f, g) && !S.streamGaps?.has(gapKey(f, g)) && (!best || Math.hypot(g.x - f.x, g.y - f.y) < Math.hypot(best.x - f.x, best.y - f.y))) best = g;
       if (best) segs.push([f, best]);
@@ -264,10 +267,13 @@ function inflowsAt(x, y) { // channel cells that drain into this one
   return NB8.map(([dx, dy]) => ({ x: x + dx, y: y + dy })).filter(q => q.x >= 0 && q.y >= 0 && q.x < GN && q.y < GN && S.L.chan[cellOf(q.x, q.y)] && !S.L.lake[cellOf(q.x, q.y)] && S.L.down[cellOf(q.x, q.y)] === c);
 }
 const nearFeature = (list, p, r) => list.some(f => Math.abs(f.x - p.x) <= r && Math.abs(f.y - p.y) <= r);
+const isMouth = (x, y) => { const c = cellOf(x, y); return !!S.L.chan[c] && !S.L.lake[c] && S.L.down[c] >= 0 && !!S.L.lake[S.L.down[c]]; };
 function waterMark(t) { // what makes a place by water worth a marker, if anything
+  if (isMouth(t.x, t.y)) return 'mouth'; // where a stream runs into a lake
   if (S.L.chan[cellOf(t.x, t.y)] && inflowsAt(t.x, t.y).length >= 2) return 'fork';
-  if (nearFeature(S.L.features.waterfalls, t, 1)) return 'falls';
-  if (t.micro === 'spring' || nearFeature(S.L.features.springs, t, 1)) return 'spring';
+  if (t.micro === 'spring' || nearFeature(S.L.features.springs, t, 0)) return 'spring'; // a spring is a point: its own cell
+  const fall = S.L.features.waterfalls.find(f => Math.abs(f.x - t.x) <= 1 && Math.abs(f.y - t.y) <= 1);
+  if (fall && !S.sites.some(o => o !== t && Math.hypot(o.x - fall.x, o.y - fall.y) < Math.hypot(t.x - fall.x, t.y - fall.y))) return 'falls'; // the place nearest it
   return null;
 }
 const lakeside = t => NB8.some(([dx, dy]) => { const x = t.x + dx, y = t.y + dy; return x >= 0 && y >= 0 && x < GN && y < GN && S.L.lake[cellOf(x, y)]; });
@@ -333,9 +339,10 @@ function mapHours(from, key, target) {
 // but only one of the same kind of ground: the bank of a stream is not the wood beside it.
 function newSite(x, y, name) {
   const micro = microAt(x, y), wet = !!S.L.chan[cellOf(x, y)];
-  const near = S.sites.find(t => Math.abs(t.x - x) <= 1 && Math.abs(t.y - y) <= 1 && t.micro === micro && !!S.L.chan[cellOf(t.x, t.y)] === wet);
+  const mark = isMouth(x, y) || nearFeature(S.L.features.springs, { x, y }, 0); // a mouth or a spring is a place of its own
+  const near = S.sites.find(t => t.x === x && t.y === y) ?? (!mark && S.sites.find(t => Math.abs(t.x - x) <= 1 && Math.abs(t.y - y) <= 1 && t.micro === micro && !!S.L.chan[cellOf(t.x, t.y)] === wet && !isMouth(t.x, t.y)));
   if (near) return near;
-  const noun = { fork: 'fork', falls: 'falls', spring: 'spring' }[waterMark({ x, y, micro })] ?? SITE_NOUN[micro] ?? micro; // a place by water named for what makes it one
+  const noun = { fork: 'fork', falls: 'falls', spring: 'spring', mouth: 'mouth' }[waterMark({ x, y, micro })] ?? SITE_NOUN[micro] ?? micro; // a place by water named for what makes it one
   const s = { key: `p${x}_${y}`, x, y, micro, name: name ?? uniqueName(noun, { x, y }, looksOf('site', x, y)), known: new Set(), visits: 0, hut: false, fireUntil: -1 };
   S.sites.push(s);
   return s;
@@ -490,7 +497,7 @@ function arrive(x, y, how, onTheWay = null) {
   if (onTheWay) onTheWay();
   if (fresh && lakeside(s)) { // a stretch of shore I haven't stood on: a good look across the water
     pass(0.5, 120);
-    for (const [dx, dy] of NB8) { const x2 = s.x + dx, y2 = s.y + dy; if (x2 >= 0 && y2 >= 0 && x2 < GN && y2 < GN && S.L.lake[cellOf(x2, y2)]) revealFeature(waterKeyAt(S.L, x2, y2), s, 1.7); }
+    for (const [dx, dy] of NB8) { const x2 = s.x + dx, y2 = s.y + dy; if (x2 >= 0 && y2 >= 0 && x2 < GN && y2 < GN && S.L.lake[cellOf(x2, y2)]) revealFeature(waterKeyAt(S.L, x2, y2), s, 1.7, true); } // from the water's edge
     noteSeenFeatures();
     log('New shore: I take a good look across the water.', 'thought');
     sense(s, false, { scan: true });
@@ -665,10 +672,13 @@ function followOptions() {
   const at = S.L.chan[cellOf(h.x, h.y)] ? h : NB8.map(([dx, dy]) => ({ x: h.x + dx, y: h.y + dy })).find(q => q.x >= 0 && q.y >= 0 && q.x < GN && q.y < GN && S.L.chan[cellOf(q.x, q.y)] && !S.L.lake[cellOf(q.x, q.y)]);
   if (!at) return [];
   const name = (S.streams.find(st => st.fixes.some(f => Math.hypot(f.x - at.x, f.y - at.y) <= 1.5)) ?? matchStream(makeFix(at)))?.name ?? 'the stream';
-  const out = [], down = flowAt(at.x, at.y), next = S.L.down[cellOf(at.x, at.y)];
-  if (down != null && !S.L.lake[next]) out.push({ key: 'follow:down', dir: down, say: `Follow ${name} downstream (up to 15 min)` });
+  // offered only where a stage would get me to a new place (not straight into a lake, say)
+  const goes = (dir, branch) => { const t = followStage(S.L, h, dir, { branch }); return t.hours > 0 && Math.max(Math.abs(t.end.x - h.x), Math.abs(t.end.y - h.y)) > 1; };
+  const out = [], down = flowAt(at.x, at.y);
+  if (down != null && !isMouth(at.x, at.y) && goes('down')) out.push({ key: 'follow:down', dir: down, say: `Follow ${name} downstream (up to 15 min)` });
   const ins = inflowsAt(at.x, at.y);
   for (const b of ins) {
+    if (!goes('up', b)) continue;
     let c = cellOf(b.x, b.y); // the way this branch comes from, over a few cells
     for (let n = 0; n < 3; n++) { const up = inflowsAt(c % GN, Math.floor(c / GN)).sort((p, q) => S.L.acc[cellOf(q.x, q.y)] - S.L.acc[cellOf(p.x, p.y)])[0]; if (!up) break; c = cellOf(up.x, up.y); }
     const dir = bearing(at, { x: c % GN, y: Math.floor(c / GN) });
@@ -676,7 +686,7 @@ function followOptions() {
   }
   return out;
 }
-const STOP_WORDS = { fork: 'to where streams join', falls: 'to a waterfall', spring: 'to a spring, where it rises', lake: 'to the edge of a lake', source: 'until it gave out at its source', edge: 'as far as I dare go that way' };
+const STOP_WORDS = { fork: 'to where streams join', lake: 'to where it runs into a lake', falls: 'to a waterfall', spring: 'to a spring, where it rises', source: 'until it gave out at its source', edge: 'as far as I dare go that way' };
 // Follow the stream a stage: about a quarter of an hour, or less if something stops me. The stretch
 // walked goes on the map as known (fixes every few cells, one run).
 function followStream(dir, branch) {
@@ -1792,6 +1802,7 @@ function restFor(choice) {
 // a long way over open ground, little in thick forest, nothing behind a ridge), more from a lookout,
 // and the ground close along the way I walked. S.mapLand: 'seen' (the default), 'all' (the whole
 // map, which gives the game away), 'off'.
+const waterUp = (x, y) => { const c = cellOf(x, y); return S.L.lake[c] ? S.L.filled[c] - S.L.elev[c] : 0; }; // a lake's surface stands above its bed: sight aims at the water
 function markSeen(x, y, r, view = null) { // view: { eye } to reveal only what's in sight out to r
   S.seenLand ??= new Uint8Array(GN * GN);
   let changed = false;
@@ -1800,7 +1811,7 @@ function markSeen(x, y, r, view = null) { // view: { eye } to reveal only what's
     const nx = at.x + dx, ny = at.y + dy, d = Math.hypot(dx, dy) / r;
     if (nx < 0 || ny < 0 || nx >= GN || ny >= GN || d > 1) continue;
     let k = Math.min(1, 3.3 * (1 - d)); // full strength over the inner 70%, then a soft edge
-    if (view && d * r > 2) k *= Math.min(1, 1.5 * sightline(S.L, at, { x: nx, y: ny }, view.eye, 0.5));
+    if (view && d * r > 2) k *= Math.min(1, 1.5 * sightline(S.L, at, { x: nx, y: ny }, view.eye, waterUp(nx, ny) + 0.5));
     const v = Math.round(255 * k), c = cellOf(nx, ny);
     if (v > S.seenLand[c]) { S.seenLand[c] = v; changed = true; }
   }
@@ -1854,7 +1865,7 @@ function cliffIndex() { // cell -> index in landscape's escarpments (as in the l
 }
 // Seeing a lake or a cliff as a landmark shows me how it lies: the cells of it in my line of sight,
 // out to sight range (a cliff face stands up, so it shows where flat ground wouldn't).
-function revealFeature(key, from, eye) {
+function revealFeature(key, from, eye, fromEdge = false) {
   const esc = cliffIndex(), cliff = key.startsWith('cliff-'), want = cliff ? +key.slice(6) : key;
   S.seenLand ??= new Uint8Array(GN * GN);
   let changed = false;
@@ -1863,7 +1874,7 @@ function revealFeature(key, from, eye) {
     if (S.seenLand[c] >= 255) continue;
     const q = { x: c % GN, y: Math.floor(c / GN) };
     if (Math.hypot(q.x - from.x, q.y - from.y) * CELL > 4000) continue;
-    if (sightline(S.L, { x: Math.round(from.x), y: Math.round(from.y) }, q, eye, cliff ? 8 : 0.5) > 0.1) { S.seenLand[c] = 255; changed = true; }
+    if (sightline(S.L, { x: Math.round(from.x), y: Math.round(from.y) }, q, eye, cliff ? 8 : waterUp(q.x, q.y) + 0.5, { fromEdge }) > 0.1) { S.seenLand[c] = 255; changed = true; }
   }
   if (changed) S.seenVer = (S.seenVer ?? 0) + 1;
 }
@@ -1936,19 +1947,45 @@ function textWidth(fs) { // label width in map units, at label size fs
   if (canDraw && !measureCtx) { measureCtx = document.createElement('canvas').getContext('2d'); if (measureCtx) measureCtx.font = `${MAP_PX}px Archivo, "Helvetica Neue", Arial, sans-serif`; }
   return t => (measureCtx ? measureCtx.measureText(t).width / MAP_PX : 0.56 * t.length) * fs;
 }
-// A lake as I picture it: one ellipse, my best guess from every cell of it I've seen. Its centre is
-// their mean; its axes and tilt come from their spread (a filled ellipse's semi-axis is twice the
-// standard deviation along it).
-function lakeEllipses() {
-  const by = new Map();
+// A lake as I picture it: circles on the parts of it I've seen, each as big as fits inside the lake's
+// shore there, so together they round out into its shape without showing the grid. Biggest first;
+// a circle is added for any seen cell not yet inside one, its centre nudged a little (fixed per cell)
+// so the edge looks natural.
+function lakeDistance() { // for each lake cell, the distance (in cells) from its centre to the nearest dry cell's edge
+  if (S.L._lakeDist) return S.L._lakeDist;
+  const D = new Float32Array(GN * GN);
+  for (let c = 0; c < GN * GN; c++) {
+    if (!S.L.lake[c]) continue;
+    const x = c % GN, y = Math.floor(c / GN);
+    let best = 16;
+    for (let r = 1; r < best; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+      const nx = x + dx, ny = y + dy;
+      if ((nx < 0 || ny < 0 || nx >= GN || ny >= GN || !S.L.lake[cellOf(nx, ny)]) && Math.hypot(dx, dy) < best) best = Math.hypot(dx, dy);
+    }
+    D[c] = best - 0.5;
+  }
+  return (S.L._lakeDist = D);
+}
+function lakeShapes() {
+  const memo = `${S.seenVer ?? 0}`;
+  if (S.lakeMemo?.key === memo) return S.lakeMemo.lakes;
+  const D = lakeDistance(), by = new Map();
   for (const q of seenPieces('lake')) { const e = by.get(q.key) ?? { key: q.key, name: q.name, id: q.id, cells: [] }; e.cells.push(...q.cells); by.set(q.key, e); }
-  return [...by.values()].map(e => {
-    const n = e.cells.length, mx = e.cells.reduce((a, c) => a + c.x, 0) / n, my = e.cells.reduce((a, c) => a + c.y, 0) / n;
-    let sxx = 1 / 12, syy = 1 / 12, sxy = 0; // a cell's own spread
-    for (const c of e.cells) { sxx += (c.x - mx) ** 2 / n; syy += (c.y - my) ** 2 / n; sxy += (c.x - mx) * (c.y - my) / n; }
-    const tr = sxx + syy, det = sxx * syy - sxy * sxy, l1 = tr / 2 + Math.sqrt(Math.max(0, tr * tr / 4 - det)), l2 = Math.max(0, tr - l1);
-    return { ...e, x: mx, y: my, rx: Math.max(0.8, 2 * Math.sqrt(l1)), ry: Math.max(0.8, 2 * Math.sqrt(l2)), deg: 0.5 * Math.atan2(2 * sxy, sxx - syy) * 180 / Math.PI };
+  const lakes = [...by.values()].map(e => {
+    const jit = (x, y, k) => (((Math.sin(x * 12.9898 + y * 78.233 + k * 37.719) * 43758.5453) % 1) + 1) % 1 - 0.5;
+    const order = [...e.cells].sort((p, q) => D[cellOf(q.x, q.y)] - D[cellOf(p.x, p.y)] || p.y - q.y || p.x - q.x);
+    const circles = [];
+    for (const c of order) {
+      if (circles.some(k => Math.hypot(k.x - c.x, k.y - c.y) <= k.r)) continue;
+      const r = Math.max(0.6, D[cellOf(c.x, c.y)]), j = Math.min(0.35, r * 0.2);
+      circles.push({ x: c.x + jit(c.x, c.y, 1) * j, y: c.y + jit(c.x, c.y, 2) * j, r: r * (0.92 + 0.16 * (jit(c.x, c.y, 3) + 0.5)) });
+    }
+    const big = circles[0];
+    return { ...e, circles, x: big.x, y: big.y };
   });
+  S.lakeMemo = { key: memo, lakes };
+  return lakes;
 }
 // Walking time drawn as a length: a scale bar of a round number of minutes on open, level ground
 // (about 5 km/h), between about 60 and 160 px long at the current zoom.
@@ -1956,7 +1993,8 @@ function scaleBar(span) {
   const pxPerCell = mapSide() / span, cellsPerMin = 5000 / 60 / CELL;
   const mins = [5, 10, 15, 20, 30, 45, 60, 90, 120, 180].find(m => m * cellsPerMin * pxPerCell >= 60) ?? 180;
   const px = Math.round(mins * cellsPerMin * pxPerCell);
-  return `<span class="scalebar" aria-label="Scale: ${timeWords(mins / 60, 'known')} walking on open ground"><i style="width:${px}px"></i>${timeWords(mins / 60, 'known')} on open ground</span>`;
+  const say = mins < 60 ? `${mins} min` : `${mins / 60} h`; // exact: a scale needs the number, not "a few minutes"
+  return `<span class="scalebar" aria-label="Scale: ${say} walking on open ground"><i style="width:${px}px"></i>${say} on open ground</span>`;
 }
 function mapHTML() {
   const M = mentalMap();
@@ -1966,7 +2004,7 @@ function mapHTML() {
   x0 -= (span - (Math.max(...xs) + 4 - x0)) / 2; y0 -= (span - (Math.max(...ys) + 4 - y0)) / 2; // centre the narrower way
   if (S.mapView) ({ x: x0, y: y0, span } = S.mapView);
   const fs = MAP_PX * span / mapSide(), u = px => px * fs / MAP_PX; // u: screen pixels in map units
-  const routes = !!S.mapRoutes, trees = streamTrees(), lakes = lakeEllipses();
+  const routes = !!S.mapRoutes, trees = streamTrees(), lakes = lakeShapes();
   const cliffs = seenPieces('cliff').map(q => ({ ...q, line: cliffLine(q) }));
   const radius = i => fs * (i === hi ? 0.65 : 0.45);
   const chev = (x, y, dx, dy, k = fs * 0.4) => `M${x - dx * k + dy * k} ${y - dy * k - dx * k}L${x + dx * k} ${y + dy * k}L${x - dx * k - dy * k} ${y - dy * k + dx * k}`;
@@ -2010,10 +2048,10 @@ function mapHTML() {
     else labelOf.set(t.i, `<text x="${b.x0}" y="${b.y1 - fs * 0.22}" font-size="${fs}">${esc(t.text)}</text>`);
   });
 
-  // ---- lakes: one ellipse each; cliffs: a line along them, ticks on the low side every 16 px
+  // ---- lakes: circles fitted inside their shores; cliffs: a line along them, ticks on the low side every 16 px
   const nearCell = q => q.cells.reduce((a, c) => (Math.hypot(c.x - here.x, c.y - here.y) < Math.hypot(a.x - here.x, a.y - here.y) ? c : a));
   const area = (q, kind) => { const say = `Head for ${q.name} (${timeWords(lineHours(S.L, here, nearCell(q)), 'guess')})`; return `<g class="feature ${kind}" data-hike="${q.id}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title>`; };
-  const Lk = lakes.map(q => area(q, 'lake') + `<ellipse cx="${q.x}" cy="${q.y}" rx="${q.rx}" ry="${q.ry}" transform="rotate(${q.deg.toFixed(1)} ${q.x} ${q.y})"/></g>`).join('');
+  const Lk = lakes.map(q => area(q, 'lake') + q.circles.map(k => `<circle cx="${k.x.toFixed(2)}" cy="${k.y.toFixed(2)}" r="${k.r.toFixed(2)}"/>`).join('') + '</g>').join('');
   const Cl = cliffs.map(q => { const { pts, nx, ny } = q.line, d = pts.map((p, k) => `${k ? 'L' : 'M'}${p.x} ${p.y}`).join(''), t = u(7);
     return area(q, 'cliff') + `<path class="face" d="${d}" stroke-width="${u(3.5)}"/>` + along(pts, 16).marks.map(m => `<line class="tick" x1="${m.x}" y1="${m.y}" x2="${m.x + nx * t}" y2="${m.y + ny * t}" stroke-width="${u(2)}"/>`).join('') + `<path class="hit" d="${d}" stroke-width="${fs * 2.2}"/></g>`; }).join('');
   const land = landImage();
@@ -2380,7 +2418,7 @@ if (typeof document !== 'undefined') {
 // Everything that happens follows from the world seed and the player's choices, so a record of the
 // seed and each choice reproduces a game exactly. Each action is the data of what was tapped (or
 // the value chosen); `act` applies one, and replaying a record runs them in order on a fresh game.
-const BUILD = 'hk-2026-10-22f'; // game logic version: a record replays faithfully only on the build that made it
+const BUILD = 'hk-2026-10-22g'; // game logic version: a record replays faithfully only on the build that made it
 function record(d) {
   S.record ??= [];
   S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
@@ -2426,7 +2464,7 @@ document.addEventListener('click', ev => {
     inp.addEventListener('blur', done, { once: true });
     return;
   }
-  const a = { ...d };
+  const { i: _, ...a } = { ...d }; // data-i numbers a map marker for the tests; it isn't part of the action
   if (act(a)) { record(a); render(); }
 });
 
