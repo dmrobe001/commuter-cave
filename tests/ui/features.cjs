@@ -26,8 +26,8 @@ const seeds = process.argv.slice(2).length ? process.argv.slice(2) : ['m', 'pig-
     lakes += L; cliffs += C;
     const names = [...d.querySelectorAll('.mapsvg .flabel:not(.stream)')].map(t => t.textContent);
     // each lake or cliff labelled at most once, by what it is (no modifiers: "lake", "cliff")
-    const drawn = { lake: L, cliff: C, crossing: d.querySelectorAll('.mapsvg .crossing').length };
-    for (const [kind, n] of Object.entries(drawn)) if (names.filter(t => t === kind).length > n) fails.push(`${seed}: more "${kind}" labels than ${kind}s drawn: ${names.join(', ')}`);
+    const drawn = { lake: L, cliff: C, crossing: d.querySelectorAll('.mapsvg .crossing').length, 'where I crossed': d.querySelectorAll('.mapsvg .crossed').length };
+    for (const [kind, n] of Object.entries(drawn)) if (names.filter(t => t === kind).length > n) fails.push(`${seed}: more "${kind}" labels than markers drawn: ${names.join(', ')}`);
     for (const t of names) if (!(t in drawn)) fails.push(`${seed}: a feature label that isn't just what it is: "${t}"`);
     if (d.querySelector('.mapsvg .feature.cliff') && !d.querySelector('.mapsvg .feature.cliff .tick')) fails.push(`${seed}: a cliff without ticks`);
     for (const kind of ['lake', 'cliff']) {

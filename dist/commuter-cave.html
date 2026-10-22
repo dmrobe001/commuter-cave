@@ -152,6 +152,9 @@ button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 6
 .mapsvg .crossing { cursor: pointer; }
 .mapsvg .crossing line { stroke: var(--ink); stroke-linecap: round; }
 .mapsvg .crossing .hit { fill: transparent; stroke: none; }
+.mapsvg .crossed { cursor: pointer; }
+.mapsvg .crossed circle:not(.hit) { fill: var(--bg); stroke: var(--water); }
+.mapsvg .crossed .hit { fill: transparent; stroke: none; }
 .mapsvg .node.site.spring circle:not(.hit) { fill: var(--water); stroke: var(--water); }
 .mapsvg .follow { cursor: pointer; }
 .mapsvg .follow .edge-of > *, .mapsvg .follow .face > * { fill: none; stroke-linecap: round; stroke-linejoin: round; }
@@ -8186,6 +8189,9 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     const crossings = (S.crossingsKnown ?? []).filter((q) => !S.sites.some((t) => t.x === q.x && t.y === q.y)).map((q) => ({ ...q, key: `crossing:${q.x}_${q.y}`, name: "crossing", cells: [q] }));
     for (const q of crossings)
       items.push({ feature: q, rank: 1.5 });
+    const crossed = S.streams.flatMap((st) => st.fixes.filter((f) => f.how === "crossed" && !(st.runs ?? []).some((r) => r.includes(f))).map((f) => ({ x: f.x, y: f.y, key: `crossed:${f.x}_${f.y}`, kind: "crossed", name: "where I crossed", cells: [f] }))).filter((q) => !M2.nodes.some((v) => !v.unmarked && v.x === q.x && v.y === q.y) && !crossings.some((c) => c.x === q.x && c.y === q.y));
+    for (const q of crossed)
+      items.push({ feature: q, rank: 4.5 });
     M2.nodes.forEach((v, i) => {
       if (i === hi || v.unmarked)
         return;
@@ -8277,6 +8283,10 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const bar = (o) => `<line x1="${q.x + fx * o - fy * k}" y1="${q.y + fy * o + fx * k}" x2="${q.x + fx * o + fy * k}" y2="${q.y + fy * o - fx * k}"/>`;
       const say = `Head for the crossing (${timeWords(routeHours(here, q), "guess")}): ${CROSSING_WORDS[q.kind]}`;
       return `<g class="crossing" data-hike="go:${q.x}_${q.y}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title><g stroke-width="${u(3)}">${bar(-g)}${bar(g)}</g><circle class="hit" cx="${q.x}" cy="${q.y}" r="${fs * 1.45}"/></g>`;
+    }).join("");
+    const XD = crossed.map((q) => {
+      const say = `Head for where I crossed (${timeWords(routeHours(here, q), "guess")})`;
+      return `<g class="crossed" data-hike="go:${q.x}_${q.y}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title><circle cx="${q.x}" cy="${q.y}" r="${fs * 0.3}" stroke-width="${u(2.5)}"/><circle class="hit" cx="${q.x}" cy="${q.y}" r="${fs * 1.45}"/></g>`;
     }).join("");
     const land = landImage();
     const unit = (x, y) => {
@@ -8387,7 +8397,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       return `<g ${i === hi ? "" : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" data-i="${i}" class="node ${v.site !== void 0 ? "site" : "sus"}${v.mark ? ` ${v.mark}` : ""} ${v.certainty}${i === hi ? " here" : ""}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${radius(i)}" stroke-width="${fs * 0.12}"/>${i === hi ? "" : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${labelOf.get(i) ?? ""}</g>`;
     }).join("");
     const P = !pin ? "" : `<g class="pin" data-hike="go:${pin.x}_${pin.y}" role="button" tabindex="0" aria-label="${esc(typo(pinSay))}"><title>${esc(typo(pinSay))}</title><path d="M${pin.x} ${pin.y}l${-u(7)} ${-u(14)}a${u(7.5)} ${u(7.5)} 0 1 1 ${u(14)} 0z" stroke-width="${u(2)}"/><circle class="hit" cx="${pin.x}" cy="${pin.y - u(14)}" r="${fs * 1.45}"/>${pinLabel}</g>`;
-    const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map; north is up. Tap a place to hike there, or tap anywhere to pick a spot.">${land ? `<image class="land" href="${land}" x="-0.5" y="-0.5" width="${N}" height="${N}" preserveAspectRatio="none"/>` : ""}${Lk}${E}${Cl}${W}${X}${SL}${featureLabels.join("")}${Nd}${F}${P}</svg>`;
+    const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map; north is up. Tap a place to hike there, or tap anywhere to pick a spot.">${land ? `<image class="land" href="${land}" x="-0.5" y="-0.5" width="${N}" height="${N}" preserveAspectRatio="none"/>` : ""}${Lk}${E}${Cl}${W}${X}${XD}${SL}${featureLabels.join("")}${Nd}${F}${P}</svg>`;
     const tools = `<div class="map-tools">${scaleBar(span)}${S.mapView ? '<button class="ghost" data-mapfit="1">Fit</button>' : ""}<button class="ghost" data-maproutes="1">${routes ? "Routes: shown" : "Routes: hidden"}</button><button class="ghost" data-mapland="1">${LAND_MODES[S.mapLand ?? "seen"]}</button></div>`;
     return `${svg}${tools}<p class="hint">North is up. Tap a place, landmark, stream, lake or cliff to head for it; tap anywhere else to drop a pin, then tap the pin to go there. Drag to pan; pinch or scroll to zoom. Filled dots: places I\u2019ve been; rings: things I\u2019ve seen or heard (\u201C?\u201D: heard only). Blue: lakes as I picture them, springs, and streams, solid where I\u2019ve walked along them, chevrons pointing downstream. Lines with ticks: cliffs, ticks on the low side. At a stream, the white arrows by me follow it a stretch. Not every name is shown when the map is crowded; zoom in for more.</p>`;
   }

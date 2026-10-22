@@ -5,6 +5,7 @@
 //   name, written along it, and the fork at its head bears the name of the stretch below it;
 // - an item's origin can be named, and the place then keeps a marker once I've left it;
 // - a crossing (a ford, here) is noticed from the next cell, marked, and labelled "crossing";
+// - where I crossed a stream keeps a marker until walking along the stream there joins it up;
 // - a lake's shore can be walked in stages, either way round, and every stage moves me along it.
 // Usage: node tests/ui/names.cjs
 const { JSDOM } = require('jsdom');
@@ -34,6 +35,13 @@ setTimeout(async () => {
   if (!below || !fork.includes(below)) fails.push(`gbn2f: the fork should bear the name of the stretch below it (${below}); its marker says: ${fork}`);
   const given = named.map(t => t.match(/(?:call it|more of) ([^.]+)\./)?.[1]).filter(Boolean); // stream names, from the journal
   for (const t of d.querySelectorAll('.mapsvg .node text')) if (!PLAIN.test(t.textContent) && !given.includes(t.textContent)) fails.push(`gbn2f: a label with a modifier: "${t.textContent}"`);
+
+  // the walk up from the falls crossed water that the follows then walked along: no loose crossing left
+  if (d.querySelector('.mapsvg .crossed')) fails.push(`gbn2f: a crossing still marked on its own after walking along the stream there: ${[...d.querySelectorAll('.mapsvg .crossed')].map(g => g.getAttribute('aria-label')).join('; ')}`);
+  // a crossing not joined to the stream by any walking keeps its marker
+  play('gbn2f', ['go:70_54', 'go:71_60']);
+  if (!lines().some(t => /crossed the stream/.test(t))) fails.push('gbn2f: the walk from the falls to 71,60 should cross the stream');
+  else if (!d.querySelector('.mapsvg .crossed')) fails.push('gbn2f: crossed a stream, but no marker where I crossed');
 
   // an item's origin named: the place keeps its marker after I leave
   play('gbn2f', ['go:70_54', { originOf: 'p70_54', nameTo: 'Damson corner' }, 'go:62_64']);

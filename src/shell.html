@@ -152,6 +152,9 @@ button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 6
 .mapsvg .crossing { cursor: pointer; }
 .mapsvg .crossing line { stroke: var(--ink); stroke-linecap: round; }
 .mapsvg .crossing .hit { fill: transparent; stroke: none; }
+.mapsvg .crossed { cursor: pointer; }
+.mapsvg .crossed circle:not(.hit) { fill: var(--bg); stroke: var(--water); }
+.mapsvg .crossed .hit { fill: transparent; stroke: none; }
 .mapsvg .node.site.spring circle:not(.hit) { fill: var(--water); stroke: var(--water); }
 .mapsvg .follow { cursor: pointer; }
 .mapsvg .follow .edge-of > *, .mapsvg .follow .face > * { fill: none; stroke-linecap: round; stroke-linejoin: round; }

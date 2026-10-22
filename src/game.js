@@ -2202,6 +2202,12 @@ function mapHTML() {
   // crossings I know of and haven't stood on (one I've stood on is a place, marked as such)
   const crossings = (S.crossingsKnown ?? []).filter(q => !S.sites.some(t => t.x === q.x && t.y === q.y)).map(q => ({ ...q, key: `crossing:${q.x}_${q.y}`, name: 'crossing', cells: [q] }));
   for (const q of crossings) items.push({ feature: q, rank: 1.5 });
+  // where I crossed a stream and haven't since walked along it there: the crossing isn't joined to the
+  // rest of the stream by anything but a guess, so it keeps a marker of its own until it is
+  const crossed = S.streams.flatMap(st => st.fixes.filter(f => f.how === 'crossed' && !(st.runs ?? []).some(r => r.includes(f)))
+    .map(f => ({ x: f.x, y: f.y, key: `crossed:${f.x}_${f.y}`, kind: 'crossed', name: 'where I crossed', cells: [f] })))
+    .filter(q => !M.nodes.some(v => !v.unmarked && v.x === q.x && v.y === q.y) && !crossings.some(c => c.x === q.x && c.y === q.y));
+  for (const q of crossed) items.push({ feature: q, rank: 4.5 });
   M.nodes.forEach((v, i) => { if (i === hi || v.unmarked) return; if (v.site !== undefined) items.push({ i, rank: 2, weight: S.sites[v.site].visits ?? 0 }); else items.push({ i, rank: v.certainty === 'unknown' ? 4 : 3, weight: S.suspects.find(x => x.id === v.sus)?.obs ?? 0 }); });
   items.sort((a, b) => a.rank - b.rank || (b.weight ?? 0) - (a.weight ?? 0));
   for (const t of items) {
@@ -2253,6 +2259,7 @@ function mapHTML() {
     const say = `Head for the crossing (${timeWords(routeHours(here, q), 'guess')}): ${CROSSING_WORDS[q.kind]}`;
     return `<g class="crossing" data-hike="go:${q.x}_${q.y}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title><g stroke-width="${u(3)}">${bar(-g)}${bar(g)}</g><circle class="hit" cx="${q.x}" cy="${q.y}" r="${fs * 1.45}"/></g>`;
   }).join('');
+  const XD = crossed.map(q => { const say = `Head for where I crossed (${timeWords(routeHours(here, q), 'guess')})`; return `<g class="crossed" data-hike="go:${q.x}_${q.y}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title><circle cx="${q.x}" cy="${q.y}" r="${fs * 0.3}" stroke-width="${u(2.5)}"/><circle class="hit" cx="${q.x}" cy="${q.y}" r="${fs * 1.45}"/></g>`; }).join('');
   const land = landImage();
 
   // ---- streams: smooth lines down the drainage, chevrons every 70 px pointing downstream (spaced along
@@ -2343,7 +2350,7 @@ function mapHTML() {
   // ---- a spot I've picked: tap it to go
   const P = !pin ? '' : `<g class="pin" data-hike="go:${pin.x}_${pin.y}" role="button" tabindex="0" aria-label="${esc(typo(pinSay))}"><title>${esc(typo(pinSay))}</title><path d="M${pin.x} ${pin.y}l${-u(7)} ${-u(14)}a${u(7.5)} ${u(7.5)} 0 1 1 ${u(14)} 0z" stroke-width="${u(2)}"/><circle class="hit" cx="${pin.x}" cy="${pin.y - u(14)}" r="${fs * 1.45}"/>${pinLabel}</g>`;
 
-  const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map; north is up. Tap a place to hike there, or tap anywhere to pick a spot.">${land ? `<image class="land" href="${land}" x="-0.5" y="-0.5" width="${GN}" height="${GN}" preserveAspectRatio="none"/>` : ''}${Lk}${E}${Cl}${W}${X}${SL}${featureLabels.join('')}${Nd}${F}${P}</svg>`;
+  const svg = `<svg class="mapsvg" style="--u: ${fs}px" viewBox="${x0} ${y0} ${span} ${span}" role="group" aria-label="My map; north is up. Tap a place to hike there, or tap anywhere to pick a spot.">${land ? `<image class="land" href="${land}" x="-0.5" y="-0.5" width="${GN}" height="${GN}" preserveAspectRatio="none"/>` : ''}${Lk}${E}${Cl}${W}${X}${XD}${SL}${featureLabels.join('')}${Nd}${F}${P}</svg>`;
   const tools = `<div class="map-tools">${scaleBar(span)}${S.mapView ? '<button class="ghost" data-mapfit="1">Fit</button>' : ''}<button class="ghost" data-maproutes="1">${routes ? 'Routes: shown' : 'Routes: hidden'}</button><button class="ghost" data-mapland="1">${LAND_MODES[S.mapLand ?? 'seen']}</button></div>`;
   return `${svg}${tools}<p class="hint">North is up. Tap a place, landmark, stream, lake or cliff to head for it; tap anywhere else to drop a pin, then tap the pin to go there. Drag to pan; pinch or scroll to zoom. Filled dots: places I’ve been; rings: things I’ve seen or heard (“?”: heard only). Blue: lakes as I picture them, springs, and streams, solid where I’ve walked along them, chevrons pointing downstream. Lines with ticks: cliffs, ticks on the low side. At a stream, the white arrows by me follow it a stretch. Not every name is shown when the map is crowded; zoom in for more.</p>`;
 }
