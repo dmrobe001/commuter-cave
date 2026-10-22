@@ -314,41 +314,45 @@ export function walk(L, from, target, { maxHours = 3, rng, resense = null, arriv
 }
 
 // Follow water downstream or up the largest feeder (from a lake shore, up an inflowing stream).
-export function followWater(L, from, dir, maxHours = 2.5) {
+// One stage of following a stream: along it from `from` (on or beside the channel), downstream, or
+// upstream starting at the inflow cell `branch` and then up the biggest feeder, for about `maxHours`
+// or until something worth stopping for: where streams join (a fork), a waterfall or cascade, a
+// spring, a lake, the stream's source, or the edge of the land. `why` says which; null means time.
+export function followStage(L, from, dir, { branch = null, maxHours = 0.25 } = {}) {
   let p = { ...from }, hours = 0;
   const path = [p];
-  const isWaterish = c => L.chan[c] > 0 || L.lake[c];
-  if (!isWaterish(idx(p.x, p.y))) { // step onto the nearest water first
-    let best = null;
-    for (const [dx, dy] of NB) { const nx = p.x + dx, ny = p.y + dy; if (inside(nx, ny) && L.chan[idx(nx, ny)] > 0) best = { x: nx, y: ny }; }
-    if (!best) return { end: p, hours: 0, path, stopped: 'no stream here to follow' };
-    p = best;
+  const inflows = c => NB.map(([dx, dy]) => ({ x: (c % N) + dx, y: ((c / N) | 0) + dy })).filter(q => inside(q.x, q.y) && L.chan[idx(q.x, q.y)] && !L.lake[idx(q.x, q.y)] && L.down[idx(q.x, q.y)] === c);
+  const near = (list, q, r) => list.some(f => Math.abs(f.x - q.x) <= r && Math.abs(f.y - q.y) <= r);
+  if (!L.chan[idx(p.x, p.y)]) { // step into the water first
+    const q = NB.map(([dx, dy]) => ({ x: p.x + dx, y: p.y + dy })).find(q => inside(q.x, q.y) && L.chan[idx(q.x, q.y)] && !L.lake[idx(q.x, q.y)]);
+    if (!q) return { end: p, hours: 0, path, why: 'no stream here' };
+    hours += stepHours(L, p, q); p = q; path.push(p);
   }
-  for (let steps = 0; steps < 200 && hours < maxHours; steps++) {
+  for (let steps = 0; steps < 60; steps++) {
     const c = idx(p.x, p.y);
-    let next = null;
+    let next;
     if (dir === 'down') {
-      let d = L.down[c];
-      while (d >= 0 && L.lake[d]) d = L.down[d]; // across a lake, continue at its outflow
-      if (d < 0) return { end: p, hours, path, stopped: 'the water leaves the country I know' };
+      const d = L.down[c];
+      if (d < 0) return { end: p, hours, path, why: 'edge' };
       next = { x: d % N, y: (d / N) | 0 };
     } else {
-      let bestAcc = 0;
-      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { // feeders, including into a lake
-        const nx = p.x + dx, ny = p.y + dy; if (!inside(nx, ny)) continue;
-        const n = idx(nx, ny);
-        if (L.chan[n] && !L.lake[n] && L.acc[n] < L.acc[c] && (L.down[n] === c || L.lake[L.down[n]] || Math.abs(dx) + Math.abs(dy) <= 1) && L.acc[n] > bestAcc && L.elev[n] >= L.elev[c] - 0.5) { bestAcc = L.acc[n]; next = { x: nx, y: ny }; }
-      }
-      if (!next) return { end: p, hours, path, stopped: 'the stream gives out at its source' };
+      const ins = inflows(c);
+      next = steps === 0 && branch ? branch : ins.sort((a, b) => L.acc[idx(b.x, b.y)] - L.acc[idx(a.x, a.y)])[0];
+      if (!next) return { end: p, hours, path, why: 'source' };
     }
-    if (L.lake[idx(next.x, next.y)]) { // walk the shore instead of swimming
-      hours += 0.15; p = next; path.push(p); continue;
-    }
-    hours += stepHours(L, p, next) * 1.15;
+    if (L.lake[idx(next.x, next.y)]) return { end: p, hours, path, why: 'lake' };
+    // picking a way along the bank (no wading across, so none of stepHours's crossing time)
+    hours += (stepHours(L, p, next) - (L.chan[idx(next.x, next.y)] >= 2 ? 0.08 : 0)) * 1.15;
     p = next;
     path.push(p);
+    const n = idx(p.x, p.y);
+    if (inflows(n).length >= 2) return { end: p, hours, path, why: 'fork' };
+    // a waterfall or spring stops me when I come to it, not the one I'm setting off from
+    if (near(L.features.waterfalls, p, 1) && !near(L.features.waterfalls, from, 2)) return { end: p, hours, path, why: 'falls' };
+    if (near(L.features.springs, p, 0) && !near(L.features.springs, from, 1)) return { end: p, hours, path, why: 'spring' };
+    if (hours >= maxHours) break;
   }
-  return { end: p, hours, path, stopped: null };
+  return { end: p, hours, path, why: null };
 }
 
 // ------------------------------------------------------------ spawn: a survivable start

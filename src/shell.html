@@ -135,6 +135,10 @@ button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 6
 .mapsvg .stream { cursor: pointer; }
 .mapsvg .stream .flow { stroke: var(--water); stroke-linecap: round; stroke-dasharray: calc(.6 * var(--u)) calc(.35 * var(--u)); }
 .mapsvg .stream .flow.lone { stroke-dasharray: none; }
+.mapsvg .stream .flow.known { stroke-dasharray: none; }
+.mapsvg .follow { cursor: pointer; }
+.mapsvg .follow line:not(.hit), .mapsvg .follow path { stroke: var(--water); fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.mapsvg .follow .hit { stroke: transparent; pointer-events: stroke; }
 .mapsvg .stream .chev { fill: none; stroke: var(--water); stroke-linecap: round; stroke-linejoin: round; }
 .mapsvg .stream .hit { stroke: transparent; pointer-events: stroke; }
 .mapsvg .node { cursor: pointer; }
