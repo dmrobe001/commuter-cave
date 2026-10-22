@@ -199,6 +199,12 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   .tabs button[aria-pressed="true"] { color: var(--ochre); font-weight: 600; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+  .spread { margin-top: .6em; border-top: 1px solid var(--line, #ccc); padding-top: .4em; font-size: .92em; }
+  .spread h3 { font-size: 1em; margin: .2em 0; }
+  .spread ul.tree, .spread ul.tree ul { list-style: none; margin: 0; padding-left: 1em; }
+  .spread .path { opacity: .8; }
+  .spread .odd { color: #b3541e; font-weight: 600; }
+  .spread details > summary { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -266,7 +272,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
           u = next();
         return mu + sd * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * next());
       },
-      logNormal: (median, spread) => median * Math.exp(spread * rng.normal()),
+      logNormal: (median, spread2) => median * Math.exp(spread2 * rng.normal()),
       chance: (p) => next() < p,
       pick: (arr) => arr[Math.floor(next() * arr.length)],
       weighted(pairs) {
@@ -286,7 +292,16 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         }
         return arr;
       },
-      fork: (sub) => makeRng(`${label}/${sub}`)
+      fork: (sub) => makeRng(`${label}/${sub}`),
+      copy() {
+        const r = makeRng(label);
+        r.restore(state);
+        return r;
+      },
+      // the same stream from here on: draws exactly as this one would
+      restore(s) {
+        state = s;
+      }
     };
     return rng;
   }
@@ -389,12 +404,12 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       (byMicro[_a = site2.micro] ?? (byMicro[_a] = [])).push(v);
     }
     const ids = varying.map((t) => t.id);
-    const mean = {}, sd = {}, q = {};
+    const mean = {}, sd = {}, q2 = {};
     for (const id of ids) {
       const xs = samples.map((s) => s[id]).sort((a, b) => a - b);
       mean[id] = xs.reduce((a, b) => a + b, 0) / n;
       sd[id] = Math.sqrt(xs.reduce((a, b) => a + (b - mean[id]) ** 2, 0) / (n - 1));
-      q[id] = [xs[Math.floor(0.16 * n)], xs[Math.floor(0.84 * n)]];
+      q2[id] = [xs[Math.floor(0.16 * n)], xs[Math.floor(0.84 * n)]];
     }
     const corr = ids.map((a) => ids.map((b) => {
       if (a === b)
@@ -416,8 +431,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         unit: t.unit,
         mean: sig(mean[t.id], 3),
         sd: sig(sd[t.id], 2),
-        q16: sig(q[t.id][0], 3),
-        q84: sig(q[t.id][1], 3)
+        q16: sig(q2[t.id][0], 3),
+        q84: sig(q2[t.id][1], 3)
       })),
       ids,
       corr,
@@ -743,11 +758,11 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   }
   function expose(state, ex, quality = 0.8, cond = {}) {
     const s = cloneChem(state);
-    const q = 0.6 + 0.4 * quality;
+    const q2 = 0.6 + 0.4 * quality;
     let crushedThenReleased = false;
     const breakUp = (amount, rupture) => {
       const before = s.surface;
-      s.surface = Math.min(1, s.surface + amount * q);
+      s.surface = Math.min(1, s.surface + amount * q2);
       const gain = s.surface - before;
       s.access.fat += (1 - s.access.fat) * 0.6 * gain * rupture;
       s.access.protein += (1 - s.access.protein) * 0.3 * gain * rupture;
@@ -782,7 +797,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         const leach = wet ? C.water * 0.3 * t : 0;
         s.compounds[k] = d * (1 - kill) * (1 - leach);
       }
-      s.access.starch += (1 - s.access.starch) * (wet ? 0.85 : 0.7) * t * q;
+      s.access.starch += (1 - s.access.starch) * (wet ? 0.85 : 0.7) * t * q2;
       s.access.protein += (1 - s.access.protein) * 0.3 * t;
       if (!wet)
         s.water *= 1 - 0.15 * t;
@@ -851,11 +866,11 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     return s.water > 0.8 ? "juicy" : "tender";
   }
   function describeState(s, mass) {
-    const pct = (x) => `${Math.round(x * 100)}%`;
+    const pct2 = (x) => `${Math.round(x * 100)}%`;
     const n = mass ? nutrients(s, mass) : null;
     return [
-      `make-up: water ${pct(s.water)}, starch ${pct(s.starch)}, sugar ${pct(s.sugar)}, fat ${pct(s.fat)}, protein ${pct(s.protein)}, fibre ${pct(s.fibre)}`,
-      `absorbable now: starch ${pct(s.access.starch)}, fat ${pct(s.access.fat)}, protein ${pct(s.access.protein)}; surface ${pct(s.surface)}`,
+      `make-up: water ${pct2(s.water)}, starch ${pct2(s.starch)}, sugar ${pct2(s.sugar)}, fat ${pct2(s.fat)}, protein ${pct2(s.protein)}, fibre ${pct2(s.fibre)}`,
+      `absorbable now: starch ${pct2(s.access.starch)}, fat ${pct2(s.access.fat)}, protein ${pct2(s.access.protein)}; surface ${pct2(s.surface)}`,
       `compounds: ${Object.keys(s.compounds).length ? Object.entries(s.compounds).map(([k, d]) => `${k} ${d.toFixed(2)}`).join(", ") : "none"} (harm ${harm(s).toFixed(2)})`,
       ...n ? [`${mass.toFixed(2)} kg: gross ${Math.round(n.gross)} kcal; absorbed ${Math.round(n.absorbed)} (carb ${Math.round(n.carb)}, fat ${Math.round(n.fat)}, protein ${Math.round(n.protein)}); digesting costs ${Math.round(n.cost)}; net ${Math.round(n.net)} kcal`] : []
     ];
@@ -3196,15 +3211,15 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         if (chan[c] < 2 || lake[c] || falls.has(c) || !xr.chance(1 / 15))
           continue;
         const x = c % N, y = c / N | 0;
-        if (features.crossings.some((q) => Math.max(Math.abs(q.x - x), Math.abs(q.y - y)) < 5))
+        if (features.crossings.some((q2) => Math.max(Math.abs(q2.x - x), Math.abs(q2.y - y)) < 5))
           continue;
         const kind = slope[c] > 0.15 ? "rockfall" : veg[c] > 0.55 ? "deadfall" : "ford";
         crossing[c] = { ford: 1, deadfall: 2, rockfall: 3 }[kind];
         features.crossings.push({ x, y, kind, size: chan[c] });
       }
       const hr = rng.fork("crossing-heights");
-      for (const q of features.crossings)
-        q.height = Math.round((q.kind === "deadfall" ? hr.uniform(0.5, 1.1) : q.kind === "rockfall" ? hr.uniform(0.3, 0.7) : 0) * 100) / 100;
+      for (const q2 of features.crossings)
+        q2.height = Math.round((q2.kind === "deadfall" ? hr.uniform(0.5, 1.1) : q2.kind === "rockfall" ? hr.uniform(0.3, 0.7) : 0) * 100) / 100;
     }
     features.lakes = components((c) => lake[c] === 1).filter((g) => g.length >= 3).map((g) => ({ cells: g.length, x: avg(g, "x"), y: avg(g, "y"), areaHa: Math.round(g.length * CELL * CELL / 1e4) }));
     features.escarpments = components((c) => slope[c] > 0.35).filter((g) => g.length >= 6).map((g) => ({ cells: g.length, x: avg(g, "x"), y: avg(g, "y") }));
@@ -3254,14 +3269,14 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     }
     return { N, CELL, A, elev, filled, acc, down, slope, chan, lake, crossing, wet, veg, micro, features, spawn, waterDist };
     function distanceField(isSource) {
-      const d = new Float32Array(N * N).fill(Infinity), q = [];
+      const d = new Float32Array(N * N).fill(Infinity), q2 = [];
       for (let c = 0; c < N * N; c++)
         if (isSource(c)) {
           d[c] = 0;
-          q.push(c);
+          q2.push(c);
         }
-      for (let h = 0; h < q.length; h++) {
-        const c = q[h], cx = c % N, cy = c / N | 0;
+      for (let h = 0; h < q2.length; h++) {
+        const c = q2[h], cx = c % N, cy = c / N | 0;
         for (const [dx, dy] of NB) {
           const nx = cx + dx, ny = cy + dy;
           if (nx < 0 || ny < 0 || nx >= N || ny >= N)
@@ -3270,7 +3285,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
           const nd = d[c] + Math.hypot(dx, dy);
           if (nd < d[n]) {
             d[n] = nd;
-            q.push(n);
+            q2.push(n);
           }
         }
       }
@@ -3392,13 +3407,13 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y)));
     let h = 0, prev = { x: Math.round(a.x), y: Math.round(a.y) };
     for (let i = 1; i <= n; i++) {
-      const q = { x: Math.round(a.x + (b.x - a.x) * i / n), y: Math.round(a.y + (b.y - a.y) * i / n) };
-      if (!inside(q.x, q.y))
+      const q2 = { x: Math.round(a.x + (b.x - a.x) * i / n), y: Math.round(a.y + (b.y - a.y) * i / n) };
+      if (!inside(q2.x, q2.y))
         break;
-      if (q.x === prev.x && q.y === prev.y)
+      if (q2.x === prev.x && q2.y === prev.y)
         continue;
-      h += stepHours(L, prev, q) * (L.lake[idx2(q.x, q.y)] ? 1.6 : 1);
-      prev = q;
+      h += stepHours(L, prev, q2) * (L.lake[idx2(q2.x, q2.y)] ? 1.6 : 1);
+      prev = q2;
     }
     return h;
   }
@@ -3587,16 +3602,16 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       push(idx2(ax, ay), 0);
     } else {
       const same = (c) => !!L.lake[c];
-      const seen = /* @__PURE__ */ new Set([idx2(ax, ay)]), q = [idx2(ax, ay)];
-      while (q.length) {
-        const c = q.pop(), x = c % N, y = c / N | 0;
+      const seen = /* @__PURE__ */ new Set([idx2(ax, ay)]), q2 = [idx2(ax, ay)];
+      while (q2.length) {
+        const c = q2.pop(), x = c % N, y = c / N | 0;
         for (const [dx, dy] of NB2) {
           const nx = x + dx, ny = y + dy, n = idx2(nx, ny);
           if (!inside(nx, ny) || seen.has(n))
             continue;
           seen.add(n);
           if (same(n))
-            q.push(n);
+            q2.push(n);
           else if (!blocks(L, n) && nx >= x0 && nx <= x1 && ny >= y0 && ny <= y1) {
             const d = Math.hypot(nx - ax, ny - ay) * shoreWeight;
             if (d < D[n]) {
@@ -3658,17 +3673,17 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     let sweep = null;
     const swept = L.chan[idx2(best.x, best.y)] ? L.dyn?.cross(idx2(best.x, best.y)).swept ?? 0 : 0;
     if (swept) {
-      let q = best;
+      let q2 = best;
       for (let k = 0; k < swept; k++) {
-        const dn = L.down[idx2(q.x, q.y)];
+        const dn = L.down[idx2(q2.x, q2.y)];
         if (dn < 0 || L.lake[dn])
           break;
-        q = { x: dn % N, y: dn / N | 0 };
-        cells.push(q);
+        q2 = { x: dn % N, y: dn / N | 0 };
+        cells.push(q2);
         w.hours += 0.02;
       }
-      w.p = q;
-      sweep = { from: best, to: { ...q } };
+      w.p = q2;
+      sweep = { from: best, to: { ...q2 } };
     }
     return { to: best, cells, sweep };
   }
@@ -3705,39 +3720,63 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       const better = NB2.some(([dx, dy]) => inside(p.x + dx, p.y + dy) && field[idx2(p.x + dx, p.y + dy)] < field[idx2(p.x, p.y)] - (toWater ? 0.5 : 0.05));
       if (blocks(L, idx2(Math.round(aim.x), Math.round(aim.y))) && !better && (!toWater || NB2.some(([dx, dy]) => inside(p.x + dx, p.y + dy) && L.lake[idx2(p.x + dx, p.y + dy)])))
         break;
-      steps.push({ p, drift: w.drift, aim: { ...aim }, sensed: !!fresh, at: path.length, hours: w.hours });
+      steps.push({ p, drift: w.drift, aim: { ...aim }, sensed: !!fresh, at: path.length, hours: w.hours, field });
       const r = stepOnce(L, w, { field, aim, sensed: !!fresh, driftSd }, rng);
       if (r.stuck)
         break;
       path.push(...r.cells);
       if (r.sweep)
         sweeps.push(r.sweep);
-      const q = w.p, ch = L.chan[idx2(q.x, q.y)];
-      if (ch && (!crossings.length || Math.hypot(crossings[crossings.length - 1].x - q.x, crossings[crossings.length - 1].y - q.y) > 3)) {
-        crossings.push({ ...q, size: ch });
-        if (stopAtWater && L.dyn?.cross(idx2(q.x, q.y)).how !== "dry")
+      const q2 = w.p, ch = L.chan[idx2(q2.x, q2.y)];
+      if (ch && (!crossings.length || Math.hypot(crossings[crossings.length - 1].x - q2.x, crossings[crossings.length - 1].y - q2.y) > 3)) {
+        crossings.push({ ...q2, size: ch });
+        if (stopAtWater && L.dyn?.cross(idx2(q2.x, q2.y)).how !== "dry")
           break;
       }
-      if (arrived && arrived(q))
+      if (arrived && arrived(q2))
         break;
     }
     return { end: w.p, hours: w.hours, path, crossings, sweeps, steps, driftSd, toWater };
   }
+  function walkOdds(L, trip, n = 100, seed = "odds") {
+    const out = [];
+    let bits = 0;
+    trip.steps.forEach((s, i) => {
+      const v = stepView(L, trip, i), counts = /* @__PURE__ */ new Map();
+      for (let k = 0; k < n; k++) {
+        const w = { p: { ...v.walker.p }, drift: v.walker.drift, trod: new Map(v.walker.trod), hours: 0 };
+        const r = stepOnce(L, w, v, makeRng(`${seed}/${i}/${k}`));
+        const key = r.to ? `${r.to.x},${r.to.y}` : "stuck";
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+      const took = trip.path[s.at], tk = `${took.x},${took.y}`, p = (counts.get(tk) ?? 0) / n;
+      bits += -Math.log2(Math.max(p, 1 / n));
+      out.push({ i, from: s.p, took, p, others: [...counts].filter(([k]) => k !== tk).map(([k, c]) => ({ cell: k, p: c / n })).sort((a, b) => b.p - a.p), drift: s.drift, sensed: s.sensed });
+    });
+    return { steps: out, bits, n };
+  }
+  function stepView(L, trip, i) {
+    const s = trip.steps[i], trod = /* @__PURE__ */ new Map(), tread = (q2) => trod.set(idx2(q2.x, q2.y), (trod.get(idx2(q2.x, q2.y)) ?? 0) + 1);
+    tread(trip.path[0]);
+    for (const t of trip.steps.slice(0, i))
+      tread(trip.path[t.at]);
+    return { L, field: s.field ?? goalField(L, s.aim, s.p, 25, trip.toWater ? 0.2 : 3), aim: s.aim, sensed: s.sensed, driftSd: trip.driftSd, walker: { p: { ...s.p }, drift: s.drift, trod, hours: s.hours } };
+  }
   function followStage(L, from, dir, { branch = null, maxHours = 0.25 } = {}) {
     let p = { ...from }, hours = 0;
     const path = [p];
-    const inflows = (c) => NB2.map(([dx, dy]) => ({ x: c % N + dx, y: (c / N | 0) + dy })).filter((q) => inside(q.x, q.y) && L.chan[idx2(q.x, q.y)] && !L.lake[idx2(q.x, q.y)] && L.down[idx2(q.x, q.y)] === c);
-    const near = (list, q, r) => list.some((f) => Math.abs(f.x - q.x) <= r && Math.abs(f.y - q.y) <= r);
+    const inflows = (c) => NB2.map(([dx, dy]) => ({ x: c % N + dx, y: (c / N | 0) + dy })).filter((q2) => inside(q2.x, q2.y) && L.chan[idx2(q2.x, q2.y)] && !L.lake[idx2(q2.x, q2.y)] && L.down[idx2(q2.x, q2.y)] === c);
+    const near = (list, q2, r) => list.some((f) => Math.abs(f.x - q2.x) <= r && Math.abs(f.y - q2.y) <= r);
     const fromLake = (c) => NB2.some(([dx, dy]) => {
       const x = c % N + dx, y = (c / N | 0) + dy;
       return inside(x, y) && L.lake[idx2(x, y)] && L.down[idx2(x, y)] === c;
     });
     if (!L.chan[idx2(p.x, p.y)]) {
-      const q = NB2.map(([dx, dy]) => ({ x: p.x + dx, y: p.y + dy })).find((q2) => inside(q2.x, q2.y) && L.chan[idx2(q2.x, q2.y)] && !L.lake[idx2(q2.x, q2.y)]);
-      if (!q)
+      const q2 = NB2.map(([dx, dy]) => ({ x: p.x + dx, y: p.y + dy })).find((q3) => inside(q3.x, q3.y) && L.chan[idx2(q3.x, q3.y)] && !L.lake[idx2(q3.x, q3.y)]);
+      if (!q2)
         return { end: p, hours: 0, path, why: "no stream here" };
-      hours += stepHours(L, p, q);
-      p = q;
+      hours += stepHours(L, p, q2);
+      p = q2;
       path.push(p);
     }
     for (let steps = 0; steps < 60; steps++) {
@@ -3752,7 +3791,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         if (fromLake(c))
           return { end: p, hours, path, why: "outlet" };
         const ins = inflows(c);
-        if (steps === 0 && branch && !ins.some((q) => q.x === branch.x && q.y === branch.y))
+        if (steps === 0 && branch && !ins.some((q2) => q2.x === branch.x && q2.y === branch.y))
           return { end: p, hours: 0, path, why: "no stream here" };
         next = steps === 0 && branch ? branch : ins.sort((a, b) => L.acc[idx2(b.x, b.y)] - L.acc[idx2(a.x, a.y)])[0];
         if (!next)
@@ -3779,7 +3818,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   }
   function shoreStage(L, from, side, { maxHours = 0.25 } = {}) {
     const path = [{ ...from }];
-    const start = NB2.map(([dx, dy]) => ({ x: from.x + dx, y: from.y + dy })).find((q) => inside(q.x, q.y) && L.lake[idx2(q.x, q.y)]);
+    const start = NB2.map(([dx, dy]) => ({ x: from.x + dx, y: from.y + dy })).find((q2) => inside(q2.x, q2.y) && L.lake[idx2(q2.x, q2.y)]);
     if (!start)
       return { end: from, hours: 0, path, why: "no lake here" };
     const mine = new Uint8Array(N * N), st = [idx2(start.x, start.y)];
@@ -3803,15 +3842,15 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     for (let steps = 0; steps < 60; steps++) {
       let best = null;
       for (const [dx, dy] of NB2) {
-        const q = { x: p.x + dx, y: p.y + dy };
-        if (!isShore(q.x, q.y))
+        const q2 = { x: p.x + dx, y: p.y + dy };
+        if (!isShore(q2.x, q2.y))
           continue;
-        const home = steps > 2 && q.x === from.x && q.y === from.y, again = home ? 0 : walked.get(idx2(q.x, q.y)) ?? 0;
-        const w = [...wet(p.x, p.y), ...wet(q.x, q.y)].reduce((a, c) => ({ x: a.x + c.x - (p.x + q.x) / 2, y: a.y + c.y - (p.y + q.y) / 2 }), { x: 0, y: 0 });
+        const home = steps > 2 && q2.x === from.x && q2.y === from.y, again = home ? 0 : walked.get(idx2(q2.x, q2.y)) ?? 0;
+        const w = [...wet(p.x, p.y), ...wet(q2.x, q2.y)].reduce((a, c) => ({ x: a.x + c.x - (p.x + q2.x) / 2, y: a.y + c.y - (p.y + q2.y) / 2 }), { x: 0, y: 0 });
         const lean = sign * (dy * w.x - dx * w.y) / (Math.hypot(w.x, w.y) || 1) / Math.hypot(dx, dy);
-        const score = lean + 0.15 * wet(q.x, q.y).length - (dx && dy ? 0.05 : 0) - 3 * again;
+        const score = lean + 0.15 * wet(q2.x, q2.y).length - (dx && dy ? 0.05 : 0) - 3 * again;
         if (!best || score > best.score)
-          best = { q, score };
+          best = { q: q2, score };
       }
       if (!best || best.score < -7)
         return { end: p, hours, path, why: steps ? "blocked" : "no shore" };
@@ -3871,9 +3910,9 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       const st = [c];
       lab[c] = k;
       while (st.length) {
-        const q = st.pop();
+        const q2 = st.pop();
         for (const [dx, dy] of NB2) {
-          const nx = q % N + dx, ny = (q / N | 0) + dy;
+          const nx = q2 % N + dx, ny = (q2 / N | 0) + dy;
           if (!inside(nx, ny))
             continue;
           const n = idx2(nx, ny);
@@ -4029,14 +4068,14 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
     const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
     const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
-    const q = Math.min(Math.max(p, 1e-9), 1 - 1e-9);
-    if (q < 0.02425) {
-      const u2 = Math.sqrt(-2 * Math.log(q));
+    const q2 = Math.min(Math.max(p, 1e-9), 1 - 1e-9);
+    if (q2 < 0.02425) {
+      const u2 = Math.sqrt(-2 * Math.log(q2));
       return (((((c[0] * u2 + c[1]) * u2 + c[2]) * u2 + c[3]) * u2 + c[4]) * u2 + c[5]) / ((((d[0] * u2 + d[1]) * u2 + d[2]) * u2 + d[3]) * u2 + 1);
     }
-    if (q > 1 - 0.02425)
-      return -invNorm(1 - q);
-    const u = q - 0.5, v = u * u;
+    if (q2 > 1 - 0.02425)
+      return -invNorm(1 - q2);
+    const u = q2 - 0.5, v = u * u;
     return (((((a[0] * v + a[1]) * v + a[2]) * v + a[3]) * v + a[4]) * v + a[5]) * u / (((((b[0] * v + b[1]) * v + b[2]) * v + b[3]) * v + b[4]) * v + 1);
   }
   var WEATHER_WORDS = { clear: "clear", cloudy: "broken cloud", overcast: "overcast", rain: "rain", storm: "a thunderstorm", fog: "fog", snow: "snow", blizzard: "driving snow" };
@@ -4277,11 +4316,11 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         const c = cues.reduce((a, b) => b.strength > a.strength ? b : a);
         target = suspicionFrom(c, p, rng).est;
         let n = 0;
-        resense = (q) => {
+        resense = (q2) => {
           if (++n % 6)
             return null;
-          const k = perceive(L, q, {}).find((x) => x.key === c.key);
-          return k ? suspicionFrom(k, q, rng).est : null;
+          const k = perceive(L, q2, {}).find((x) => x.key === c.key);
+          return k ? suspicionFrom(k, q2, rng).est : null;
         };
       } else if (spawn.lookout && !lookedOut) {
         target = spawn.lookout;
@@ -4323,7 +4362,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         share[m] = (share[m] ?? 0) + 1;
         n++;
       }
-    let q = 0, cookedOnly = false;
+    let q2 = 0, cookedOnly = false;
     for (const [m, k] of Object.entries(share)) {
       let pNone = 1, safeW = 0, allW = 0;
       for (const o of options) {
@@ -4339,12 +4378,12 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
           cookedOnly = true;
       }
       if (allW)
-        q += k / n * (1 - pNone) * (safeW / allW);
+        q2 += k / n * (1 - pNone) * (safeW / allW);
     }
-    if (q <= 0)
+    if (q2 <= 0)
       return { hours: Infinity, cookedOnly };
-    const attempts = Math.max(1, Math.ceil(Math.log(0.5) / Math.log(1 - Math.min(q, 0.999))));
-    return { hours: attempts * ATTEMPT, q, cookedOnly };
+    const attempts = Math.max(1, Math.ceil(Math.log(0.5) / Math.log(1 - Math.min(q2, 0.999))));
+    return { hours: attempts * ATTEMPT, q: q2, cookedOnly };
   }
   var hoursWords = (h) => !Number.isFinite(h) || h > BUDGET * 2 ? "more than a day" : h < 0.75 ? "under an hour" : h < 1.5 ? "about an hour" : h < 10 ? `about ${Math.round(h)} hours` : `about ${Math.round(h / 2) * 2} hours`;
   var daysWords = (d) => d == null ? "more than a month" : d <= 1 ? "about a day" : `about ${Math.round(d)} days`;
@@ -4527,13 +4566,13 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       else
         add(a, b, h, walked);
     };
-    for (const e of [...trails].sort((p, q) => guess(p.a, p.b) - guess(q.a, q.b)))
+    for (const e of [...trails].sort((p, q2) => guess(p.a, p.b) - guess(q2.a, q2.b)))
       consider(e.a, e.b, e.hours, true);
     const pairs = [];
     for (let a = 0; a < n; a++)
       for (let b = a + 1; b < n; b++)
         pairs.push([a, b, guess(a, b)]);
-    for (const [a, b, g] of pairs.sort((p, q) => p[2] - q[2]))
+    for (const [a, b, g] of pairs.sort((p, q2) => p[2] - q2[2]))
       consider(a, b, g, false);
     for (const [a, b, h, w] of held)
       if (!have.has(key(a, b)) && !joined(a, b))
@@ -4551,13 +4590,13 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   function segHitsBox(a, b, box) {
     let t0 = 0, t1 = 1;
     const dx = b.x - a.x, dy = b.y - a.y;
-    for (const [p, q] of [[-dx, a.x - box.x0], [dx, box.x1 - a.x], [-dy, a.y - box.y0], [dy, box.y1 - a.y]]) {
+    for (const [p, q2] of [[-dx, a.x - box.x0], [dx, box.x1 - a.x], [-dy, a.y - box.y0], [dy, box.y1 - a.y]]) {
       if (p === 0) {
-        if (q < 0)
+        if (q2 < 0)
           return false;
         continue;
       }
-      const t = q / p;
+      const t = q2 / p;
       if (p < 0) {
         if (t > t1)
           return false;
@@ -4613,8 +4652,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   function suspectedCrossings(a, b, streams) {
     const out = [];
     for (const s of streams)
-      for (const [p, q] of s.segs) {
-        const x = segCross(a, b, p, q);
+      for (const [p, q2] of s.segs) {
+        const x = segCross(a, b, p, q2);
         if (x) {
           out.push({ key: s.key, name: s.name, at: x });
           break;
@@ -5839,7 +5878,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   var bare = (p) => p.replace(/^\+/, "");
   function pathsOf(proc) {
     const all = [...new Set([...proc.reads ?? [], ...proc.writes ?? []].map(bare))].sort((a, b) => a.length - b.length);
-    return all.filter((p, i) => !all.slice(0, i).some((q) => p.startsWith(`${q}.`)));
+    return all.filter((p, i) => !all.slice(0, i).some((q2) => p.startsWith(`${q2}.`)));
   }
   var appendOnly = (proc) => new Set([...proc.writes ?? []].filter((p) => p.startsWith("+")).map(bare));
   var declared = (proc, path) => (proc.writes ?? []).map(bare).some((w) => path === w || path.startsWith(`${w}.`) || w.startsWith(`${path}.`));
@@ -6031,6 +6070,157 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         put(root(ns), ks, value);
       }
     };
+  }
+
+  // src/spread.js
+  var get2 = (o, ks) => ks.reduce((a, k) => a == null ? void 0 : a[k], o);
+  var isState = (p) => !/^(made|used|report)\b/.test(p) && !/[+]|\[\]/.test(p);
+  function leaves(x, path, out) {
+    var _a, _b, _c, _d;
+    if (x === null || x === void 0 || typeof x !== "object") {
+      (out[path] ?? (out[path] = [])).push(x);
+      return;
+    }
+    if (ArrayBuffer.isView(x)) {
+      (out[_a = `${path} (cells set)`] ?? (out[_a] = [])).push(x.reduce((a, v) => a + (v ? 1 : 0), 0));
+      return;
+    }
+    if (x instanceof Set) {
+      (out[_b = `${path} (count)`] ?? (out[_b] = [])).push(x.size);
+      return;
+    }
+    if (x instanceof Map) {
+      (out[_c = `${path} (count)`] ?? (out[_c] = [])).push(x.size);
+      return;
+    }
+    if (Array.isArray(x)) {
+      (out[_d = `${path}.length`] ?? (out[_d] = [])).push(x.length);
+      for (const y of x)
+        leaves(y, `${path}[]`, out);
+      return;
+    }
+    for (const [k, y] of Object.entries(x))
+      leaves(y, path ? `${path}.${k}` : k, out);
+  }
+  function outcomeLeaves(fx) {
+    var _a, _b;
+    const out = {};
+    for (const c of fx.changes) {
+      if ("to" in c)
+        leaves(c.to, c.path, out);
+      else {
+        (out[_a = `${c.path} +n`] ?? (out[_a] = [])).push(c.added.length);
+        for (const y of c.added)
+          leaves(y, `${c.path}+`, out);
+        if (c.removed?.length)
+          (out[_b = `${c.path} -n`] ?? (out[_b] = [])).push(c.removed.length);
+      }
+    }
+    (out["made (count)"] ?? (out["made (count)"] = [])).push(fx.make.length);
+    for (const m of fx.make) {
+      (out["made.kind"] ?? (out["made.kind"] = [])).push(m.kind);
+      leaves(m.props, `made.${m.kind}`, out);
+    }
+    (out["used (count)"] ?? (out["used (count)"] = [])).push(fx.use.length);
+    if (fx.report)
+      leaves(fx.report, "report", out);
+    return out;
+  }
+  var q = (xs, p) => xs[Math.min(xs.length - 1, Math.max(0, Math.round(p * (xs.length - 1))))];
+  function summarise(values, before) {
+    const nums = values.filter((v) => typeof v === "number" && Number.isFinite(v));
+    if (values.length && nums.length === values.length) {
+      const xs = [...nums].sort((a, b) => a - b), mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+      return { kind: "num", n: xs.length, mean, min: xs[0], max: xs[xs.length - 1], q: [0.05, 0.25, 0.5, 0.75, 0.95].map((p) => q(xs, p)), same: before === void 0 ? null : xs.filter((x) => x === before).length / xs.length };
+    }
+    const counts = {};
+    for (const v of values) {
+      const k = v === void 0 ? "(none)" : String(v);
+      counts[k] = (counts[k] ?? 0) + 1;
+    }
+    for (const k of Object.keys(counts))
+      counts[k] /= values.length;
+    return { kind: "cat", n: values.length, counts };
+  }
+  function rankOf(s, values, a) {
+    if (a === void 0)
+      return null;
+    if (s.kind === "num") {
+      const below = values.filter((v) => v < a).length, eq = values.filter((v) => v === a).length;
+      return (below + 0.5 * eq) / values.length;
+    }
+    return s.counts[a === void 0 ? "(none)" : String(a)] ?? 0;
+  }
+  function treeOf(entries) {
+    const root = { name: "", path: "", children: [] };
+    for (const e of entries) {
+      let node = root;
+      const parts = e.path.split(".");
+      parts.forEach((name, i) => {
+        const path = parts.slice(0, i + 1).join(".");
+        let c = node.children.find((x) => x.name === name);
+        if (!c) {
+          c = { name, path, children: [] };
+          node.children.push(c);
+        }
+        node = c;
+      });
+      node.leaf = e;
+    }
+    return root;
+  }
+  function spread(proc, v0, { n = 200, vary = "act", seed = "spread", actAt = null, place = null, live = null, around = (i, f) => f(), actual = null } = {}) {
+    const samples = [], errors = [];
+    const diceFor = (i) => ({
+      act: vary === "place" && actAt ? actAt.copy() : makeRng(`${seed}/act/${i}`),
+      place: vary === "act" && place ? place : (key) => makeRng(`${seed}/place/${i}/${key}`)
+    });
+    for (let i = 0; i < n; i++) {
+      const d = diceFor(i);
+      try {
+        samples.push(outcomeLeaves(around(i, () => rehearse(proc, v0, d, { live: live?.(d) }), d)));
+      } catch (e) {
+        errors.push(e.message);
+      }
+    }
+    const paths = new Set(samples.flatMap((s) => Object.keys(s)));
+    const happened = actual ? outcomeLeaves(actual) : null;
+    if (happened)
+      for (const p of Object.keys(happened))
+        paths.add(p);
+    const entries = [];
+    for (const path of paths) {
+      const before = isState(path) ? get2(v0, path.split(".")) : void 0;
+      const values = samples.flatMap((s2) => s2[path] ?? (isState(path) ? [before] : / [+-]n$|\(count\)$/.test(path) ? [0] : []));
+      if (!values.length)
+        continue;
+      const s = summarise(values, before), a = happened ? (happened[path] ?? (isState(path) ? [before] : / [+-]n$|\(count\)$/.test(path) ? [0] : []))[0] : void 0;
+      const present = isState(path) || / [+-]n$|\(count\)$|\[\]|[+]|^made\./.test(path) ? 1 : samples.filter((x) => path in x).length / samples.length;
+      entries.push({ path, before, summary: s, actual: a, present, rank: rankOf(s, values, a), varies: present < 1 || (s.kind === "num" ? s.min !== s.max : Object.keys(s.counts).length > 1) });
+    }
+    entries.sort((a, b) => a.path.localeCompare(b.path));
+    const ins = {};
+    for (const [k, x] of Object.entries(v0))
+      if (k !== "world" && k !== "L")
+        leaves(x, k, ins);
+    const inputs = Object.entries(ins).map(([path, vs]) => ({ path, value: vs.length === 1 ? vs[0] : `${vs.length} values` }));
+    return {
+      id: proc.id,
+      name: proc.name ?? proc.id,
+      n: samples.length,
+      vary,
+      errors: [...new Set(errors)],
+      outcome: treeOf(entries),
+      leaves: entries,
+      inputs: treeOf(inputs),
+      inputList: inputs,
+      unusual: entries.filter((e) => e.summary.kind === "num" && e.varies && e.rank != null && (e.rank < 0.1 || e.rank > 0.9))
+    };
+  }
+  function reproduces(proc, v0, actAt, place, actual, { live = null, around = (i, f) => f() } = {}) {
+    const d = { act: actAt.copy(), place };
+    const fx = around(0, () => rehearse(proc, v0, d, { live: live?.(d) }), d);
+    return JSON.stringify(outcomeLeaves(fx)) === JSON.stringify(outcomeLeaves(actual));
   }
 
   // src/craft.js
@@ -6826,7 +7016,7 @@ ${lines.join("\n")}`, "survey"]],
       },
       run(v, d) {
         const { food } = v, rng = d.act, say = [], use = [];
-        const q = clamp(0.5 + 0.4 * v.body.focus + rng.normal(0, 0.1));
+        const q2 = clamp(0.5 + 0.4 * v.body.focus + rng.normal(0, 0.1));
         let ex, tag, cond = {};
         if (id === "pound") {
           const st = v.stone;
@@ -6865,7 +7055,7 @@ ${lines.join("\n")}`, "survey"]],
           ex = { dry: v.mode === "fire" ? 12 : 8 };
           tag = "dried";
         }
-        const before = food.props.chem, after = expose(before, ex, q, cond);
+        const before = food.props.chem, after = expose(before, ex, q2, cond);
         if (id === "roast" && v.mode === "quick" && rng.chance(0.3)) {
           food.props.mass *= 0.85;
           say.push("Some of it charred black.");
@@ -6877,7 +7067,7 @@ ${lines.join("\n")}`, "survey"]],
         food.name = `${food.base} (${food.prep.join(", ")})`;
         const how = id === "leach" ? ` in the stream for ${v.mode} hours` : id === "soak" ? ` for ${v.mode} hours` : id === "dryfood" ? v.mode === "fire" ? " by the fire" : " in the sun" : id === "stoneboil" ? ` in the ${v.site.basin.kind}` : "";
         say.push(`${PREP_WORDS[id]} the ${food.from.part} of the ${food.from.name}${how}. ${cap3(textureWords(after))} now.`);
-        return { use, say, report: { quality: q } };
+        return { use, say, report: { quality: q2 } };
       }
     };
   }
@@ -7119,7 +7309,7 @@ ${lines.join("\n")}`, "survey"]],
   }
   function makeWorld(seed, preset) {
     const store = typeof window !== "undefined" ? window.__worldStore : null;
-    const key = `${seed}|${preset ?? ""}|mc150|${false ? "dev" : "e3429cda55f5"}`;
+    const key = `${seed}|${preset ?? ""}|mc150|${false ? "dev" : "0b4e687bdeca"}`;
     const kept = store?.get(key);
     if (kept)
       return unpack(kept);
@@ -7502,7 +7692,7 @@ ${lines.join("\n")}`, "survey"]],
   var NB8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
   function inflowsAt(x, y) {
     const c = cellOf(x, y);
-    return NB8.map(([dx, dy]) => ({ x: x + dx, y: y + dy })).filter((q) => q.x >= 0 && q.y >= 0 && q.x < N && q.y < N && S.L.chan[cellOf(q.x, q.y)] && !S.L.lake[cellOf(q.x, q.y)] && S.L.down[cellOf(q.x, q.y)] === c);
+    return NB8.map(([dx, dy]) => ({ x: x + dx, y: y + dy })).filter((q2) => q2.x >= 0 && q2.y >= 0 && q2.x < N && q2.y < N && S.L.chan[cellOf(q2.x, q2.y)] && !S.L.lake[cellOf(q2.x, q2.y)] && S.L.down[cellOf(q2.x, q2.y)] === c);
   }
   var nearFeature = (list, p, r) => list.some((f) => Math.abs(f.x - p.x) <= r && Math.abs(f.y - p.y) <= r);
   var isMouth = (x, y) => {
@@ -7532,15 +7722,15 @@ ${lines.join("\n")}`, "survey"]],
     return null;
   }
   var CROSSING_WORDS = { ford: "a ford, the water wide and shallow over gravel", deadfall: "a tree down across the water", rockfall: "boulders tumbled across the water" };
-  var crossingAt = (x, y) => S.L.features.crossings.find((q) => q.x === x && q.y === y) ?? null;
+  var crossingAt = (x, y) => S.L.features.crossings.find((q2) => q2.x === x && q2.y === y) ?? null;
   function noticeCrossings(path) {
     S.crossingsKnown ?? (S.crossingsKnown = []);
     for (const p of path)
-      for (const q of S.L.features.crossings) {
-        if (Math.max(Math.abs(q.x - p.x), Math.abs(q.y - p.y)) > 1 || S.crossingsKnown.some((k) => k.x === q.x && k.y === q.y))
+      for (const q2 of S.L.features.crossings) {
+        if (Math.max(Math.abs(q2.x - p.x), Math.abs(q2.y - p.y)) > 1 || S.crossingsKnown.some((k) => k.x === q2.x && k.y === q2.y))
           continue;
-        S.crossingsKnown.push({ x: q.x, y: q.y, kind: q.kind });
-        log(`A way over without wading: ${CROSSING_WORDS[q.kind]}. Marked the crossing.`, "note");
+        S.crossingsKnown.push({ x: q2.x, y: q2.y, kind: q2.kind });
+        log(`A way over without wading: ${CROSSING_WORDS[q2.kind]}. Marked the crossing.`, "note");
       }
   }
   var lakeside = (t) => NB8.some(([dx, dy]) => {
@@ -7575,7 +7765,7 @@ ${lines.join("\n")}`, "survey"]],
       segs.push([t, v]);
       nodes.push(v);
     };
-    const shown = new Set([...seenPieces("lake"), ...seenPieces("cliff")].map((q) => q.key));
+    const shown = new Set([...seenPieces("lake"), ...seenPieces("cliff")].map((q2) => q2.key));
     for (const u of S.suspects) {
       if (u.reached || u.lost || shown.has(u.group === "water" ? waterKeyOf(u.trueKey) : u.trueKey))
         continue;
@@ -7918,7 +8108,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     if (onTheWay)
       onTheWay();
     if (lakeside(s)) {
-      const keys = new Set(NB8.map(([dx, dy]) => ({ x: s.x + dx, y: s.y + dy })).filter((q) => q.x >= 0 && q.y >= 0 && q.x < N && q.y < N && S.L.lake[cellOf(q.x, q.y)]).map((q) => waterKeyAt(S.L, q.x, q.y)));
+      const keys = new Set(NB8.map(([dx, dy]) => ({ x: s.x + dx, y: s.y + dy })).filter((q2) => q2.x >= 0 && q2.y >= 0 && q2.x < N && q2.y < N && S.L.lake[cellOf(q2.x, q2.y)]).map((q2) => waterKeyAt(S.L, q2.x, q2.y)));
       for (const k of keys)
         revealFeature(k, s, 1.7, true);
       noteSeenFeatures();
@@ -8141,7 +8331,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const h = site();
     if (!S.L.chan[cellOf(h.x, h.y)] && !["streambank", "streambed"].includes(h.micro))
       return [];
-    const at = S.L.chan[cellOf(h.x, h.y)] ? h : NB8.map(([dx, dy]) => ({ x: h.x + dx, y: h.y + dy })).find((q) => q.x >= 0 && q.y >= 0 && q.x < N && q.y < N && S.L.chan[cellOf(q.x, q.y)] && !S.L.lake[cellOf(q.x, q.y)]);
+    const at = S.L.chan[cellOf(h.x, h.y)] ? h : NB8.map(([dx, dy]) => ({ x: h.x + dx, y: h.y + dy })).find((q2) => q2.x >= 0 && q2.y >= 0 && q2.x < N && q2.y < N && S.L.chan[cellOf(q2.x, q2.y)] && !S.L.lake[cellOf(q2.x, q2.y)]);
     if (!at)
       return [];
     const st = S.streams.find((x) => x.fixes.some((f) => Math.hypot(f.x - at.x, f.y - at.y) <= 1.5)) ?? matchStream(makeFix(at));
@@ -8159,7 +8349,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
         continue;
       let c = cellOf(b.x, b.y);
       for (let n = 0; n < 3; n++) {
-        const up = inflowsAt(c % N, Math.floor(c / N)).sort((p, q) => S.L.acc[cellOf(q.x, q.y)] - S.L.acc[cellOf(p.x, p.y)])[0];
+        const up = inflowsAt(c % N, Math.floor(c / N)).sort((p, q2) => S.L.acc[cellOf(q2.x, q2.y)] - S.L.acc[cellOf(p.x, p.y)])[0];
         if (!up)
           break;
         c = cellOf(up.x, up.y);
@@ -8288,7 +8478,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const h = site();
     if (!lakeside(h))
       return [];
-    const lake = NB8.map(([dx, dy]) => ({ x: h.x + dx, y: h.y + dy })).find((q) => q.x >= 0 && q.y >= 0 && q.x < N && q.y < N && S.L.lake[cellOf(q.x, q.y)]);
+    const lake = NB8.map(([dx, dy]) => ({ x: h.x + dx, y: h.y + dy })).find((q2) => q2.x >= 0 && q2.y >= 0 && q2.x < N && q2.y < N && S.L.lake[cellOf(q2.x, q2.y)]);
     const name = waterName(waterKeyAt(S.L, lake.x, lake.y), "lake", lake);
     return ["left", "right"].map((side) => {
       const t = shoreStage(S.L, h, side);
@@ -8306,7 +8496,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       return log("There\u2019s no shore here to walk.", "warn");
     const spent = onTheMove(trip.path, trip.hours);
     pass(spent, 240);
-    const lake = trip.path.map((p) => NB8.map(([dx, dy]) => ({ x: p.x + dx, y: p.y + dy })).find((q) => q.x >= 0 && q.y >= 0 && q.x < N && q.y < N && S.L.lake[cellOf(q.x, q.y)])).find(Boolean);
+    const lake = trip.path.map((p) => NB8.map(([dx, dy]) => ({ x: p.x + dx, y: p.y + dy })).find((q2) => q2.x >= 0 && q2.y >= 0 && q2.x < N && q2.y < N && S.L.lake[cellOf(q2.x, q2.y)])).find(Boolean);
     const key = waterKeyAt(S.L, lake.x, lake.y);
     trip.path.forEach((p, i) => {
       markSeen(p.x, p.y, 3);
@@ -8355,6 +8545,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const budget = Number.isFinite(predicted) ? Math.min(3, Math.max(0.25, 2 * predicted)) : 3;
     const toWater = !!target.lake || sus?.group === "water" && /^lake-/.test(waterKeyOf(sus.trueKey));
     const trip = walk(S.L, from, target, { rng: S.rng, maxHours: budget, resense, arrived, stopAtWater: thirsty, driftSd: dest ? 1.5 : 2.5, toWater });
+    S.lastTrip = trip;
     const knownBefore = S.sites.length;
     const hours = onTheMove(trip.path, trip.hours * (S.looking ? 1.25 : 1));
     if (S.looking)
@@ -8467,7 +8658,9 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     clock: () => ({ day: S.day, t: S.t, now: now() }),
     ...binding
   }, { here: HERE }, S);
-  var dice = () => ({ act: S.rng, place: (key) => makeRng(`${S.world.seed}/${key}`) });
+  var placeDice = null;
+  var realPlace = (key) => makeRng(`${S.world.seed}/${key}`);
+  var dice = () => ({ act: S.rng, place: placeDice ?? realPlace });
   var LIVE = /* @__PURE__ */ new Set([
     "world",
     "L",
@@ -8495,6 +8688,8 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     "record",
     "lastTag",
     "lastAct",
+    "lastTrip",
+    "spreadShown",
     "goal",
     "revealed"
   ]);
@@ -8530,6 +8725,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       else
         real[k] = x;
     } };
+    const actAt = !depth && !quiet ? d.act.copy() : null;
     depth++;
     let fx;
     try {
@@ -8549,8 +8745,74 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       for (const [text, kind] of fx.say)
         log(text, kind);
     if (!quiet && !depth && !TICKS.includes(proc))
-      S.lastAct = { id: proc.id, binding: Object.keys(binding), view: v, fx };
+      S.lastAct = { id: proc.id, proc, binding: Object.keys(binding), view: v, fx, actAt, trip: proc === GAME.hike ? S.lastTrip : null };
     return fx;
+  }
+  function liveForSpread(d) {
+    const real = S, scratch = {};
+    return { has: (k) => k === "rng" || LIVE.has(k) || MEMOS.has(k), get: (k) => k === "rng" ? d.act : k in scratch ? scratch[k] : MEMOS.has(k) ? void 0 : real[k], set: (k, x) => {
+      scratch[k] = x;
+    } };
+  }
+  var aroundSpread = (i, f, d) => {
+    const was = placeDice;
+    placeDice = d.place;
+    try {
+      return f();
+    } finally {
+      placeDice = was;
+    }
+  };
+  function spreadLast(vary = "act", n = null) {
+    const a = S.lastAct;
+    if (!a?.proc)
+      return null;
+    const hostedRun = !!a.proc.run.hosted, opts = { live: hostedRun ? liveForSpread : null, around: aroundSpread };
+    const r = spread(a.proc, a.view, { n: n ?? (hostedRun ? 30 : 200), vary, actAt: a.actAt, place: realPlace, actual: a.fx, seed: `${S.seed}/spread/${S.day}/${S.t}`, ...opts });
+    r.reproduces = a.actAt ? reproduces(a.proc, a.view, a.actAt, realPlace, a.fx, opts) : null;
+    if (a.trip?.steps?.length)
+      r.walk = walkOdds(S.L, a.trip, 100, `${S.seed}/odds/${S.day}/${S.t}`);
+    return r;
+  }
+  var fmtN = (x) => typeof x !== "number" ? String(x) : Math.abs(x) >= 100 ? x.toFixed(0) : Math.abs(x) >= 1 ? x.toFixed(2).replace(/\.?0+$/, "") : x.toPrecision(2).replace(/\.?0+$/, "");
+  var pct = (x) => `${Math.round(100 * x)}%`;
+  function leafWords(e) {
+    if (e.present < 1)
+      return `${e.actual === void 0 ? "not this time" : `<b>${esc(fmtN(e.actual))}</b>`} \xB7 <span>in ${pct(e.present)} of runs</span>${e.summary.kind === "num" && e.summary.min !== e.summary.max ? `, ${fmtN(e.summary.q[0])}\u2013${fmtN(e.summary.q[4])}` : e.summary.kind === "num" ? `, ${esc(fmtN(e.summary.min))}` : ""}`;
+    const s = e.summary, a = e.actual === void 0 ? "" : `<b>${esc(fmtN(e.actual))}</b>`;
+    if (!e.varies)
+      return `${a || esc(fmtN(s.kind === "num" ? s.min : Object.keys(s.counts)[0]))} <span class="hint">always</span>`;
+    if (s.kind === "num")
+      return `${a}${a ? " \xB7 " : ""}${fmtN(s.q[0])}\u2013${fmtN(s.q[4])}, median ${fmtN(s.q[2])}${s.same != null && s.same > 0 ? `, unchanged ${pct(s.same)}` : ""}${e.rank != null ? ` \xB7 <span class="${e.rank < 0.1 || e.rank > 0.9 ? "odd" : ""}">rank ${pct(e.rank)}</span>` : ""}`;
+    return `${a}${a ? " \xB7 " : ""}${Object.entries(s.counts).sort((x, y) => y[1] - x[1]).slice(0, 6).map(([k, v]) => `${esc(k)} ${pct(v)}`).join(", ")}`;
+  }
+  var anyOdd = (n) => n.leaf?.rank != null && n.leaf.varies && (n.leaf.rank < 0.1 || n.leaf.rank > 0.9) || n.children.some(anyOdd);
+  function treeHTML(node, depth2 = 0) {
+    const quiet = (c) => !c.children.length && c.leaf?.summary && !c.leaf.varies && /\((count)\)$/.test(c.path) && c.leaf.actual === 0;
+    return node.children.filter((c) => !quiet(c)).sort((a, b) => (b.children.length > 0) - (a.children.length > 0) || (b.leaf?.varies ?? false) - (a.leaf?.varies ?? false)).map((c) => {
+      if (!c.children.length)
+        return `<li><span class="path">${esc(c.name)}</span>: ${c.leaf ? c.leaf.summary ? leafWords(c.leaf) : esc(fmtN(c.leaf.value)) : ""}</li>`;
+      const odd = anyOdd(c);
+      return `<li><details${depth2 < 1 || odd || /^report\b/.test(c.path) ? " open" : ""}><summary>${esc(c.name)}${c.leaf ? `: ${c.leaf.summary ? leafWords(c.leaf) : esc(fmtN(c.leaf.value))}` : ""}</summary><ul>${treeHTML(c, depth2 + 1)}</ul></details></li>`;
+    }).join("");
+  }
+  function spreadHTML() {
+    if (!S.showProps)
+      return "";
+    const sh = S.spreadShown, a = S.lastAct;
+    const buttons = `<div class="row"><button class="ghost" data-spread="act">This attempt\u2019s luck</button><button class="ghost" data-spread="place">The place\u2019s luck</button><button class="ghost" data-spread="both">Both</button></div>`;
+    const head = `<h3>What else could have happened</h3><p class="hint">The last action (${esc(a?.proc?.name ?? "none yet")}) run again on what it read, with other dice. Ranks near 0% or 100% mark unusual luck.</p>${buttons}`;
+    if (!sh || sh.act !== a)
+      return `<div class="spread">${head}</div>`;
+    const r = sh.result;
+    if (!r)
+      return `<div class="spread">${head}<p class="hint">Nothing to look into.</p></div>`;
+    const vary = { act: "this attempt\u2019s luck", place: "the place\u2019s luck", both: "both" }[r.vary];
+    const unusual = r.unusual.length ? `<p>Unusual luck: ${r.unusual.map((e) => `${esc(e.path)} ${esc(fmtN(e.actual))} (rank ${pct(e.rank)})`).join("; ")}.</p>` : '<p class="hint">Nothing unusual in what happened.</p>';
+    const walk2 = r.walk ? `<details><summary>The walk: ${r.walk.steps.length} steps, ${r.walk.steps.filter((s) => s.p < 0.9).length} of them open; surprisal ${r.walk.bits.toFixed(1)} bits</summary><ul>${r.walk.steps.filter((s) => s.p < 0.9).map((s) => `<li>step ${s.i + 1} from ${s.from.x},${s.from.y}: went ${s.took.x},${s.took.y} (${pct(s.p)})${s.others.length ? `; else ${s.others.slice(0, 3).map((o) => `${o.cell} ${pct(o.p)}`).join(", ")}` : ""}</li>`).join("")}</ul></details>` : "";
+    return `<div class="spread">${head}<p class="hint">${r.n} runs varying ${vary}${r.reproduces === true ? "; run again with the same dice, it comes out the same" : r.reproduces === false ? '; <span class="odd">run again with the same dice, it comes out differently (it depends on something outside what it read)</span>' : ""}${r.errors.length ? `; ${r.errors.length} runs failed: ${esc(r.errors[0])}` : ""}.</p>${unusual}
+    <details open><summary>What it did</summary><ul class="tree">${treeHTML(r.outcome)}</ul></details>${walk2}
+    <details><summary>What it read (${r.inputList.length} values)</summary><ul class="tree">${treeHTML(r.inputs)}</ul></details></div>`;
   }
   var TIME = ["day", "t", "body", "inv", "sites", "at", "mind", "lore", "collapsed", "uid", "milestones", "+log"];
   var KNOW = ["mem", "sites", "at"];
@@ -8721,13 +8983,13 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
         day++;
       }
     }
-    const q = tally.n ? tally.q / tally.n : 1;
+    const q2 = tally.n ? tally.q / tally.n : 1;
     for (const it of S.inv)
       if (it.props.moisture !== void 0 && it.kind !== "food")
         dry(it, hours / 24, s.hut ? ambient() - 0.03 : ambient());
-    S.body.hands *= Math.pow(0.55, 0.4 + 0.6 * q);
+    S.body.hands *= Math.pow(0.55, 0.4 + 0.6 * q2);
     S.body.callus *= 0.995;
-    S.body.focus = clamp(0.4 + 0.7 * q, 0.3, 1);
+    S.body.focus = clamp(0.4 + 0.7 * q2, 0.3, 1);
     if (limpBefore > 0 && !S.body.limp)
       log("My ankle feels sound again.", "note");
     const seasonBefore = seasonOf(S.world, dayOfYear(S.world, S.day));
@@ -8751,10 +9013,10 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       pain: "my ankle throbbed"
     };
     const reasons = Object.entries(per).filter(([, v]) => v >= 0.08).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k]) => say[k]);
-    const words = q >= 0.8 ? "Slept warm and deep." : q >= 0.55 ? "Slept well enough." : q >= 0.35 ? `A ${per.cold >= 0.15 ? "cold" : "restless"}, broken night.` : per.cold >= 0.3 ? "Barely slept; cold to the bone." : "Barely slept.";
+    const words = q2 >= 0.8 ? "Slept warm and deep." : q2 >= 0.55 ? "Slept well enough." : q2 >= 0.35 ? `A ${per.cold >= 0.15 ? "cold" : "restless"}, broken night.` : per.cold >= 0.3 ? "Barely slept; cold to the bone." : "Barely slept.";
     const chill = S.body.chill >= 0.6 ? " I woke shaking, stiff and grey with cold." : S.body.chill >= 0.3 ? " I woke chilled through." : "";
     if (!forced)
-      log(`${words}${reasons.length ? ` ${cap4(reasons.join(", and "))}.` : ""}${chill}${banked ? " Banked the fire with two pieces of wood; it was still glowing at dawn." : ""}${s.hut && q >= 0.55 ? " The hut kept the night out." : ""}${s.bed && !s.hut && q >= 0.55 ? " The bed of leaves helped." : ""}`, "act");
+      log(`${words}${reasons.length ? ` ${cap4(reasons.join(", and "))}.` : ""}${chill}${banked ? " Banked the fire with two pieces of wood; it was still glowing at dawn." : ""}${s.hut && q2 >= 0.55 ? " The hut kept the night out." : ""}${s.bed && !s.hut && q2 >= 0.55 ? " The bed of leaves helped." : ""}`, "act");
     if (S.body.chill >= 0.6 && S.body.sick < 0.3 && !S.body.pendingSick.some((p) => p.chill) && S.rng.chance(S.body.chill - 0.4))
       S.body.pendingSick.push({ at: now() + 12, severity: 0.15 + 0.2 * (S.body.chill - 0.6), text: "A chill has settled on my chest: aching, shivery, coughing.", chill: true });
     for (const p of [...S.body.pendingSick])
@@ -9740,10 +10002,10 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         continue;
       if (S.seenLand[c] >= 255)
         continue;
-      const q = { x: c % N, y: Math.floor(c / N) };
-      if (Math.hypot(q.x - from.x, q.y - from.y) * CELL > reach)
+      const q2 = { x: c % N, y: Math.floor(c / N) };
+      if (Math.hypot(q2.x - from.x, q2.y - from.y) * CELL > reach)
         continue;
-      if (sightline(S.L, { x: Math.round(from.x), y: Math.round(from.y) }, q, eye, cliff ? 8 : waterUp(q.x, q.y) + 0.5, { fromEdge }) > 0.1) {
+      if (sightline(S.L, { x: Math.round(from.x), y: Math.round(from.y) }, q2, eye, cliff ? 8 : waterUp(q2.x, q2.y) + 0.5, { fromEdge }) > 0.1) {
         S.seenLand[c] = 255;
         changed = true;
       }
@@ -9792,7 +10054,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       if (kind === "cliff" && g.length < 3)
         continue;
       const cells = g.map((c) => ({ x: c % N, y: Math.floor(c / N) })), key = kind === "lake" ? waterKeyAt(S.L, cells[0].x, cells[0].y) : `cliff-${esc2[c0]}`;
-      pieces.push({ id: `${kind}:${cells[0].x}_${cells[0].y}`, kind, key, cells, name: (kind === "lake" ? S.waterNames[key] : S.cliffNames?.[key]) ?? `the ${kind}`, x: cells.reduce((a, q) => a + q.x, 0) / cells.length, y: cells.reduce((a, q) => a + q.y, 0) / cells.length });
+      pieces.push({ id: `${kind}:${cells[0].x}_${cells[0].y}`, kind, key, cells, name: (kind === "lake" ? S.waterNames[key] : S.cliffNames?.[key]) ?? `the ${kind}`, x: cells.reduce((a, q2) => a + q2.x, 0) / cells.length, y: cells.reduce((a, q2) => a + q2.y, 0) / cells.length });
     }
     (S.pieceMemo ?? (S.pieceMemo = {}))[kind] = { key: memo, pieces };
     return pieces;
@@ -9800,18 +10062,18 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
   function cliffLine(piece) {
     const { cells } = piece, mx = piece.x, my = piece.y;
     let sxx = 0, syy = 0, sxy = 0;
-    for (const q of cells) {
-      sxx += (q.x - mx) ** 2;
-      syy += (q.y - my) ** 2;
-      sxy += (q.x - mx) * (q.y - my);
+    for (const q2 of cells) {
+      sxx += (q2.x - mx) ** 2;
+      syy += (q2.y - my) ** 2;
+      sxy += (q2.x - mx) * (q2.y - my);
     }
-    const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), ux = Math.cos(ang), uy = Math.sin(ang), along = (q) => (q.x - mx) * ux + (q.y - my) * uy;
+    const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), ux = Math.cos(ang), uy = Math.sin(ang), along = (q2) => (q2.x - mx) * ux + (q2.y - my) * uy;
     const bins = /* @__PURE__ */ new Map();
-    for (const q of cells) {
-      const b = Math.round(along(q) / 2.5);
+    for (const q2 of cells) {
+      const b = Math.round(along(q2) / 2.5);
       const a = bins.get(b) ?? { x: 0, y: 0, n: 0 };
-      a.x += q.x;
-      a.y += q.y;
+      a.x += q2.x;
+      a.y += q2.y;
       a.n++;
       bins.set(b, a);
     }
@@ -9823,10 +10085,10 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     return { pts, nx: -uy * down, ny: ux * down };
   }
   function headForFeature(id) {
-    const kind = id.split(":")[0], piece = seenPieces(kind).find((q) => q.id === id), from = site();
+    const kind = id.split(":")[0], piece = seenPieces(kind).find((q2) => q2.id === id), from = site();
     if (!piece)
       return;
-    const near = piece.cells.reduce((a, q) => Math.hypot(q.x - from.x, q.y - from.y) < Math.hypot(a.x - from.x, a.y - from.y) ? q : a);
+    const near = piece.cells.reduce((a, q2) => Math.hypot(q2.x - from.x, q2.y - from.y) < Math.hypot(a.x - from.x, a.y - from.y) ? q2 : a);
     travelTo({ x: near.x, y: near.y, [kind]: piece.key, label: piece.name }, `toward ${piece.name}`);
   }
   var LAND_MODES = { seen: "Land: as I\u2019ve seen it", all: "Land: the whole map", off: "Land: none" };
@@ -9871,14 +10133,14 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     if (S.lakeMemo?.key === memo)
       return S.lakeMemo.lakes;
     const D = lakeDistance(), by = /* @__PURE__ */ new Map();
-    for (const q of seenPieces("lake")) {
-      const e = by.get(q.key) ?? { key: q.key, name: q.name, id: q.id, cells: [] };
-      e.cells.push(...q.cells);
-      by.set(q.key, e);
+    for (const q2 of seenPieces("lake")) {
+      const e = by.get(q2.key) ?? { key: q2.key, name: q2.name, id: q2.id, cells: [] };
+      e.cells.push(...q2.cells);
+      by.set(q2.key, e);
     }
     const lakes = [...by.values()].map((e) => {
       const jit = (x, y, k) => (Math.sin(x * 12.9898 + y * 78.233 + k * 37.719) * 43758.5453 % 1 + 1) % 1 - 0.5;
-      const order = [...e.cells].sort((p, q) => D[cellOf(q.x, q.y)] - D[cellOf(p.x, p.y)] || p.y - q.y || p.x - q.x);
+      const order = [...e.cells].sort((p, q2) => D[cellOf(q2.x, q2.y)] - D[cellOf(p.x, p.y)] || p.y - q2.y || p.x - q2.x);
       const circles = [];
       for (const c of order) {
         if (circles.some((k) => Math.hypot(k.x - c.x, k.y - c.y) <= k.r))
@@ -9899,8 +10161,8 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     const say = mins < 60 ? `${mins} min` : `${mins / 60} h`;
     return `<span class="scalebar" aria-label="Scale: ${say} walking on open ground"><i style="width:${px}px"></i>${say} on open ground</span>`;
   }
-  var knownCrossings = () => (S.crossingsKnown ?? []).filter((q) => !S.sites.some((t) => t.x === q.x && t.y === q.y)).map((q) => ({ ...q, key: `crossing:${q.x}_${q.y}`, name: "crossing", cells: [q] }));
-  var crossedMarks = (M2, crossings) => S.streams.flatMap((st) => st.fixes.filter((f) => f.how === "crossed" && !(st.runs ?? []).some((r) => r.includes(f))).map((f) => ({ x: f.x, y: f.y, key: `crossed:${f.x}_${f.y}`, kind: "crossed", name: "where I crossed", cells: [f] }))).filter((q) => !M2.nodes.some((v) => !v.unmarked && v.x === q.x && v.y === q.y) && !crossings.some((c) => c.x === q.x && c.y === q.y));
+  var knownCrossings = () => (S.crossingsKnown ?? []).filter((q2) => !S.sites.some((t) => t.x === q2.x && t.y === q2.y)).map((q2) => ({ ...q2, key: `crossing:${q2.x}_${q2.y}`, name: "crossing", cells: [q2] }));
+  var crossedMarks = (M2, crossings) => S.streams.flatMap((st) => st.fixes.filter((f) => f.how === "crossed" && !(st.runs ?? []).some((r) => r.includes(f))).map((f) => ({ x: f.x, y: f.y, key: `crossed:${f.x}_${f.y}`, kind: "crossed", name: "where I crossed", cells: [f] }))).filter((q2) => !M2.nodes.some((v) => !v.unmarked && v.x === q2.x && v.y === q2.y) && !crossings.some((c) => c.x === q2.x && c.y === q2.y));
   function streamLines(t, keyCells) {
     const downOf = new Map(t.segs.map((sg) => [sg[0], sg])), ins = /* @__PURE__ */ new Map(), drawn = /* @__PURE__ */ new Set(), pieces = [];
     for (const sg of t.segs)
@@ -9925,15 +10187,15 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     for (const sg of t.segs)
       if (!drawn.has(sg[0]))
         draw(sg, true);
-    for (const q of pieces) {
-      const key = q.known ? q.pts.map((f, k) => k).filter((k) => k === 0 || k === q.pts.length - 1 || waterMark(q.pts[k]) || (ins.get(q.pts[k]) ?? 0) >= 2 || keyCells.has(`${q.pts[k].x},${q.pts[k].y}`)) : q.pts.map((f, k) => k);
-      q.keep = [];
+    for (const q2 of pieces) {
+      const key = q2.known ? q2.pts.map((f, k) => k).filter((k) => k === 0 || k === q2.pts.length - 1 || waterMark(q2.pts[k]) || (ins.get(q2.pts[k]) ?? 0) >= 2 || keyCells.has(`${q2.pts[k].x},${q2.pts[k].y}`)) : q2.pts.map((f, k) => k);
+      q2.keep = [];
       for (const k of key) {
-        const last = q.keep[q.keep.length - 1] ?? 0;
+        const last = q2.keep[q2.keep.length - 1] ?? 0;
         for (let m = last + 10; m < k - 4; m += 10)
-          q.keep.push(m);
-        if (!q.keep.length || q.keep[q.keep.length - 1] !== k)
-          q.keep.push(k);
+          q2.keep.push(m);
+        if (!q2.keep.length || q2.keep[q2.keep.length - 1] !== k)
+          q2.keep.push(k);
       }
     }
     return { pieces, downOf, ins };
@@ -9947,16 +10209,16 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       name: t.name,
       hike: `stream:${t.id}`,
       lone: t.lone.map((f) => ({ x: f.x, y: f.y })),
-      lines: streamLines(t, keyCells).pieces.map((q) => ({ known: q.known, cells: q.pts.map((f) => ({ x: f.x, y: f.y })), drawn: q.keep.map((k) => ({ x: q.pts[k].x, y: q.pts[k].y })) }))
+      lines: streamLines(t, keyCells).pieces.map((q2) => ({ known: q2.known, cells: q2.pts.map((f) => ({ x: f.x, y: f.y })), drawn: q2.keep.map((k) => ({ x: q2.pts[k].x, y: q2.pts[k].y })) }))
     }));
     const nodes = M2.nodes.map((v, i) => ({ i, key: v.key, name: v.name, x: v.x, y: v.y, kind: v.site !== void 0 ? "site" : "sus", site: v.site, sus: v.sus, mark: v.mark ?? null, certainty: v.certainty, here: i === hi, drawn: !v.unmarked }));
     const follows = followOptions().concat(shoreOptions()).map((o) => ({ key: o.key, dir: o.dir, say: o.say }));
     const targets = [
-      ...lakes.map((q) => ({ hike: q.id, kind: "lake", name: q.name })),
-      ...cliffs.map((q) => ({ hike: q.id, kind: "cliff", name: q.name })),
+      ...lakes.map((q2) => ({ hike: q2.id, kind: "lake", name: q2.name })),
+      ...cliffs.map((q2) => ({ hike: q2.id, kind: "cliff", name: q2.name })),
       ...streams.map((t) => ({ hike: t.hike, kind: "stream", name: t.name })),
-      ...crossings.map((q) => ({ hike: `go:${q.x}_${q.y}`, kind: "crossing", name: "crossing" })),
-      ...crossed.map((q) => ({ hike: `go:${q.x}_${q.y}`, kind: "crossed", name: "where I crossed" })),
+      ...crossings.map((q2) => ({ hike: `go:${q2.x}_${q2.y}`, kind: "crossing", name: "crossing" })),
+      ...crossed.map((q2) => ({ hike: `go:${q2.x}_${q2.y}`, kind: "crossed", name: "where I crossed" })),
       ...nodes.filter((v) => v.drawn && !v.here).map((v) => ({ hike: v.key, kind: v.kind, name: v.name, mark: v.mark, certainty: v.certainty })),
       ...follows.map((o) => ({ hike: o.key, kind: "follow", name: o.say })),
       ...S.mapPin ? [{ hike: `go:${S.mapPin.x}_${S.mapPin.y}`, kind: "pin", name: "the spot I picked" }] : []
@@ -9966,10 +10228,10 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       nodes,
       edges: M2.edges.map((e) => ({ a: e.a, b: e.b, kind: e.kind, certainty: e.certainty, hours: e.hours })),
       streams,
-      lakes: lakes.map((q) => ({ key: q.key, hike: q.id, name: q.name, cells: q.cells.length })),
-      cliffs: cliffs.map((q) => ({ key: q.key, hike: q.id, name: q.name, cells: q.cells.length })),
-      crossings: crossings.map((q) => ({ x: q.x, y: q.y, kind: q.kind })),
-      crossed: crossed.map((q) => ({ x: q.x, y: q.y })),
+      lakes: lakes.map((q2) => ({ key: q2.key, hike: q2.id, name: q2.name, cells: q2.cells.length })),
+      cliffs: cliffs.map((q2) => ({ key: q2.key, hike: q2.id, name: q2.name, cells: q2.cells.length })),
+      crossings: crossings.map((q2) => ({ x: q2.x, y: q2.y, kind: q2.kind })),
+      crossed: crossed.map((q2) => ({ x: q2.x, y: q2.y })),
       follows,
       pin: S.mapPin ?? null,
       targets,
@@ -9987,7 +10249,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       ({ x: x0, y: y0, span } = S.mapView);
     const fs = MAP_PX * span / mapSide(), u = (px) => px * fs / MAP_PX;
     const routes = !!S.mapRoutes, trees = streamTrees(), lakes = lakeShapes();
-    const cliffs = seenPieces("cliff").map((q) => ({ ...q, line: cliffLine(q) }));
+    const cliffs = seenPieces("cliff").map((q2) => ({ ...q2, line: cliffLine(q2) }));
     const radius = (i) => fs * (i === hi ? 0.65 : 0.45);
     const chev = (x, y, dx, dy, k = fs * 0.4) => `M${x - dx * k + dy * k} ${y - dy * k - dx * k}L${x + dx * k} ${y + dy * k}L${x - dx * k - dy * k} ${y - dy * k + dx * k}`;
     const along = (pts, gapPx, start = gapPx / 2) => {
@@ -10009,14 +10271,14 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     items.push({ i: hi, rank: 0 });
     if (pin)
       items.push({ pin: true, rank: 0 });
-    for (const q of [...lakes, ...cliffs].sort((a, b) => b.cells.length - a.cells.length))
-      if (!items.some((t) => t.feature?.key === q.key))
-        items.push({ feature: q, rank: 1 });
+    for (const q2 of [...lakes, ...cliffs].sort((a, b) => b.cells.length - a.cells.length))
+      if (!items.some((t) => t.feature?.key === q2.key))
+        items.push({ feature: q2, rank: 1 });
     const crossings = knownCrossings(), crossed = crossedMarks(M2, crossings);
-    for (const q of crossings)
-      items.push({ feature: q, rank: 1.5 });
-    for (const q of crossed)
-      items.push({ feature: q, rank: 4.5 });
+    for (const q2 of crossings)
+      items.push({ feature: q2, rank: 1.5 });
+    for (const q2 of crossed)
+      items.push({ feature: q2, rank: 4.5 });
     M2.nodes.forEach((v, i) => {
       if (i === hi || v.unmarked)
         return;
@@ -10033,9 +10295,9 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         t.r = u(9);
         t.h = fs;
       } else if (t.feature) {
-        const q = t.feature;
-        t.text = typo(q.name.replace(/^the /, ""));
-        t.at = q.kind === "cliff" ? q.line.pts[Math.floor(q.line.pts.length / 2)] : { x: q.x, y: q.y };
+        const q2 = t.feature;
+        t.text = typo(q2.name.replace(/^the /, ""));
+        t.at = q2.kind === "cliff" ? q2.line.pts[Math.floor(q2.line.pts.length / 2)] : { x: q2.x, y: q2.y };
         t.r = fs * 0.3;
         t.h = fs * 0.9;
       } else {
@@ -10069,15 +10331,15 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       else
         labelOf.set(t.i, `<text x="${b.x0}" y="${b.y1 - fs * 0.22}" font-size="${fs}">${esc(t.text)}</text>`);
     });
-    const nearCell = (q) => q.cells.reduce((a, c) => Math.hypot(c.x - here.x, c.y - here.y) < Math.hypot(a.x - here.x, a.y - here.y) ? c : a);
-    const area = (q, kind) => {
-      const say = `Head for ${q.name} (${timeWords(routeHours(here, nearCell(q)), "guess")})`;
-      return `<g class="feature ${kind}" data-hike="${q.id}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title>`;
+    const nearCell = (q2) => q2.cells.reduce((a, c) => Math.hypot(c.x - here.x, c.y - here.y) < Math.hypot(a.x - here.x, a.y - here.y) ? c : a);
+    const area = (q2, kind) => {
+      const say = `Head for ${q2.name} (${timeWords(routeHours(here, nearCell(q2)), "guess")})`;
+      return `<g class="feature ${kind}" data-hike="${q2.id}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title>`;
     };
-    const Lk = lakes.map((q) => area(q, "lake") + q.circles.map((k) => `<circle cx="${k.x.toFixed(2)}" cy="${k.y.toFixed(2)}" r="${k.r.toFixed(2)}"/>`).join("") + "</g>").join("");
-    const Cl = cliffs.map((q) => {
-      const { pts, nx, ny } = q.line, d = pts.map((p, k) => `${k ? "L" : "M"}${p.x} ${p.y}`).join(""), t = u(7);
-      return area(q, "cliff") + `<path class="face" d="${d}" stroke-width="${u(3.5)}"/>` + along(pts, 16).marks.map((m) => `<line class="tick" x1="${m.x}" y1="${m.y}" x2="${m.x + nx * t}" y2="${m.y + ny * t}" stroke-width="${u(2)}"/>`).join("") + `<path class="hit" d="${d}" stroke-width="${fs * 2.2}"/></g>`;
+    const Lk = lakes.map((q2) => area(q2, "lake") + q2.circles.map((k) => `<circle cx="${k.x.toFixed(2)}" cy="${k.y.toFixed(2)}" r="${k.r.toFixed(2)}"/>`).join("") + "</g>").join("");
+    const Cl = cliffs.map((q2) => {
+      const { pts, nx, ny } = q2.line, d = pts.map((p, k) => `${k ? "L" : "M"}${p.x} ${p.y}`).join(""), t = u(7);
+      return area(q2, "cliff") + `<path class="face" d="${d}" stroke-width="${u(3.5)}"/>` + along(pts, 16).marks.map((m) => `<line class="tick" x1="${m.x}" y1="${m.y}" x2="${m.x + nx * t}" y2="${m.y + ny * t}" stroke-width="${u(2)}"/>`).join("") + `<path class="hit" d="${d}" stroke-width="${fs * 2.2}"/></g>`;
     }).join("");
     const SL = Object.values(S.segNames ?? {}).map((g) => {
       const dx = g.bottom.x - g.top.x, dy = g.bottom.y - g.top.y, len = Math.hypot(dx, dy), w = textW(g.name) * 0.9;
@@ -10103,15 +10365,15 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const mx = cx + ux * (side > 0 ? u(7) : -u(16)), my = cy + uy * (side > 0 ? u(7) : -u(16));
       return `<text class="flabel stream" text-anchor="middle" x="${+mx.toFixed(2)}" y="${+my.toFixed(2)}" font-size="${fs * 0.9}" transform="rotate(${+a.toFixed(1)} ${+mx.toFixed(2)} ${+my.toFixed(2)})">${esc(typo(g.name))}</text>`;
     }).join("");
-    const X = crossings.map((q) => {
-      const r = (flowAt(q.x, q.y) ?? 0) * Math.PI / 180, fx = Math.sin(r), fy = -Math.cos(r), k = u(7), g = u(3);
-      const bar = (o) => `<line x1="${q.x + fx * o - fy * k}" y1="${q.y + fy * o + fx * k}" x2="${q.x + fx * o + fy * k}" y2="${q.y + fy * o - fx * k}"/>`;
-      const say = `Head for the crossing (${timeWords(routeHours(here, q), "guess")}): ${CROSSING_WORDS[q.kind]}`;
-      return `<g class="crossing" data-hike="go:${q.x}_${q.y}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title><g stroke-width="${u(3)}">${bar(-g)}${bar(g)}</g><circle class="hit" cx="${q.x}" cy="${q.y}" r="${fs * 1.45}"/></g>`;
+    const X = crossings.map((q2) => {
+      const r = (flowAt(q2.x, q2.y) ?? 0) * Math.PI / 180, fx = Math.sin(r), fy = -Math.cos(r), k = u(7), g = u(3);
+      const bar = (o) => `<line x1="${q2.x + fx * o - fy * k}" y1="${q2.y + fy * o + fx * k}" x2="${q2.x + fx * o + fy * k}" y2="${q2.y + fy * o - fx * k}"/>`;
+      const say = `Head for the crossing (${timeWords(routeHours(here, q2), "guess")}): ${CROSSING_WORDS[q2.kind]}`;
+      return `<g class="crossing" data-hike="go:${q2.x}_${q2.y}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title><g stroke-width="${u(3)}">${bar(-g)}${bar(g)}</g><circle class="hit" cx="${q2.x}" cy="${q2.y}" r="${fs * 1.45}"/></g>`;
     }).join("");
-    const XD = crossed.map((q) => {
-      const say = `Head for where I crossed (${timeWords(routeHours(here, q), "guess")})`;
-      return `<g class="crossed" data-hike="go:${q.x}_${q.y}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title><circle cx="${q.x}" cy="${q.y}" r="${fs * 0.3}" stroke-width="${u(2.5)}"/><circle class="hit" cx="${q.x}" cy="${q.y}" r="${fs * 1.45}"/></g>`;
+    const XD = crossed.map((q2) => {
+      const say = `Head for where I crossed (${timeWords(routeHours(here, q2), "guess")})`;
+      return `<g class="crossed" data-hike="go:${q2.x}_${q2.y}" role="button" tabindex="0" aria-label="${esc(typo(say))}"><title>${esc(typo(say))}</title><circle cx="${q2.x}" cy="${q2.y}" r="${fs * 0.3}" stroke-width="${u(2.5)}"/><circle class="hit" cx="${q2.x}" cy="${q2.y}" r="${fs * 1.45}"/></g>`;
     }).join("");
     const land = landImage();
     const unit = (x, y) => {
@@ -10121,7 +10383,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     const curve = (pts, flow) => {
       const tan = pts.map((p, k) => {
         const a = pts[Math.max(0, k - 1)], b = pts[Math.min(pts.length - 1, k + 1)], cr = unit(b.x - a.x, b.y - a.y);
-        const ok = [[a, p], [p, b]].every(([q, r]) => q === r || (flow[k].x * (r.x - q.x) + flow[k].y * (r.y - q.y)) / Math.hypot(r.x - q.x, r.y - q.y) > 0.5);
+        const ok = [[a, p], [p, b]].every(([q2, r]) => q2 === r || (flow[k].x * (r.x - q2.x) + flow[k].y * (r.y - q2.y)) / Math.hypot(r.x - q2.x, r.y - q2.y) > 0.5);
         return ok ? flow[k] : cr;
       });
       let d = `M${pts[0].x} ${pts[0].y}`;
@@ -10141,26 +10403,26 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     const W = trees.map((t) => {
       const near = nearestOnStream(t, here), say = `Head for ${t.name} (${timeWords(routeHours(here, near), "guess")})`;
       const { pieces, downOf } = streamLines(t, keyCells), marks = [];
-      const tangent = (q, k) => {
-        const f = q.pts[k];
-        if (!q.known && f.flow != null) {
+      const tangent = (q2, k) => {
+        const f = q2.pts[k];
+        if (!q2.known && f.flow != null) {
           const r = f.flow * Math.PI / 180;
           return unit(Math.sin(r), -Math.cos(r));
         }
         let dn = f;
         for (let n = 0; n < 3 && downOf.has(dn); n++)
           dn = downOf.get(dn)[1];
-        const up = q.pts[Math.max(0, k - 3)];
+        const up = q2.pts[Math.max(0, k - 3)];
         return unit(dn.x - up.x, dn.y - up.y);
       };
       let carry = 35;
-      const lines = pieces.map((q) => {
-        const idx5 = q.keep;
-        const { d, fine } = curve(idx5.map((k) => q.pts[k]), idx5.map((k) => tangent(q, k)));
-        const r = along(fine, 70, q.fresh ? 35 : carry);
+      const lines = pieces.map((q2) => {
+        const idx5 = q2.keep;
+        const { d, fine } = curve(idx5.map((k) => q2.pts[k]), idx5.map((k) => tangent(q2, k)));
+        const r = along(fine, 70, q2.fresh ? 35 : carry);
         marks.push(...r.marks);
         carry = r.carry;
-        return `<path class="flow${q.known ? " known" : ""}" d="${d}" stroke-width="${u(3.5)}"/><path class="hit" d="${d}" stroke-width="${fs * 2.2}"/>`;
+        return `<path class="flow${q2.known ? " known" : ""}" d="${d}" stroke-width="${u(3.5)}"/><path class="hit" d="${d}" stroke-width="${fs * 2.2}"/>`;
       }).concat(t.lone.map((f) => {
         const r = (f.flow ?? 180) * Math.PI / 180, dx = Math.sin(r), dy = -Math.cos(r), k = u(20);
         marks.push({ x: f.x + dx * k * 0.7, y: f.y + dy * k * 0.7, dx, dy });
@@ -10416,7 +10678,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const j = $("#journal-wrap");
       j.scrollTop += fresh.getBoundingClientRect().top - j.getBoundingClientRect().top - parseFloat(getComputedStyle(j).paddingTop || 0);
     }
-    setHTML("#body", `<ul class="words">${bodyWords().map((w) => `<li>${esc(typo(w))}</li>`).join("")}</ul><label class="toggle"><input type="checkbox" data-toggle="props"${S.showProps ? " checked" : ""}> Show exact properties of what I carry</label>
+    setHTML("#body", `<ul class="words">${bodyWords().map((w) => `<li>${esc(typo(w))}</li>`).join("")}</ul><label class="toggle"><input type="checkbox" data-toggle="props"${S.showProps ? " checked" : ""}> Show exact properties of what I carry, and the range of what could have happened</label>${spreadHTML()}
     <div class="row"><button class="ghost" id="new-game">New world</button><button class="ghost" data-record="copy">Copy game record</button></div>
     <details class="record"><summary>Game record (${(S.record ?? []).length} actions)</summary><p class="hint">The world seed and every choice so far: replaying it from the start screen reproduces this game exactly. \u201CCopy game record\u201D fills this box.</p><textarea id="record-text" readonly rows="4"></textarea></details>`);
     const items = Object.keys(ITEMS).filter((k) => PROCESSES.some((p) => p.makes.some((m) => m.item === k))).sort((a, b) => ITEMS[a].name.replace(/^an? /, "").localeCompare(ITEMS[b].name.replace(/^an? /, "")));
@@ -10524,7 +10786,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       }).observe(box);
     }
   }
-  var BUILD = "hk-2026-10-26c";
+  var BUILD = "hk-2026-10-26d";
   function record(d) {
     S.record ?? (S.record = []);
     S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
@@ -10571,6 +10833,10 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     }
     if (d.maproutes) {
       S.mapRoutes = !S.mapRoutes;
+      return render();
+    }
+    if (d.spread) {
+      S.spreadShown = { act: S.lastAct, result: spreadLast(d.spread) };
       return render();
     }
     if (d.mapland) {
@@ -10794,6 +11060,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       // test hooks
       draw: () => render(true),
       mapData,
+      spreadLast,
       journal: () => S.log.map((e) => e.text),
       actions: () => hereActions(),
       recordText: () => gameRecord(),

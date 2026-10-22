@@ -357,7 +357,7 @@ export function walk(L, from, target, { maxHours = 3, rng, resense = null, arriv
     // the aim is in a lake: stop where no step gets nearer (any shore will do when the lake is where I'm going)
     const better = NB.some(([dx, dy]) => inside(p.x + dx, p.y + dy) && field[idx(p.x + dx, p.y + dy)] < field[idx(p.x, p.y)] - (toWater ? 0.5 : 0.05));
     if (blocks(L, idx(Math.round(aim.x), Math.round(aim.y))) && !better && (!toWater || NB.some(([dx, dy]) => inside(p.x + dx, p.y + dy) && L.lake[idx(p.x + dx, p.y + dy)]))) break;
-    steps.push({ p, drift: w.drift, aim: { ...aim }, sensed: !!fresh, at: path.length, hours: w.hours });
+    steps.push({ p, drift: w.drift, aim: { ...aim }, sensed: !!fresh, at: path.length, hours: w.hours, field }); // the field itself, not a copy: it changes only when the aim does
     const r = stepOnce(L, w, { field, aim, sensed: !!fresh, driftSd }, rng);
     if (r.stuck) break;
     path.push(...r.cells);
@@ -371,13 +371,34 @@ export function walk(L, from, target, { maxHours = 3, rng, resense = null, arriv
   }
   return { end: w.p, hours: w.hours, path, crossings, sweeps, steps, driftSd, toWater };
 }
+// How likely each step of a walk was: each run again n times from where it began, with other dice
+// (stepOnce directly, on copies of the walker: the same run as WALK_STEP's, without copying the field
+// each time). For each step: where it began, where it went, how often it went there (p), and the other
+// cells it went to with their shares. bits: the walk's surprisal, the sum of −log2 p (each p at least 1/n).
+export function walkOdds(L, trip, n = 100, seed = 'odds') {
+  const out = [];
+  let bits = 0;
+  trip.steps.forEach((s, i) => {
+    const v = stepView(L, trip, i), counts = new Map();
+    for (let k = 0; k < n; k++) {
+      const w = { p: { ...v.walker.p }, drift: v.walker.drift, trod: new Map(v.walker.trod), hours: 0 };
+      const r = stepOnce(L, w, v, makeRng(`${seed}/${i}/${k}`));
+      const key = r.to ? `${r.to.x},${r.to.y}` : 'stuck';
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const took = trip.path[s.at], tk = `${took.x},${took.y}`, p = (counts.get(tk) ?? 0) / n;
+    bits += -Math.log2(Math.max(p, 1 / n));
+    out.push({ i, from: s.p, took, p, others: [...counts].filter(([k]) => k !== tk).map(([k, c]) => ({ cell: k, p: c / n })).sort((a, b) => b.p - a.p), drift: s.drift, sensed: s.sensed });
+  });
+  return { steps: out, bits, n };
+}
 // The view a walk's step i began from, to run it again with other dice (act.js rehearse): where I was,
 // the drift so far, the cells trodden before it, the aim and its goal field.
 export function stepView(L, trip, i) {
   const s = trip.steps[i], trod = new Map(), tread = q => trod.set(idx(q.x, q.y), (trod.get(idx(q.x, q.y)) ?? 0) + 1);
   tread(trip.path[0]);
   for (const t of trip.steps.slice(0, i)) tread(trip.path[t.at]); // where each earlier step put me (not where the current swept me)
-  return { L, field: goalField(L, s.aim, s.p, 25, trip.toWater ? 0.2 : 3), aim: s.aim, sensed: s.sensed, driftSd: trip.driftSd, walker: { p: { ...s.p }, drift: s.drift, trod, hours: s.hours } };
+  return { L, field: s.field ?? goalField(L, s.aim, s.p, 25, trip.toWater ? 0.2 : 3), aim: s.aim, sensed: s.sensed, driftSd: trip.driftSd, walker: { p: { ...s.p }, drift: s.drift, trod, hours: s.hours } };
 }
 
 // Follow water downstream or up the largest feeder (from a lake shore, up an inflowing stream).

@@ -14,10 +14,11 @@ import { partNow, plantNow } from './phenology.js';
 import { sleepHour, SHELTERS, naturalShelter } from './body.js';
 import { windAt, skyAt, dawnAt, dayLength, seasonOf, dayOfYear, temperature, seeingFar, seeingNear, throughAir, moonWords, WEATHER_WORDS } from './sky.js';
 import { cloneChem, expose, nutrients, harm, tasteWords, smellWords, textureWords, describeState, COMPOUNDS, PREP } from './food.js';
-import { chooseSpawn, perceive, suspicionFrom, walk, followStage, shoreStage, stepHours, CLIFF_COST, sightline, lookoutEye, isLookout, bearingWord, bearing, distM, CUE_WORDS, loudWords, waterKeyAt, waterKeyOf, lineHours as rawLineHours } from './geo.js';
+import { walkOdds, chooseSpawn, perceive, suspicionFrom, walk, followStage, shoreStage, stepHours, CLIFF_COST, sightline, lookoutEye, isLookout, bearingWord, bearing, distM, CUE_WORDS, loudWords, waterKeyAt, waterKeyOf, lineHours as rawLineHours } from './geo.js';
 import { trailGraph, firstClear, placeLabels, suspectedCrossings, timeWords, awayWords, explainTrip } from './mentalmap.js';
 import { materialsOf, expandGoal, thought, ITEMS, lookHint, PROCESSES } from './process.js';
 import { pack, unpack } from './pack.js';
+import { spread, reproduces } from './spread.js';
 import { viewOf as viewFor, rehearse, apply, stateOver, hoursOf, kcalOf, readyFor } from './act.js';
 import { TICKS, SLEEP_HOUR, CRAFTS, DRILL_ATTEMPT, EMBER, HANDLE, REST, DRINK, WASH_HANDS, MAKE_BED, BUILD_HUT, FEED_FIRE, KNAP, PREPARE, EAT, SURVEY, GUT_KG, loreKey, populationAt, findBones, boneLines, noteKnown as knowIt, pluralize, lineFor, mix } from './acts.js';
 import { newCharacter, dry, ROLES, searchNaturalEdge, estimateFire } from './craft.js';
@@ -1080,6 +1081,7 @@ function travelTo(target, label) {
   const budget = Number.isFinite(predicted) ? Math.min(3, Math.max(0.25, 2 * predicted)) : 3;
   const toWater = !!target.lake || (sus?.group === 'water' && /^lake-/.test(waterKeyOf(sus.trueKey)));
   const trip = walk(S.L, from, target, { rng: S.rng, maxHours: budget, resense, arrived, stopAtWater: thirsty, driftSd: dest ? 1.5 : 2.5, toWater });
+  S.lastTrip = trip; // for looking into later: how likely each step was
   const knownBefore = S.sites.length;
   const hours = onTheMove(trip.path, trip.hours * (S.looking ? 1.25 : 1)); // looking as I go slows me down; a limp too
   if (S.looking) S.body.focus = clamp(S.body.focus - 0.05);
@@ -1171,11 +1173,13 @@ const HERE = {
 const stateFor = (binding = {}) => stateOver({
   site: site, sky: skyNow, ground: groundNow, clock: () => ({ day: S.day, t: S.t, now: now() }), ...binding,
 }, { here: HERE }, S);
-const dice = () => ({ act: S.rng, place: key => makeRng(`${S.world.seed}/${key}`) });
+let placeDice = null; // while the range of an action is worked out: the place's dice for that run (spread.js)
+const realPlace = key => makeRng(`${S.world.seed}/${key}`);
+const dice = () => ({ act: S.rng, place: placeDice ?? realPlace });
 // State that is no process's business: the generated world and land, caches and version counters for
 // redrawing, what the screen shows, the record of play. Processes reach these straight through.
 const LIVE = new Set(['world', 'L', 'seed', 'preset', 'mats', 'ambient', '_sky', '_smells', '_smellDay', 'landMemo', 'routeMemo', 'pieceMemo', 'linkMemo', 'lakeMemo', 'segMemo',
-  'seenVer', 'streamVer', 'namedVer', 'mapRoutes', 'mapView', 'mapPin', 'mapLand', 'showProps', 'record', 'lastTag', 'lastAct', 'goal', 'revealed']);
+  'seenVer', 'streamVer', 'namedVer', 'mapRoutes', 'mapView', 'mapPin', 'mapLand', 'showProps', 'record', 'lastTag', 'lastAct', 'lastTrip', 'spreadShown', 'goal', 'revealed']);
 // (The memos above hold numbers, keyed by what they were worked out from, so they can be shared.) A memo
 // holding the state's own things (the stream trees hold its fixes) is the process's own while it runs,
 // starting empty, so nothing from its copy is kept; its key tells the game's when it's out of date.
@@ -1196,6 +1200,7 @@ function perform(proc, binding = {}, { quiet = false, refusal = false } = {}) {
   if (hours > 0) { pass(hours, kcalOf(proc, v)); v = viewFor(proc, stateFor(binding)); }
   const real = S, d = dice(), memo = {};
   const live = { has: k => k === 'rng' || LIVE.has(k) || MEMOS.has(k), get: k => (k === 'rng' ? d.act : MEMOS.has(k) ? memo[k] : real[k]), set: (k, x) => { if (MEMOS.has(k)) memo[k] = x; else real[k] = x; } };
+  const actAt = !depth && !quiet ? d.act.copy() : null; // the dice as they stood, so the range can hold them
   depth++;
   let fx;
   try { fx = rehearse(proc, v, d, { live }); } catch (e) { if (/without declaring/.test(e.message) && !depth) console.error(`contract: ${e.message}`); throw e; } finally { depth--; }
@@ -1203,8 +1208,62 @@ function perform(proc, binding = {}, { quiet = false, refusal = false } = {}) {
   for (const it of fx.use) remove(S.inv.find(i => i.uid === it.uid));
   fx.made = fx.make.map(m => addItem(m.name, m.kind, m.props, m.from, m.extra));
   if (!quiet) for (const [text, kind] of fx.say) log(text, kind);
-  if (!quiet && !depth && !TICKS.includes(proc)) S.lastAct = { id: proc.id, binding: Object.keys(binding), view: v, fx };
+  if (!quiet && !depth && !TICKS.includes(proc)) S.lastAct = { id: proc.id, proc, binding: Object.keys(binding), view: v, fx, actAt, trip: proc === GAME.hike ? S.lastTrip : null };
   return fx;
+}
+
+// ------------------------------------------------------------ the range of what could have happened
+//
+// The last action, run again on the very view it ran on, with other dice (spread.js): this attempt's
+// luck ('act'), the place's ('place'), or both. Whatever a run writes to live state (caches, the screen,
+// the last action) goes to a scratch copy, so looking changes nothing in the game; the place's dice
+// reach the game's own helpers through placeDice. A walk's steps get their own odds (walkOdds, geo.js).
+function liveForSpread(d) {
+  const real = S, scratch = {};
+  return { has: k => k === 'rng' || LIVE.has(k) || MEMOS.has(k), get: k => (k === 'rng' ? d.act : k in scratch ? scratch[k] : MEMOS.has(k) ? undefined : real[k]), set: (k, x) => { scratch[k] = x; } };
+}
+const aroundSpread = (i, f, d) => { const was = placeDice; placeDice = d.place; try { return f(); } finally { placeDice = was; } };
+function spreadLast(vary = 'act', n = null) {
+  const a = S.lastAct;
+  if (!a?.proc) return null;
+  const hostedRun = !!a.proc.run.hosted, opts = { live: hostedRun ? liveForSpread : null, around: aroundSpread };
+  const r = spread(a.proc, a.view, { n: n ?? (hostedRun ? 30 : 200), vary, actAt: a.actAt, place: realPlace, actual: a.fx, seed: `${S.seed}/spread/${S.day}/${S.t}`, ...opts });
+  r.reproduces = a.actAt ? reproduces(a.proc, a.view, a.actAt, realPlace, a.fx, opts) : null;
+  if (a.trip?.steps?.length) r.walk = walkOdds(S.L, a.trip, 100, `${S.seed}/odds/${S.day}/${S.t}`);
+  return r;
+}
+const fmtN = x => (typeof x !== 'number' ? String(x) : Math.abs(x) >= 100 ? x.toFixed(0) : Math.abs(x) >= 1 ? x.toFixed(2).replace(/\.?0+$/, '') : x.toPrecision(2).replace(/\.?0+$/, ''));
+const pct = x => `${Math.round(100 * x)}%`;
+function leafWords(e) {
+  if (e.present < 1) return `${e.actual === undefined ? 'not this time' : `<b>${esc(fmtN(e.actual))}</b>`} · <span>in ${pct(e.present)} of runs</span>${e.summary.kind === 'num' && e.summary.min !== e.summary.max ? `, ${fmtN(e.summary.q[0])}–${fmtN(e.summary.q[4])}` : e.summary.kind === 'num' ? `, ${esc(fmtN(e.summary.min))}` : ''}`;
+  const s = e.summary, a = e.actual === undefined ? '' : `<b>${esc(fmtN(e.actual))}</b>`;
+  if (!e.varies) return `${a || esc(fmtN(s.kind === 'num' ? s.min : Object.keys(s.counts)[0]))} <span class="hint">always</span>`;
+  if (s.kind === 'num') return `${a}${a ? ' · ' : ''}${fmtN(s.q[0])}–${fmtN(s.q[4])}, median ${fmtN(s.q[2])}${s.same != null && s.same > 0 ? `, unchanged ${pct(s.same)}` : ''}${e.rank != null ? ` · <span class="${e.rank < 0.1 || e.rank > 0.9 ? 'odd' : ''}">rank ${pct(e.rank)}</span>` : ''}`;
+  return `${a}${a ? ' · ' : ''}${Object.entries(s.counts).sort((x, y) => y[1] - x[1]).slice(0, 6).map(([k, v]) => `${esc(k)} ${pct(v)}`).join(', ')}`;
+}
+const anyOdd = n => (n.leaf?.rank != null && n.leaf.varies && (n.leaf.rank < 0.1 || n.leaf.rank > 0.9)) || n.children.some(anyOdd);
+function treeHTML(node, depth = 0) {
+  const quiet = c => !c.children.length && c.leaf?.summary && !c.leaf.varies && /\((count)\)$/.test(c.path) && c.leaf.actual === 0; // nothing made, nothing used: not worth a line
+  return node.children.filter(c => !quiet(c)).sort((a, b) => (b.children.length > 0) - (a.children.length > 0) || (b.leaf?.varies ?? false) - (a.leaf?.varies ?? false)).map(c => {
+    if (!c.children.length) return `<li><span class="path">${esc(c.name)}</span>: ${c.leaf ? (c.leaf.summary ? leafWords(c.leaf) : esc(fmtN(c.leaf.value))) : ''}</li>`;
+    const odd = anyOdd(c);
+    return `<li><details${depth < 1 || odd || /^report\b/.test(c.path) ? ' open' : ''}><summary>${esc(c.name)}${c.leaf ? `: ${c.leaf.summary ? leafWords(c.leaf) : esc(fmtN(c.leaf.value))}` : ''}</summary><ul>${treeHTML(c, depth + 1)}</ul></details></li>`;
+  }).join('');
+}
+function spreadHTML() {
+  if (!S.showProps) return '';
+  const sh = S.spreadShown, a = S.lastAct;
+  const buttons = `<div class="row"><button class="ghost" data-spread="act">This attempt’s luck</button><button class="ghost" data-spread="place">The place’s luck</button><button class="ghost" data-spread="both">Both</button></div>`;
+  const head = `<h3>What else could have happened</h3><p class="hint">The last action (${esc(a?.proc?.name ?? 'none yet')}) run again on what it read, with other dice. Ranks near 0% or 100% mark unusual luck.</p>${buttons}`;
+  if (!sh || sh.act !== a) return `<div class="spread">${head}</div>`;
+  const r = sh.result;
+  if (!r) return `<div class="spread">${head}<p class="hint">Nothing to look into.</p></div>`;
+  const vary = { act: 'this attempt’s luck', place: 'the place’s luck', both: 'both' }[r.vary];
+  const unusual = r.unusual.length ? `<p>Unusual luck: ${r.unusual.map(e => `${esc(e.path)} ${esc(fmtN(e.actual))} (rank ${pct(e.rank)})`).join('; ')}.</p>` : '<p class="hint">Nothing unusual in what happened.</p>';
+  const walk = r.walk ? `<details><summary>The walk: ${r.walk.steps.length} steps, ${r.walk.steps.filter(s => s.p < 0.9).length} of them open; surprisal ${r.walk.bits.toFixed(1)} bits</summary><ul>${r.walk.steps.filter(s => s.p < 0.9).map(s => `<li>step ${s.i + 1} from ${s.from.x},${s.from.y}: went ${s.took.x},${s.took.y} (${pct(s.p)})${s.others.length ? `; else ${s.others.slice(0, 3).map(o => `${o.cell} ${pct(o.p)}`).join(', ')}` : ''}</li>`).join('')}</ul></details>` : '';
+  return `<div class="spread">${head}<p class="hint">${r.n} runs varying ${vary}${r.reproduces === true ? '; run again with the same dice, it comes out the same' : r.reproduces === false ? '; <span class="odd">run again with the same dice, it comes out differently (it depends on something outside what it read)</span>' : ''}${r.errors.length ? `; ${r.errors.length} runs failed: ${esc(r.errors[0])}` : ''}.</p>${unusual}
+    <details open><summary>What it did</summary><ul class="tree">${treeHTML(r.outcome)}</ul></details>${walk}
+    <details><summary>What it read (${r.inputList.length} values)</summary><ul class="tree">${treeHTML(r.inputs)}</ul></details></div>`;
 }
 
 // ------------------------------------------------------------ game-side processes
@@ -2593,7 +2652,7 @@ function render(force = false) {
     j.scrollTop += fresh.getBoundingClientRect().top - j.getBoundingClientRect().top - parseFloat(getComputedStyle(j).paddingTop || 0);
   }
 
-  setHTML('#body', `<ul class="words">${bodyWords().map(w => `<li>${esc(typo(w))}</li>`).join('')}</ul><label class="toggle"><input type="checkbox" data-toggle="props"${S.showProps ? ' checked' : ''}> Show exact properties of what I carry</label>
+  setHTML('#body', `<ul class="words">${bodyWords().map(w => `<li>${esc(typo(w))}</li>`).join('')}</ul><label class="toggle"><input type="checkbox" data-toggle="props"${S.showProps ? ' checked' : ''}> Show exact properties of what I carry, and the range of what could have happened</label>${spreadHTML()}
     <div class="row"><button class="ghost" id="new-game">New world</button><button class="ghost" data-record="copy">Copy game record</button></div>
     <details class="record"><summary>Game record (${(S.record ?? []).length} actions)</summary><p class="hint">The world seed and every choice so far: replaying it from the start screen reproduces this game exactly. “Copy game record” fills this box.</p><textarea id="record-text" readonly rows="4"></textarea></details>`);
 
@@ -2686,7 +2745,7 @@ if (typeof document !== 'undefined') {
 // Everything that happens follows from the world seed and the player's choices, so a record of the
 // seed and each choice reproduces a game exactly. Each action is the data of what was tapped (or
 // the value chosen); `act` applies one, and replaying a record runs them in order on a fresh game.
-const BUILD = 'hk-2026-10-26c'; // game logic version: a record replays faithfully only on the build that made it
+const BUILD = 'hk-2026-10-26d'; // game logic version: a record replays faithfully only on the build that made it
 function record(d) {
   S.record ??= [];
   S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
@@ -2718,6 +2777,7 @@ document.addEventListener('click', ev => {
   if (d.tab) { tab = d.tab; return render(); }
   if (d.mapfit) { S.mapView = null; return render(); } // view settings, not game actions
   if (d.maproutes) { S.mapRoutes = !S.mapRoutes; return render(); }
+  if (d.spread) { S.spreadShown = { act: S.lastAct, result: spreadLast(d.spread) }; return render(); } // looking into the last action, not a game action
   if (d.mapland) { const m = Object.keys(LAND_MODES); S.mapLand = m[(m.indexOf(S.mapLand ?? 'seen') + 1) % m.length]; return render(); }
   if (d.record === 'copy') { const t = gameRecord(); navigator.clipboard?.writeText(t).then(() => log('Copied the game record.', 'thought'), () => {}); $('#record-text').value = t; $('#record-text').select(); return; }
   if (d.origin) { // name the place an item came from: it keeps a marker on the map from now on
@@ -2827,7 +2887,7 @@ document.addEventListener('click', ev => {
 
 // Debug hook for automated testing; harmless in play.
 if (typeof window !== 'undefined') window.__hk = { state: () => S, ROLES, render, act, // test hooks
-  draw: () => render(true), mapData, journal: () => S.log.map(e => e.text), actions: () => hereActions(), recordText: () => gameRecord(),
+  draw: () => render(true), mapData, spreadLast, journal: () => S.log.map(e => e.text), actions: () => hereActions(), recordText: () => gameRecord(),
   replay(text) { const rec = replay(text); $('#start').hidden = true; $('#app').hidden = false; render(); return rec; },
   start(seed, preset = '') { checked = { seed, preset, ...checkWorld(seed, preset || null, { withOutlook: false }) }; newGame(seed, preset || null, checked); journalShown = 0; lastHTML.clear(); $('#start').hidden = true; $('#app').hidden = false; render(); } };
 

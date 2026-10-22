@@ -199,6 +199,12 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   .tabs button[aria-pressed="true"] { color: var(--ochre); font-weight: 600; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+  .spread { margin-top: .6em; border-top: 1px solid var(--line, #ccc); padding-top: .4em; font-size: .92em; }
+  .spread h3 { font-size: 1em; margin: .2em 0; }
+  .spread ul.tree, .spread ul.tree ul { list-style: none; margin: 0; padding-left: 1em; }
+  .spread .path { opacity: .8; }
+  .spread .odd { color: #b3541e; font-weight: 600; }
+  .spread details > summary { cursor: pointer; }
 </style>
 </head>
 <body>
