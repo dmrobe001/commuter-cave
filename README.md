@@ -72,6 +72,8 @@ Any action's outcome is one draw. To see the range it was drawn from, in context
 
 ## Code structure, file by file (`src/`)
 
+The mathematical relationships every process implements (inputs, outputs, side effects, and where chance enters) are collected in [docs/PROCESSES.md](docs/PROCESSES.md); keep it in step when a process's formulas change.
+
 ### Foundations
 
 **`rng.js`** — `makeRng(seed)` returns a seeded generator (mulberry32 over an FNV-1a hash) with `uniform`, `int`, `normal`, `logNormal`, `chance`, `pick`, `weighted`, `shuffle`, and `fork(label)`, which makes an independent named substream. Also `clamp` and `round`.
