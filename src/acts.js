@@ -22,6 +22,10 @@ import { moonWords } from './sky.js';
 import { sleepHour } from './body.js';
 
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+// A chance taken, and noted as a draw (spread.js): what it was about, its chance, and whether it came off.
+const roll = (d, kind, id, p, fields = {}) => { const hit = d.act.chance(p); d.note?.(kind, id, { p, observed: hit, ...fields }); return hit; };
+// An attempt's draw (craft.js): its chance of success, how far over or under it fell, and whether it came off.
+const tried = (d, id, res, fields = {}) => d.note?.('attempt', id, { p: res.p, margin: res.margin, success: res.success, ...fields });
 const r3 = x => Math.round(x * 1000) / 1000;
 const entityIn = world => id => [...world.stones, ...world.plants, ...world.animals].find(e => e.id === id);
 
@@ -61,14 +65,16 @@ export function mix(items, body, k = 0.4, hands = true) {
 // this microhabitat, a count from its usual abundance there, the site's fertility, and the place's own
 // luck (dice.place, keyed by thing and site: the same site always holds the same). Present when that
 // count clears a chance; as { e, n }.
-export function populationAt(world, micro, siteKey, factors, place) {
+export function populationAt(world, micro, siteKey, factors, place, note = null) {
   const out = [];
   for (const e of [...world.stones, ...world.plants, ...world.animals]) {
     const h = e.habitats.find(x => x.micro === micro);
     if (!h || (e.kind === 'animal' && e.cls !== 'invertebrate')) continue;
     const ar = place(`abund/${e.id}/${siteKey}`);
     const count = (h.perInstance ?? h.pieces) * Math.exp((e.kind === 'stone' ? 0 : 0.35 * factors.fertility) + 0.5 * ar.normal());
-    if (!ar.chance(1 - Math.exp(-count / 2))) continue;
+    const p = 1 - Math.exp(-count / 2), here = ar.chance(p);
+    note?.('lives here', e.id, { name: e.name, count, p, observed: here });
+    if (!here) continue;
     out.push({ e, n: count });
   }
   return out;
@@ -76,7 +82,7 @@ export function populationAt(world, micro, siteKey, factors, place) {
 export const POPULATION = {
   id: 'population', name: 'What lives here',
   reads: ['site.key', 'site.micro', 'here.factors', 'world'], writes: [],
-  run: (v, d) => ({ report: { present: Object.fromEntries(populationAt(v.world, v.site.micro, v.site.key, v.here.factors, d.place).map(({ e, n }) => [e.name, n])) } }),
+  run: (v, d) => ({ report: { present: Object.fromEntries(populationAt(v.world, v.site.micro, v.site.key, v.here.factors, d.place, d.note).map(({ e, n }) => [e.name, n])) } }),
 };
 
 // ------------------------------------------------------------ bones
@@ -93,7 +99,7 @@ export const POPULATION = {
 const BONE_VIS = { glade: 1.3, outcrop: 1.3, scree: 1.3, streambed: 1.2, edge: 1, claybank: 1, streambank: 0.8, pond: 0.8, spring: 0.8, woodland: 0.6, deadfall: 0.6 };
 const isFineBoned = a => /bird|soarer|fish|frog|lizard/.test(a.traits.key ?? '') || (a.traits.mass ?? 0) < 3;
 // effort: 1 = half an hour looking for nothing else. Adds what's found to the site's bones (at most 4 fine, 3 big).
-export function findBones(world, site, effort, rng) {
+export function findBones(world, site, effort, rng, note = null) {
   const vis = BONE_VIS[site.micro] ?? 1;
   const found = { fine: 0, big: 0 };
   for (const a of world.animals) {
@@ -102,6 +108,7 @@ export function findBones(world, site, effort, rng) {
     let n = 0, L = Math.exp(-mu), p = 1; // Poisson draw
     do { n++; p *= rng.next(); } while (p > L && n < 20);
     found[isFineBoned(a) ? 'fine' : 'big'] += n - 1;
+    note?.('bones', a.id, { name: `bones of ${a.name}`, expected: mu, count: n - 1, observed: n > 1 });
   }
   site.bones ??= { fine: 0, big: 0 };
   site.bones.fine = Math.min(4, site.bones.fine + found.fine);
@@ -148,14 +155,14 @@ export const SURVEY = {
     const rows = [], fresh = [], seen = {}, cond = v.here.cond, rng = d.act;
     noteTrail(v.mem, v.site.key);
     const cover = (1 - Math.min(1, cond.snowCm / 20)) * (1 - 0.5 * cond.litter); // snow and leaves hide what's low down
-    const present = populationAt(v.world, v.site.micro, v.site.key, v.here.factors, d.place);
+    const present = populationAt(v.world, v.site.micro, v.site.key, v.here.factors, d.place, d.note);
     for (const { e, n } of present) {
       if (e.cryptic) continue; // under stones, logs and bark: only poking around finds these
       const low = ['herb', 'grass', 'moss', 'lichen', 'mushroom'].includes(e.form) || e.kind !== 'plant';
       const now = e.kind === 'animal' ? animalNow(e, cond) : null;
-      if (now && !now.here) continue; // away or asleep for the season
+      if (now && !now.here) { d.note?.('noticed', e.id, { name: e.name, count: n, p: 0, observed: false, away: true }); continue; } // away or asleep for the season
       const visible = (e.kind === 'animal' ? 0.6 * now.seen : { herb: 0.85, grass: 0.9, mushroom: 0.6, moss: 0.9, lichen: 0.8 }[e.form] ?? 0.97) * cond.light * (low ? cover : 1) * (e.kind === 'plant' ? Math.min(1.2, plantNow(v.world, e, cond.g).notice) : 1);
-      if (!rng.chance(visible)) continue;
+      if (!roll(d, 'noticed', e.id, visible, { name: e.name, count: n })) continue;
       if (!v.mem.entities[memKeyE(e)] && !fresh.includes(e)) fresh.push(e);
       rows.push({ n, text: lineFor(e, n) });
       seen[e.name] = n;
@@ -163,14 +170,14 @@ export const SURVEY = {
     }
     // animal sign: what's been left behind, not the animals themselves
     for (const a of v.world.animals.filter(a => a.cls !== 'invertebrate' && a.signs && a.habitats.some(h => h.micro === v.site.micro))) {
-      if (!animalNow(a, cond).here || !rng.chance((1 - Math.exp(-a.perKm2 * 0.3)) * cond.light * (cond.snowCm > 2 ? 1.5 : 1 - 0.6 * cond.litter))) continue; // fresh sign shows in snow, hides under leaves
+      if (!animalNow(a, cond).here || !roll(d, 'sign', a.id, (1 - Math.exp(-a.perKm2 * 0.3)) * cond.light * (cond.snowCm > 2 ? 1.5 : 1 - 0.6 * cond.litter), { name: `sign of ${a.name}` })) continue; // fresh sign shows in snow, hides under leaves
       const known = v.mem.entities[memKeyE(a)];
       const sign = a.signs.damage ?? (a.signs.track ? `sets of ${a.signs.track.type}` : a.signs.den);
       if (!sign) continue;
       rows.push({ n: 0.5, text: `${/^sets/.test(sign) ? 'a few' : '1'} ${sign.replace(/^(the|a) /, '')}${known ? ` (${a.name})` : ', left by some animal'}` });
       seen[`sign of ${a.name}`] = 1;
     }
-    const bones = findBones(v.world, v.site, 0.35, rng);
+    const bones = findBones(v.world, v.site, 0.35, rng, d.note);
     for (const t of boneLines(bones)) rows.push({ n: 0.4, text: t });
     rows.sort((a, b) => b.n - a.n);
     const water = v.world.water.find(w => w.micro === (v.site.micro === 'streambed' ? 'streambank' : v.site.micro));
@@ -194,7 +201,11 @@ export const DRINK = {
   run(v, d) {
     const w = v.here.water;
     v.body.hyd = 1;
-    if (d.act.chance(w.pathogen * POOR_WATER)) v.body.pendingSick.push({ at: v.clock.now + 24 + d.act.uniform(0, 18), severity: 0.25 + w.pathogen * 0.5, text: 'Cramps and a loose gut. Something in the water, maybe.' });
+    if (roll(d, 'made ill', w.name, w.pathogen * POOR_WATER, { pathogen: w.pathogen })) {
+      const onset = 24 + d.act.uniform(0, 18);
+      d.note?.('illness to come', w.name, { onsetHours: onset, severity: 0.25 + w.pathogen * 0.5 });
+      v.body.pendingSick.push({ at: v.clock.now + onset, severity: 0.25 + w.pathogen * 0.5, text: 'Cramps and a loose gut. Something in the water, maybe.' });
+    }
     return { say: [`Drank my fill of ${w.name}.`] };
   },
 };
@@ -208,7 +219,7 @@ export const WASH_HANDS = {
     const b = v.body;
     b.germs = b.germs * 0.3 + 0.3 * v.here.water.pathogen;
     const cut = b.wound && v.clock.now - b.wound.at < 4;
-    if (cut) { const i = b.pendingSick.findIndex(x => x.wound); if (i >= 0 && d.act.chance(0.8)) b.pendingSick.splice(i, 1); b.wound = null; }
+    if (cut) { const i = b.pendingSick.findIndex(x => x.wound); if (i >= 0 && roll(d, 'infection washed out', 'cut', 0.8)) b.pendingSick.splice(i, 1); b.wound = null; }
     return { say: [cut ? 'Washed my hands, and the cut on my shin, clean.' : 'Washed my hands in the water.'] };
   },
 };
@@ -260,11 +271,12 @@ export const KNAP = {
   run(v, d) {
     const { core } = v, rng = d.act;
     const res = knapFlakes(rng, v.body, { props: core.props, provenance: { name: core.from?.name ?? core.name, source: core.from?.id, site: core.from?.site } }, { props: v.hammer.props }, v.anvil);
+    tried(d, 'knap', res, { flakes: res.flakes.length });
     const label = `flake, ${core.from.name}`;
     const make = res.flakes.map(f => ({ name: label, kind: 'edge', props: f.props, from: { id: f.provenance?.source, name: f.provenance?.name ?? '', part: label, site: v.site.key } }));
     const say = [make.length ? `Smashed the ${core.from.name} stone ${v.anvil.slab ? 'on the slab' : 'against a rock'}: ${make.length} usable flake${make.length > 1 ? 's' : ''}.` : `Smashed the ${core.from.name} stone; nothing but crumbs and blunt chunks.`];
     if (make.length && !v.milestones.edge) { v.milestones.edge = true; say.push(['My first cutting edge.', 'milestone']); }
-    return { make, use: rng.chance(0.25) ? [core] : [], say, report: { success: res.success, margin: res.margin, flakes: make.length } };
+    return { make, use: roll(d, 'used up', 'core', 0.25) ? [core] : [], say, report: { success: res.success, margin: res.margin, flakes: make.length } };
   },
 };
 
@@ -286,6 +298,7 @@ export const CRAFTS = {
     run(v, d) {
       const { wood, edge } = v, hours = v.mode === 'careful' ? 1.0 : 0.4, say = [];
       const res = notchHearth(d.act, v.body, { props: wood.props, provenance: provOf(wood) }, { props: edge.props, name: 'flake' }, hours);
+      tried(d, 'notch', res, { notch: res.board.props.notch, edgeLeft: edge.props.sharpness });
       say.push(`${v.mode === 'careful' ? 'Took my time and' : 'Quickly'} split and notched a hearth board from the ${wood.from.name} wood.`);
       dulled(edge, say);
       return { make: [{ name: `hearth board, ${wood.from.name}`, kind: 'board', props: res.board.props, from: wood.from }], use: [wood], say, report: { notch: res.board.props.notch, margin: res.margin } };
@@ -294,6 +307,7 @@ export const CRAFTS = {
     hours: 0.6, kcal: 150, ready: dark,
     run(v, d) {
       const say = [], res = refineNotch(d.act, v.body, v.board, { props: v.edge.props });
+      tried(d, 'refine', res, { before: res.before, after: res.after });
       delete v.board.notes['Inspect the notch'];
       say.push(res.after > res.before ? 'Worked the notch slowly; it’s cleaner now.' : 'The edge slipped and tore the notch a little.');
       dulled(v.edge, say);
@@ -303,6 +317,7 @@ export const CRAFTS = {
     hours: 0.5, kcal: 160, ready: dark,
     run(v, d) {
       const { shoot } = v, say = [], res = carveSpindle(d.act, v.body, { props: shoot.props, provenance: provOf(shoot) }, { props: v.edge.props });
+      tried(d, 'carve', res, { straightness: res.spindle.props.straightness });
       say.push(`Carved a spindle from the ${shoot.from.name} ${shoot.kind === 'shoot' && shoot.props.moisture > 0.3 ? 'shoot. It’s green; it will need to dry' : 'shoot'}.`);
       dulled(v.edge, say);
       return { make: [{ name: `spindle, ${shoot.from.name}`, kind: 'spindle', props: res.spindle.props, from: shoot.from }], use: [shoot], say };
@@ -316,6 +331,7 @@ export const CRAFTS = {
       const { stick, tool } = v, cut = tool.kind === 'edge', say = [];
       const dens = stick.props.density ?? 0.45;
       const finish = clamp((cut ? 0.6 + 0.4 * (tool.props.sharpness ?? 0.5) : 0.5) * (0.8 + 0.4 * v.body.focus) + d.act.normal(0, 0.08));
+      d.note?.('workmanship', 'digstick', { finish });
       const green = (stick.props.moisture ?? 0.15) > 0.3;
       const hardness = clamp(dens * (0.75 + 0.25 * finish) - (green ? 0.08 : 0), 0.1, 0.95);
       if (cut) { tool.props.sharpness = Math.max(0, tool.props.sharpness - 0.04); dulled(tool, say); }
@@ -328,7 +344,7 @@ export const CRAFTS = {
     ready: v => (v.here.dark ? 'Too dark to work. Time to sleep.' : v.here.fire ? true : 'There’s no fire here.'),
     run(v, d) {
       const careful = v.mode === 'careful', p = v.stick.props, room = 1 - p.hardness;
-      const charred = !careful && d.act.chance(0.35);
+      const charred = !careful && roll(d, 'charred', 'point', 0.35);
       p.hardness = clamp(p.hardness + room * (careful ? 0.3 : 0.18) * (p.hardened ? 0.4 : 1) - (charred ? 0.08 : 0));
       p.moisture = Math.min(p.moisture ?? 0.2, v.here.ambient + 0.02);
       p.hardened++;
@@ -339,7 +355,7 @@ export const CRAFTS = {
     hours: v => (v.site.micro === 'claybank' ? 1.5 : 0.5), kcal: v => (v.site.micro === 'claybank' ? 320 : 180), ready: dark,
     run(v, d) {
       if (v.site.micro === 'claybank') { v.site.basin = { kind: 'clay-lined pit' }; return { say: ['Dug a pit beside the water and lined it with clay, smoothed wet. It holds water.'] }; }
-      if (d.act.chance(0.6)) { v.site.basin = { kind: 'rock hollow' }; return { say: ['Found a hollow in the rock that holds water: good enough to boil in with hot stones.'] }; }
+      if (roll(d, 'found', 'rock hollow', 0.6)) { v.site.basin = { kind: 'rock hollow' }; return { say: ['Found a hollow in the rock that holds water: good enough to boil in with hot stones.'] }; }
       return { say: ['Looked for a rock hollow that would hold water; nothing that doesn’t drain.'] };
     } },
   // rinsing helps, but leaves the water's own germs behind: hands and thing are rinsed, not mixed
@@ -357,11 +373,13 @@ export const CRAFTS = {
   tinder: { id: 'tinder', name: 'Make a tinder bundle', reads: ['mat', 'here.dark'], writes: SKILL_STATE, hours: 0.2, kcal: 140, ready: dark,
     run(v, d) {
       const res = makeTinder(d.act, v.body, { props: v.mat.props, provenance: provOf(v.mat) });
+      tried(d, 'tinder', res, { fineness: res.tinder.props.fineness });
       return { make: [{ name: `tinder bundle, ${v.mat.from.name}`, kind: 'tinder', props: res.tinder.props, from: v.mat.from }], use: [v.mat], say: [`Shredded the ${v.mat.from.name} ${v.mat.from.part} into a tinder nest.`], report: { fineness: res.tinder.props.fineness } };
     } },
   bone: { id: 'bone', name: 'Smash a bone for splinters', reads: ['bone', 'hammer.props', 'here.dark'], writes: [...SKILL_STATE, 'milestones.edge'], hours: 0.2, kcal: 160, ready: dark,
     run(v, d) {
       const res = splinterBone(d.act, v.body, v.bone, { props: v.hammer.props });
+      tried(d, 'bone', res, { splinters: res.flakes.length });
       const make = res.flakes.map(f => ({ name: 'bone splinter', kind: 'edge', props: f.props, from: v.bone.from }));
       const say = [make.length ? `Cracked the bone: ${make.length} sharp splinter${make.length > 1 ? 's' : ''}.` : 'The bone shattered into useless bits.'];
       if (make.length && !v.milestones.edge) { v.milestones.edge = true; say.push(['My first cutting edge.', 'milestone']); }
@@ -389,6 +407,7 @@ export const DRILL_ATTEMPT = {
   },
   run(v, d) {
     const res = handDrill(d.act, v.body, v.board, v.spindle), use = [];
+    tried(d, 'drill', res, { vigor: res.ember ? res.ember.props.vigor : null });
     if (v.board.props.life <= 0.05) use.push(v.board);
     if (v.spindle.props.length < 40) use.push(v.spindle);
     return { use, report: { success: res.success, margin: res.margin, line: DRILL_LINES.find(([f]) => f(res))[1], ember: res.ember ? res.ember.props.vigor : null, burnedThrough: v.board.props.life <= 0.05, wornShort: v.spindle.props.length < 40 } };
@@ -404,6 +423,7 @@ export const EMBER = {
     if (!v.tinder) return { say: [...say, ['An ember, but no tinder bundle ready. It faded in the notch.', 'warn']] };
     if (!v.wood) return { say: [...say, ['An ember, but no wood to feed a flame. It faded.', 'warn']] };
     const res = lightFire(d.act, v.body, v.ember, v.tinder), use = [v.tinder];
+    tried(d, 'light', res);
     if (!res.success) return { use, say: [...say, ['Tipped the ember into the tinder and blew, but it smothered and died.', 'warn']], report: { fire: false } };
     use.push(v.wood);
     v.site.fireUntil = v.clock.now + 3;
@@ -459,6 +479,7 @@ export function PREPARE(id) {
     run(v, d) {
       const { food } = v, rng = d.act, say = [], use = [];
       const q = clamp(0.5 + 0.4 * v.body.focus + rng.normal(0, 0.1));
+      d.note?.('workmanship', id, { quality: q });
       let ex, tag, cond = {};
       if (id === 'pound') { // a hard, heavy pounding stone does more per blow
         const st = v.stone; cond.crushPower = clamp(st.props.hardness / 7, 0.3, 1) * clamp(Math.sqrt(st.props.mass / 800), 0.6, 1.2);
@@ -471,12 +492,12 @@ export function PREPARE(id) {
       else if (id === 'leach' || id === 'soak') { const hours = Number(v.mode); ex = { water: { mode: id === 'leach' ? 'running' : 'still', hours, tempC: v.here.waterTempC[id === 'soak' ? 'still' : 'running'] } }; tag = `${id === 'leach' ? 'leached' : 'soaked'} ${hours} h`; }
       else if (id === 'stoneboil') { // hot stones dropped into the basin; enough of them bring it to a boil, and some crack
         cond.heatPower = Math.min(1.2, 0.3 * v.stones.length + 0.1);
-        for (const st of v.stones) if (rng.chance((st.props.spall ?? 0.3) * 0.4)) { use.push(st); say.push([`The ${st.name} burst with a crack in the fire.`, 'warn']); }
+        for (const st of v.stones) if (roll(d, 'burst', st.uid, (st.props.spall ?? 0.3) * 0.4, { name: st.name })) { use.push(st); say.push([`The ${st.name} burst with a crack in the fire.`, 'warn']); }
         ex = { heat: { mode: 'boil', minutes: 20 } }; tag = cond.heatPower >= 0.9 ? 'boiled' : 'simmered';
         if (cond.heatPower < 0.9) say.push(`With only ${v.stones.length} stone${v.stones.length === 1 ? '' : 's'} the water never quite boiled.`);
       } else { ex = { dry: v.mode === 'fire' ? 12 : 8 }; tag = 'dried'; }
       const before = food.props.chem, after = expose(before, ex, q, cond);
-      if (id === 'roast' && v.mode === 'quick' && rng.chance(0.3)) { food.props.mass *= 0.85; say.push('Some of it charred black.'); }
+      if (id === 'roast' && v.mode === 'quick' && roll(d, 'charred', 'food', 0.3)) { food.props.mass *= 0.85; say.push('Some of it charred black.'); }
       food.props.mass = r3(food.props.mass * (1 - before.water) / Math.max(0.05, 1 - after.water)); // water in or out changes the weight
       food.props.chem = after;
       food.notes = {}; // what I tasted before no longer holds
@@ -523,9 +544,10 @@ export const EAT = {
     const outcome = harmBand(harm(st) * Math.sqrt(Math.min(1.5, m / 0.2)));
     const germs = (it.props.germs ?? 0) * (cooking ? 0.05 : 1);
     mix([it], b, 0.3);
-    if (rng.chance(Math.min(0.7, (germs + 0.25 * b.germs) * Math.min(1, m / 0.2)))) b.pendingSick.push({ at: v.clock.now + 20, severity: Math.min(0.5, 0.15 + 0.4 * germs), text: 'A sour gut, then the runs. Something I ate wasn’t clean.' });
+    d.note?.('eaten', it.from.name, { kg: m, netKcal: net, harm: outcome, germs });
+    if (roll(d, 'made ill', 'germs', Math.min(0.7, (germs + 0.25 * b.germs) * Math.min(1, m / 0.2)))) b.pendingSick.push({ at: v.clock.now + 20, severity: Math.min(0.5, 0.15 + 0.4 * germs), text: 'A sour gut, then the runs. Something I ate wasn’t clean.' });
     const parasites = st.compounds.parasites ?? 0;
-    if (parasites > 0.02 && rng.chance(Math.min(0.8, parasites * 1.5))) b.pendingSick.push({ at: v.clock.now + 30, severity: Math.min(0.5, 0.2 + parasites), text: 'A sour gut and fever. Something I ate raw.' });
+    if (parasites > 0.02 && roll(d, 'made ill', 'parasites', Math.min(0.8, parasites * 1.5))) b.pendingSick.push({ at: v.clock.now + 30, severity: Math.min(0.5, 0.2 + parasites), text: 'A sour gut and fever. Something I ate raw.' });
     const irritant = Object.keys(st.compounds).some(k => COMPOUNDS[k].effect === 'irritant' && st.compounds[k] > 0.1);
     const key = loreKey(entityIn(v.world)(it.from.id), it.from.part);
     const L = (v.lore[key] ??= { ok: 0, sick: 0 });

@@ -18,7 +18,7 @@ import { walkOdds, chooseSpawn, perceive, suspicionFrom, walk, followStage, shor
 import { trailGraph, firstClear, placeLabels, suspectedCrossings, timeWords, awayWords, explainTrip } from './mentalmap.js';
 import { materialsOf, expandGoal, thought, ITEMS, lookHint, PROCESSES } from './process.js';
 import { pack, unpack } from './pack.js';
-import { spread, reproduces } from './spread.js';
+import { spread, reproduces, describeObservable } from './spread.js';
 import { attempt, peek, stateOver, hoursOf, kcalOf, readyFor, readable } from './act.js';
 import { TICKS, SLEEP_HOUR, CRAFTS, DRILL_ATTEMPT, EMBER, HANDLE, REST, DRINK, WASH_HANDS, MAKE_BED, BUILD_HUT, FEED_FIRE, KNAP, PREPARE, EAT, SURVEY, GUT_KG, loreKey, populationAt, findBones, boneLines, noteKnown as knowIt, pluralize, lineFor, mix } from './acts.js';
 import { newCharacter, dry, ROLES, searchNaturalEdge, estimateFire } from './craft.js';
@@ -551,7 +551,6 @@ function newSite(x, y, name) {
 
 // ------------------------------------------------------------ distant cues and suspected landmarks
 
-const COMPASS_RANDOM = () => ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest'][Math.floor(S.rng.next() * 8)];
 // what the light and the air allow: for perceive (geo.js)
 const skyView = () => { const k = skyNow(); return { far: seeingFar(k.lux), visibility: k.visibility, hearing: k.hearing }; };
 // how well I can make out detail close by, here (the canopy shades my own cell)
@@ -577,17 +576,19 @@ const SMELL_NOUN = { carcass: 'dead thing', sulfur: 'sulfur smell', musk: 'musky
 function associateSmell(c, from) {
   const wkey = c.source.waterKey;
   let sus = S.suspects.find(u => u.trueKey === (wkey ?? c.key));
+  let g = null; // the guess as it came: bearing (degrees) and distance (m)
   const fix = () => { // upwind, at a guessed distance
-    const w = windNow(), dir = (w.from + S.rng.normal(0, 25)) * Math.PI / 180, dist = c.trueDist * Math.exp(S.rng.normal(0, 0.6)) / CELL;
+    const w = windNow(), deg = w.from + S.rng.normal(0, 25), dir = deg * Math.PI / 180, dist = c.trueDist * Math.exp(S.rng.normal(0, 0.6)) / CELL;
+    g = { bearing: (deg + 360) % 360, dist: dist * CELL };
     return { est: { x: clamp(Math.round(from.x + Math.sin(dir) * dist), 0, GN - 1), y: clamp(Math.round(from.y - Math.cos(dir) * dist), 0, GN - 1) }, err: fixErr('smell', dist * CELL) };
   };
-  if (sus) { if (sus.lost) Object.assign(sus, fix(), { lost: false }); sus.obs++; noteSeenFrom(sus, from); return { sus, isNew: false }; }
+  if (sus) { if (sus.lost) Object.assign(sus, fix(), { lost: false }); sus.obs++; noteSeenFrom(sus, from); return { sus, isNew: false, g }; }
   const { est, err } = fix();
   S.lastTag = null;
   const label = wkey ? waterName(wkey, 'lake', est) : uniqueName(SMELL_NOUN[c.kind] ?? 'smell');
   sus = { id: `u${S.suspects.length + 1}`, kind: wkey ? 'lake' : c.kind, group: wkey ? 'water' : 'smell', trueKey: wkey ?? c.key, truePos: { x: c.x, y: c.y }, est, err, seenAt: { x: from.x, y: from.y }, channel: 'smell', obs: 1, label, reached: false, source: c.source };
   S.suspects.push(sus);
-  return { sus, isNew: true };
+  return { sus, isNew: true, g };
 }
 
 // A landmark goes on the map hanging off where I've had the closest look at it.
@@ -641,6 +642,8 @@ function associate(c, from) {
   if (c.channel === 'sight' && (c.kind === 'cliff' || c.kind === 'lake')) { revealFeature(c.key, from, senseEye); noteSeenFeatures(); }
   return { sus, isNew: true, g };
 }
+// A cue as a draw: what it is, how strong, where it truly lies, and (more) what was perceived of it.
+const cueDraw = (c, more) => ({ name: c.key, what: c.kind, channel: c.channel, strength: c.strength, level: c.level, trueBearing: c.trueBearing, trueDist: c.trueDist, ...more });
 let senseEye = 1.7; // eye height of the look in progress (higher from a lookout), for revealing what's seen
 // What the light, the air and the noise are taking from a deliberate look and listen, if anything.
 function senseLimits(close = false) {
@@ -661,19 +664,23 @@ function sense(s, lookout = false, { scan = false, focus = null } = {}) {
   const cues = lookout || scan ? all : [...all].sort((a, b) => (isWaterKind(b.kind) - isWaterKind(a.kind)) || (b.strength - a.strength)).filter((c, i) => isWaterKind(c.kind) || i < 3);
   const before = new Set(S.suspects); // "noted before" means before this look, not earlier in it
   const found = { heard: [], seen: [], land: [], upgraded: [] }, stillSeen = new Set();
+  // draws: every cue that could have registered, with what was perceived of it if it did (exact, before any words)
+  const heardOff = c => !cues.includes(c) || (c.kind === 'brook' && c.trueDist > 100);
+  for (const c of all) if (heardOff(c)) note('sensed', c.key, cueDraw(c, { observed: false }));
   for (const c of cues) {
     if (c.kind === 'brook' && c.trueDist > 100) continue;
     const { sus, isNew, g } = associate(c, s);
+    let became = 'new';
     if (!isNew) {
-      if (c.channel === 'sight' && sus.channel === 'sound') { sus.channel = 'sight'; found.upgraded.push(`${cuePhrase(c, g, s)} (${sus.label})`); }
-      else if (before.has(sus)) stillSeen.add(sus);
-      continue;
-    }
-    (sus.group !== 'water' ? found.land : c.channel === 'sound' ? found.heard : found.seen).push(`${cuePhrase(c, g, s)} (${sus.another ?? sus.label})`);
+      if (c.channel === 'sight' && sus.channel === 'sound') { sus.channel = 'sight'; found.upgraded.push(`${cuePhrase(c, g, s)} (${sus.label})`); became = 'seen now'; }
+      else if (before.has(sus)) { stillSeen.add(sus); became = 'again'; } else became = 'merged';
+    } else (sus.group !== 'water' ? found.land : c.channel === 'sound' ? found.heard : found.seen).push(`${cuePhrase(c, g, s)} (${sus.another ?? sus.label})`);
+    note('sensed', c.key, cueDraw(c, { bearing: (g.bearing + 360) % 360, dist: g.dist, became, suspect: sus.id }));
   }
   const smelled = [];
   if (!lookout && (!focus || focus === 'water')) for (const c of smellAt(smellsToday(), s, windNow(), S.rng)) {
-    const { sus, isNew } = associateSmell(c, s);
+    const { sus, isNew, g } = associateSmell(c, s);
+    note('smelled', c.key, { name: c.key, what: c.kind, strength: c.strength, trueBearing: c.trueBearing, trueDist: c.trueDist, bearing: g?.bearing, dist: g?.dist, became: isNew ? 'new' : 'again', suspect: sus.id });
     if (isNew || scan) smelled.push(`${c.words} (${sus.label}${isNew ? '' : ', again'})`);
   }
   const report = [];
@@ -687,8 +694,17 @@ function sense(s, lookout = false, { scan = false, focus = null } = {}) {
     if (stillSeen.size) report.push(`Still there: ${[...stillSeen].map(u => `${u.label} (${bearingWord(bearing(s, u.est))})`).join('; ')}.`);
     if (scan) {
       const cond = condNow(s); // who's calling depends on the season and the weather; a call of the season is a sound of its own
-      const calls = S.world.animals.filter(a => a.signs?.call && a.cls !== 'invertebrate').map(a => ({ a, now: animalNow(a, cond) })).filter(({ a, now }) => now.here && S.rng.chance(clamp(a.perKm2 / 15 * now.calls * cond.hearing) * (timeOfDay() === 'day' ? 0.5 : 1))).slice(0, 3)
-        .map(({ a, now }) => { const call = now.callNow(S.rng), sig = S.mem.signs?.[`call:${call}`]; const who = sig?.linked ? ` (${entity(sig.linked)?.name ?? 'something'})` : ''; return `${call}${who} to the ${COMPASS_RANDOM()}, ${a.cls === 'large' ? 'some way off' : 'close'}`; });
+      // each calling animal: the chance of hearing it now, heard or not, and (animals have no places yet) a direction at random
+      const callers = S.world.animals.filter(a => a.signs?.call && a.cls !== 'invertebrate').map(a => ({ a, now: animalNow(a, cond) }))
+        .map(o => ({ ...o, p: o.now.here ? clamp(o.a.perKm2 / 15 * o.now.calls * cond.hearing) * (timeOfDay() === 'day' ? 0.5 : 1) : 0 }));
+      const heard = callers.filter(({ now, p }) => now.here && S.rng.chance(p)), kept = heard.slice(0, 3); // at most three stand out
+      for (const o of callers) if (!kept.includes(o)) note('call', o.a.id, { name: o.a.name, p: o.p, observed: false, drowned: heard.includes(o) });
+      const calls = kept.map(({ a, now, p }) => {
+        const call = now.callNow(S.rng), sig = S.mem.signs?.[`call:${call}`], dir = S.rng.next() * 360;
+        note('call', a.id, { name: a.name, p, bearing: dir, call });
+        const who = sig?.linked ? ` (${entity(sig.linked)?.name ?? 'something'})` : '';
+        return `${call}${who} to the ${['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest'][Math.floor(dir / 45)]}, ${a.cls === 'large' ? 'some way off' : 'close'}`;
+      });
       if (calls.length) report.push(`Calls: ${calls.join('; ')}.`);
       log(report.length ? `Scanning and listening:\n${report.join('\n')}` : 'Scanned and listened for half an hour. Nothing beyond the immediate.', 'survey');
     } else log(report.length ? `From up here:\n${report.join('\n')}` : 'From up here I can see a long way, but nothing I haven’t already noted.', 'survey');
@@ -869,7 +885,7 @@ function missedTarget(target, from) {
   let est = { x: target.x, y: target.y }, how;
   if (sus) {
     const c = perceive(S.L, here, { time: timeOfDay(), sky: skyView(), boost: 1.4 }).find(k => k.key === sus.trueKey);
-    if (c) { const g = suspicionFrom(c, here, S.rng); sus.est = est = g.est; sus.err = fixErr(c.channel, g.dist); how = `I can still ${c.channel === 'sound' ? 'hear' : 'see'} it`; }
+    if (c) { const g = suspicionFrom(c, here, S.rng); note('sensed again', c.key, cueDraw(c, { bearing: (g.bearing + 360) % 360, dist: g.dist })); sus.est = est = g.est; sus.err = fixErr(c.channel, g.dist); how = `I can still ${c.channel === 'sound' ? 'hear' : 'see'} it`; }
     else if ((here.x === sus.est.x && here.y === sus.est.y) || here === from) {
       // Here is where I thought it was (or as near as I can get: the walk ended where it began, at a
       // shore, say), and there's no sign of it. Guessing "further on" sends me chasing it in ever
@@ -969,11 +985,13 @@ function onTheMove(path, hours) {
   }
   for (const p of path) S.trod.add(cellOf(p.x, p.y));
   let spent = hours * limpFactor();
-  if (total > 0 && S.rng.chance(1 - Math.exp(-total))) {
+  if (total > 0 && roll('hurt', 'on the way', 1 - Math.exp(-total), { expected: total })) {
     let u = S.rng.next() * total, at = parts[parts.length - 1];
     for (const p of parts) if ((u -= p[1]) <= 0) { at = p; break; }
-    spent += hurt(injuryAt(S.L, at[0], S.rng), k, { why: injuryReasons(at[2]), c: at[0] });
-  }
+    const inj = injuryAt(S.L, at[0], S.rng);
+    note('injury', 'on the way', { type: inj.kind, severity: inj.sev, x: at[0] % GN, y: Math.floor(at[0] / GN), why: injuryReasons(at[2]).join(' and ') || 'nothing in particular' });
+    spent += hurt(inj, k, { why: injuryReasons(at[2]), c: at[0] });
+  } else if (total > 0) note('hurt', 'on the way', { p: 1 - Math.exp(-total), observed: false, expected: total });
   return spent;
 }
 // why it happened, in the character's words: the biggest factors at the spot (injury.js)
@@ -1009,7 +1027,7 @@ function hurt({ kind, sev }, k, ctx = {}) {
   if (kind === 'cut') {
     S.body.germs = clamp(S.body.germs + 0.2);
     S.body.wound = { at: now(), sev };
-    if (S.rng.chance(0.25 + 0.5 * sev)) S.body.pendingSick.push({ at: now() + 30, severity: 0.15 + 0.35 * sev, text: 'The cut on my shin is hot, swollen and weeping: it’s gone bad.', wound: true });
+    if (roll('made ill', 'cut', 0.25 + 0.5 * sev, { severity: sev })) S.body.pendingSick.push({ at: now() + 30, severity: 0.15 + 0.35 * sev, text: 'The cut on my shin is hot, swollen and weeping: it’s gone bad.', wound: true });
     log(`A broken branch tore a gash in my shin.${why} I should wash it soon.`, 'warn');
     return 0.1;
   }
@@ -1062,6 +1080,7 @@ function travelTo(target, label) {
     if (atTarget(from, info)) { info.sus.reached = true; return log(`Found ${info.sus.label}, right here.`, 'act'); }
     // listening hard on the spot, it's just next door after all (close by, that's exact): one step over
     const c = perceive(S.L, from, { time: timeOfDay(), sky: skyView(), boost: 1.4 }).find(k => k.key === info.sus.trueKey), g = c && suspicionFrom(c, from, S.rng);
+    if (g) note('sensed again', c.key, cueDraw(c, { bearing: (g.bearing + 360) % 360, dist: g.dist }));
     if (g && (g.est.x !== from.x || g.est.y !== from.y)) { info.sus.est = g.est; return travelTo({ ...g.est, suspect: info.sus.id }, label); }
     return missedTarget(target, from);
   }
@@ -1069,7 +1088,7 @@ function travelTo(target, label) {
   let n = 0;
   const { sus, dest, st, area, truePos } = targetInfo(target);
   // Homing: every few steps (or when asked outright) a fresh fix on the target, if I can still see or hear it.
-  const resense = sus ? (p, force) => { if (++n % 3 && !force) return null; const c = perceive(S.L, p, { time: timeOfDay(), sky: skyView(), boost: force ? 1.4 : 1 }).find(k => k.key === sus.trueKey); return c ? suspicionFrom(c, p, S.rng).est : null; } : null; // at the spot I stop and listen hard
+  const resense = sus ? (p, force) => { if (++n % 3 && !force) return null; const c = perceive(S.L, p, { time: timeOfDay(), sky: skyView(), boost: force ? 1.4 : 1 }).find(k => k.key === sus.trueKey); if (!c) return null; const g = suspicionFrom(c, p, S.rng); note('homing fix', c.key, cueDraw(c, { bearing: (g.bearing + 360) % 360, dist: g.dist })); return g.est; } : null; // at the spot I stop and listen hard
   const want = sus?.group === 'water' ? waterKeyOf(sus.trueKey) : null;
   const arrived = sus ? p => (want && /^(lake|river|brook)-/.test(want) ? onWater(p, want) : atTarget(p, { truePos, sus }))
     : st ? p => !!S.L.chan[cellOf(p.x, p.y)] && (Math.hypot(p.x - target.x, p.y - target.y) <= 3 || matchStream(makeFix(p)) === st)
@@ -1091,9 +1110,11 @@ function travelTo(target, label) {
     log(`Mid-stream the current knocked my feet from under me and carried me ${m} m downstream before I could claw my way out. Soaked through, everything I carry with me.`, 'warn');
     soakMe(1);
     S.body.fatigue = clamp(S.body.fatigue + 0.15);
-    if (S.rng.chance(0.4)) { const c = cellOf(sw.to.x, sw.to.y); pass(hurt({ kind: S.rng.chance(0.5) ? 'fall' : 'ankle', sev: clamp(S.rng.logNormal(0.3, 0.5), 0.05, 0.9) }, skyNow(), { why: ['the current'], c }), 100); }
+    note('swept', 'downstream', { metres: m, fromX: sw.from.x, fromY: sw.from.y });
+    if (roll('hurt', 'in the current', 0.4)) { const c = cellOf(sw.to.x, sw.to.y), inj = { kind: S.rng.chance(0.5) ? 'fall' : 'ankle', sev: clamp(S.rng.logNormal(0.3, 0.5), 0.05, 0.9) }; note('injury', 'in the current', { type: inj.kind, severity: inj.sev }); pass(hurt(inj, skyNow(), { why: ['the current'], c }), 100); }
   }
   const reached = st || area ? arrived(trip.end) : atTarget(trip.end, targetInfo(target));
+  note('walk', 'trip', { name: label, hours, cells: trip.path.length, endX: trip.end.x, endY: trip.end.y, end: `${trip.end.x},${trip.end.y}`, reached: !!reached, crossings: trip.crossings.length, swept: trip.sweeps.length });
   S.travelHint = reached ? st?.id ?? sus?.stream ?? null : null; // the stream I was after, only if this is it
   const { names, keys, ids } = noteCrossings(trip, S.travelHint);
   noticeCrossings(trip.path);
@@ -1190,6 +1211,7 @@ const MEMOS = new Set(['treeMemo']);
 // (site(), not a place captured beforehand).
 let noteSink = null;
 const note = (kind, id, fields) => noteSink?.(kind, id, fields); // a draw, for the range of outcomes (spread.js)
+const roll = (kind, id, p, fields = {}) => { const hit = S.rng.chance(p); note(kind, id, { p, observed: hit, ...fields }); return hit; }; // a chance taken, noted
 const withState = (v, d, f) => { const real = S, sink = noteSink; S = v; noteSink = d?.note ?? sink; try { return f(); } finally { S = real; noteSink = sink; } };
 const hosted = fn => Object.assign((v, d) => withState(v, d, () => fn(v, d) ?? {}), { hosted: true });
 // The machinery's own part of every action, in the action's transaction: take what it used up, add
@@ -1277,8 +1299,12 @@ function spreadHTML() {
   const vary = { act: 'this attempt’s luck', place: 'the place’s luck', both: 'both' }[r.vary];
   const unusual = r.unusual.length ? `<p>Unusual luck: ${r.unusual.map(e => `${esc(e.path)} ${esc(fmtN(e.actual))} (rank ${pct(e.rank)})`).join('; ')}.</p>` : '<p class="hint">Nothing unusual in what happened.</p>';
   const walk = r.walk ? `<details><summary>The walk: ${r.walk.steps.length} steps, ${r.walk.steps.filter(s => s.p < 0.9).length} of them open; surprisal ${r.walk.bits.toFixed(1)} bits</summary><ul>${r.walk.steps.filter(s => s.p < 0.9).map(s => `<li>step ${s.i + 1} from ${s.from.x},${s.from.y}: went ${s.took.x},${s.took.y} (${pct(s.p)})${s.others.length ? `; else ${s.others.slice(0, 3).map(o => `${o.cell} ${pct(o.p)}`).join(', ')}` : ''}</li>`).join('')}</ul></details>` : '';
+  const kinds = [...new Set(r.observables.map(o => o.kind))];
+  const draws = kinds.map(k => { const os = r.observables.filter(o => o.kind === k);
+    return `<details open><summary>${esc(k)} (${os.length})</summary><ul class="tree">${os.map(o => { const d = describeObservable(o); return `<li><b>${esc(d.head)}</b>${d.parts.length ? `<ul>${d.parts.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</li>`; }).join('')}</ul></details>`; }).join('');
   return `<div class="spread">${head}<p class="hint">${r.n} runs varying ${vary}${r.reproduces === true ? '; run again with the same dice, it comes out the same' : r.reproduces === false ? '; <span class="odd">run again with the same dice, it comes out differently (it depends on something outside what it read)</span>' : ''}${r.errors.length ? `; ${r.errors.length} runs failed: ${esc(r.errors[0])}` : ''}.</p>${unusual}
-    <details open><summary>What it did</summary><ul class="tree">${treeHTML(r.outcome)}</ul></details>${walk}
+    ${draws ? `<h4>What it drew, thing by thing</h4>${draws}` : ''}
+    <details><summary>What it changed in the state</summary><ul class="tree">${treeHTML(r.outcome)}</ul></details>${walk}
     <details><summary>What it read (${r.inputList.length} values)</summary><ul class="tree">${treeHTML(r.inputs)}</ul></details></div>`;
 }
 
@@ -1308,7 +1334,10 @@ const GAME = {
     run: hosted(v => { const it = byUid(v.thing.uid), T = testsFor(it).find(([k]) => k === v.name); it.notes[v.name] = T[1](); log(`${v.name} on the ${it.name}: ${it.notes[v.name]}.`); }) },
   gather: { id: 'gather', name: 'Collect', reads: ['index', 'option', 'day', 't', 'lore'], writes: [...KNOW, 'inv', 'uid', 'body', '+log'],
     hours: v => v.option.hours, kcal: v => v.option.kcal,
-    run: hosted(v => { const g = gatherOptions(site())[v.index]; site().gathered = true; const it = g.fn(); touch([it], 0.5); log(`Gathered ${it.name}.`); }) },
+    run: hosted(v => {
+      const g = gatherOptions(site())[v.index]; site().gathered = true; const it = g.fn(); touch([it], 0.5); log(`Gathered ${it.name}.`);
+      note('gathered', it.name, Object.fromEntries(Object.entries(it.props).filter(([, x]) => typeof x === 'number')));
+    }) },
   drop: { id: 'drop', name: 'Leave something behind', reads: ['thing.uid'], writes: ['inv', '+log'], run: hosted(v => { const it = byUid(v.thing.uid); remove(it); log(`Left the ${it.name} behind.`); }) },
   rename: { id: 'rename', name: 'Name a place', reads: ['place', 'name', 'origin'], writes: ['sites', 'at', '+log'],
     run: hosted(v => {
@@ -1402,7 +1431,7 @@ function sleepNow(forced = false) {
   const words = q >= 0.8 ? 'Slept warm and deep.' : q >= 0.55 ? 'Slept well enough.' : q >= 0.35 ? `A ${per.cold >= 0.15 ? 'cold' : 'restless'}, broken night.` : per.cold >= 0.3 ? 'Barely slept; cold to the bone.' : 'Barely slept.';
   const chill = S.body.chill >= 0.6 ? ' I woke shaking, stiff and grey with cold.' : S.body.chill >= 0.3 ? ' I woke chilled through.' : '';
   if (!forced) log(`${words}${reasons.length ? ` ${cap(reasons.join(', and '))}.` : ''}${chill}${banked ? ' Banked the fire with two pieces of wood; it was still glowing at dawn.' : ''}${s.hut && q >= 0.55 ? ' The hut kept the night out.' : ''}${s.bed && !s.hut && q >= 0.55 ? ' The bed of leaves helped.' : ''}`, 'act');
-  if (S.body.chill >= 0.6 && S.body.sick < 0.3 && !S.body.pendingSick.some(p => p.chill) && S.rng.chance(S.body.chill - 0.4)) S.body.pendingSick.push({ at: now() + 12, severity: 0.15 + 0.2 * (S.body.chill - 0.6), text: 'A chill has settled on my chest: aching, shivery, coughing.', chill: true }); // a night too cold can make me ill (once, not again while I'm ill)
+  if (S.body.chill >= 0.6 && S.body.sick < 0.3 && !S.body.pendingSick.some(p => p.chill) && roll('made ill', 'chill', S.body.chill - 0.4)) S.body.pendingSick.push({ at: now() + 12, severity: 0.15 + 0.2 * (S.body.chill - 0.6), text: 'A chill has settled on my chest: aching, shivery, coughing.', chill: true }); // a night too cold can make me ill (once, not again while I'm ill)
   for (const p of [...S.body.pendingSick]) if (now() >= p.at) { S.body.sick = clamp(S.body.sick + p.severity); S.body.pendingSick.splice(S.body.pendingSick.indexOf(p), 1); log(p.text, 'warn'); }
 }
 
@@ -1588,7 +1617,7 @@ function testsFor(it) {
   const e = entity(it.from?.id);
   const field = name => e?.fieldTests?.find(([k]) => k.startsWith(name))?.[1];
   const T = [];
-  const noisy = x => x + S.rng.normal(0, 0.04);
+  const noisy = x => { const y = x + S.rng.normal(0, 0.04); note('reading', it.kind, { value: y, trueValue: x }); return y; };
   if (['wood', 'shoot', 'stalk', 'board', 'spindle'].includes(it.kind)) {
     if (it.props.density !== undefined) T.push(['Thumbnail and heft', () => DENSITY_WORDS(noisy(it.props.density))]);
     T.push(['Snap test', () => MOIST_WORDS(noisy(it.props.moisture), ambient())]);
@@ -1770,13 +1799,13 @@ function pokeAround(s) {
     const small = (e.kind === 'animal' && e.cls === 'invertebrate') || e.cryptic;
     if (!small) continue;
     const p = 1 - Math.exp(-reach * n / (e.kind === 'animal' ? 25 : 10));
-    if (!S.rng.chance(p)) continue;
+    if (!roll('found', e.id, p, { name: e.name, count: n })) continue;
     if (!S.mem.entities[memKeyE(e)]) fresh.push(e);
     rows.push({ n, text: lineFor(e, n) });
     noteKnown(s, e);
   }
   const bee = S.world.animals.find(a => a.traits.key === 'bee' && a.habitats.some(h => h.micro === s.micro));
-  if (bee && !s.hive && ['woodland', 'deadfall', 'edge'].includes(s.micro) && S.rng.chance(0.25)) {
+  if (bee && !s.hive && ['woodland', 'deadfall', 'edge'].includes(s.micro) && roll('found', 'hive', 0.25, { name: 'a hive' })) {
     s.hive = true; noteKnown(s, bee);
     rows.push({ n: 0.5, text: 'a hollow log humming with bees: a hive' });
   }
@@ -1787,7 +1816,7 @@ function pokeAround(s) {
   log(rows.length ? `Poking around (${how}):\n${[...rows.map(r => r.text), ...named].join('\n')}` : `Poked around for half an hour (${how}); nothing worth having.`, 'survey');
 }
 
-const boneFinds = (s, effort) => findBones(S.world, s, effort, S.rng); // bones (acts.js)
+const boneFinds = (s, effort) => findBones(S.world, s, effort, S.rng, note); // bones (acts.js)
 
 // ------------------------------------------------------------ focused search
 
@@ -1851,6 +1880,7 @@ function lookAt(s, passing) {
       const want = T.key === 'water' ? isWaterKind(c.kind) : ['hill', 'cliff'].includes(c.kind);
       if (!want) continue;
       const { sus, isNew, g } = associate(c, s);
+      note('sensed', c.key, cueDraw(c, { bearing: (g.bearing + 360) % 360, dist: g.dist, became: isNew ? 'new' : 'again', suspect: sus.id }));
       if (isNew) lines.push(`${cuePhrase(c, g, s)} (${sus.another ?? sus.label})`);
       else if (!passing) lines.push(`${sus.label} again, to the ${bearingWord(bearing(s, sus.est))}`);
     }
@@ -1863,9 +1893,9 @@ function lookAt(s, passing) {
     if (hit) {
       const stick = bestStick(), reach = stick ? 1 + 1.5 * stick.props.hardness : 1;
       const p = e.cryptic ? 1 - Math.exp(-reach * hit.n / (e.kind === 'animal' ? 15 : 6)) : 0.92; // looking hard under things beats a general poke
-      if (S.rng.chance(p)) {
+      if (roll('found', hit.e.id, p, { name: hit.e.name, count: hit.n })) {
         lines.push(lineFor(hit.e, hit.n)); noteKnown(s, hit.e);
-        if (e.traits?.key === 'bee' && !s.hive && ['woodland', 'deadfall', 'edge'].includes(s.micro) && S.rng.chance(0.5)) { s.hive = true; lines.push('followed them to a hollow tree humming with bees: a hive'); }
+        if (e.traits?.key === 'bee' && !s.hive && ['woodland', 'deadfall', 'edge'].includes(s.micro) && roll('found', 'hive', 0.5, { name: 'a hive' })) { s.hive = true; lines.push('followed them to a hollow tree humming with bees: a hive'); }
       }
     }
     return lines;
@@ -1873,9 +1903,9 @@ function lookAt(s, passing) {
   const F = FOCI[T.key];
   if (T.key === 'game') {
     for (const a of S.world.animals.filter(a => a.cls !== 'invertebrate' && a.signs && a.habitats.some(h => h.micro === s.micro))) {
-      if (!S.rng.chance(1 - Math.exp(-a.perKm2 * (passing ? 0.25 : 0.45)))) continue;
+      if (!roll('sign', a.id, 1 - Math.exp(-a.perKm2 * (passing ? 0.25 : 0.45)), { name: `sign of ${a.name}` })) continue;
       const known = S.mem.entities[memKeyE(a)];
-      for (const sign of [a.signs.track && `${a.signs.track.type}, about ${a.signs.track.lengthCm} cm`, a.signs.scat, a.signs.damage].filter(Boolean)) if (S.rng.chance(0.6)) lines.push(`${sign}${known ? ` (${a.name})` : ''}`);
+      for (const [k, sign] of [['track', a.signs.track && `${a.signs.track.type}, about ${a.signs.track.lengthCm} cm`], ['scat', a.signs.scat], ['damage', a.signs.damage]].filter(([, x]) => x)) if (roll('sign', `${a.id}/${k}`, 0.6, { name: `${a.name}: ${k}` })) lines.push(`${sign}${known ? ` (${a.name})` : ''}`);
     }
   } else if (T.key === 'bones') {
     lines.push(...boneLines(boneFinds(s, passing ? 0.5 : 1)));
@@ -1885,6 +1915,7 @@ function lookAt(s, passing) {
     const m = S.mats.find(x => x.material === 'natural-edge' && here.includes(x.source));
     if (m) {
       const res = searchNaturalEdge(S.rng, S.body, { props: m.props, provenance: { name: m.sourceName, source: m.source } });
+      note('found', `edge/${m.source}`, { name: `a natural edge (${m.sourceName})`, observed: !!res.flake, sharpness: res.flake?.props.sharpness, mass: res.flake?.props.mass });
       if (res.flake) {
         addItem(`natural edge, ${m.sourceName}`, 'edge', res.flake.props, { id: m.source, name: m.sourceName, part: 'natural edge', site: s.key });
         lines.push(`a piece of broken ${m.sourceName} with a usable edge; took it`);
@@ -1930,10 +1961,10 @@ function lookAlong(path) {
 function breakthroughs(s, focus) {
   if (focus !== 'food') {
     S.fruitNoted ??= {};
-    const fruit = presentAt(s).find(({ e }) => e.kind === 'plant' && ['berry', 'drupe'].includes(e.traits.fruit) && !S.fruitNoted[e.id] && S.rng.chance(0.6));
+    const fruit = presentAt(s).find(({ e }) => e.kind === 'plant' && ['berry', 'drupe'].includes(e.traits.fruit) && !S.fruitNoted[e.id] && roll('noticed in passing', e.id, 0.6, { name: e.name }));
     if (fruit) { S.fruitNoted[fruit.e.id] = true; log(`Even so, I couldn’t miss ${fruit.e.traits.fruitColor} fruit on ${S.mem.entities[memKeyE(fruit.e)] ? `the ${fruit.e.name}` : `a bush I haven’t named (${shortDesc(fruit.e)})`}.`, 'note'); noteKnown(s, fruit.e); }
   }
-  const big = S.world.animals.filter(a => a.cls === 'large' && !a.signs?.distant && a.habitats.some(h => h.micro === s.micro)).find(a => S.rng.chance(1 - Math.exp(-a.perKm2 * 0.06)));
+  const big = S.world.animals.filter(a => a.cls === 'large' && !a.signs?.distant && a.habitats.some(h => h.micro === s.micro)).find(a => roll('startled', a.id, 1 - Math.exp(-a.perKm2 * 0.06), { name: a.name }));
   if (big) {
     const known = S.mem.entities[memKeyE(big)];
     log(known ? `A ${big.name} crashed away through the brush ahead.` : `Something big crashed away through the brush ahead: a ${firstCueA(big)}.`, 'note');
@@ -2761,7 +2792,7 @@ if (typeof document !== 'undefined') {
 // Everything that happens follows from the world seed and the player's choices, so a record of the
 // seed and each choice reproduces a game exactly. Each action is the data of what was tapped (or
 // the value chosen); `act` applies one, and replaying a record runs them in order on a fresh game.
-const BUILD = 'hk-2026-10-26d'; // game logic version: a record replays faithfully only on the build that made it
+const BUILD = 'hk-2026-10-27a'; // game logic version: a record replays faithfully only on the build that made it
 function record(d) {
   S.record ??= [];
   S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });

@@ -302,7 +302,7 @@ export function begin(proc, state, { live = null } = {}) {
 // used up and said, run in the same transaction (so undoing the action undoes those too).
 export function attempt(proc, state, dice, { live = null, finish = null } = {}) {
   const tx = begin(proc, state, { live }), draws = [];
-  const d = { ...dice, note: (kind, id, fields = {}) => { draws.push({ kind, id: String(id), ...fields }); } };
+  const d = { ...dice, note: (kind, id, fields = {}) => { draws.push({ ...fields, kind, id: String(id) }); } };
   let out;
   try { out = proc.run(tx.v, d) ?? {}; } catch (e) { tx.discard(); throw e; }
   const say = (out.say ?? []).map(l => (Array.isArray(l) ? l : [l, 'act']));

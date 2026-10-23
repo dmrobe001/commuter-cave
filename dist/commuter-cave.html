@@ -866,11 +866,11 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     return s.water > 0.8 ? "juicy" : "tender";
   }
   function describeState(s, mass) {
-    const pct2 = (x) => `${Math.round(x * 100)}%`;
+    const pct3 = (x) => `${Math.round(x * 100)}%`;
     const n = mass ? nutrients(s, mass) : null;
     return [
-      `make-up: water ${pct2(s.water)}, starch ${pct2(s.starch)}, sugar ${pct2(s.sugar)}, fat ${pct2(s.fat)}, protein ${pct2(s.protein)}, fibre ${pct2(s.fibre)}`,
-      `absorbable now: starch ${pct2(s.access.starch)}, fat ${pct2(s.access.fat)}, protein ${pct2(s.access.protein)}; surface ${pct2(s.surface)}`,
+      `make-up: water ${pct3(s.water)}, starch ${pct3(s.starch)}, sugar ${pct3(s.sugar)}, fat ${pct3(s.fat)}, protein ${pct3(s.protein)}, fibre ${pct3(s.fibre)}`,
+      `absorbable now: starch ${pct3(s.access.starch)}, fat ${pct3(s.access.fat)}, protein ${pct3(s.access.protein)}; surface ${pct3(s.surface)}`,
       `compounds: ${Object.keys(s.compounds).length ? Object.entries(s.compounds).map(([k, d]) => `${k} ${d.toFixed(2)}`).join(", ") : "none"} (harm ${harm(s).toFixed(2)})`,
       ...n ? [`${mass.toFixed(2)} kg: gross ${Math.round(n.gross)} kcal; absorbed ${Math.round(n.absorbed)} (carb ${Math.round(n.carb)}, fat ${Math.round(n.fat)}, protein ${Math.round(n.protein)}); digesting costs ${Math.round(n.cost)}; net ${Math.round(n.net)} kcal`] : []
     ];
@@ -6264,7 +6264,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   function attempt(proc, state, dice2, { live = null, finish = null } = {}) {
     const tx = begin(proc, state, { live }), draws = [];
     const d = { ...dice2, note: (kind, id, fields = {}) => {
-      draws.push({ kind, id: String(id), ...fields });
+      draws.push({ ...fields, kind, id: String(id) });
     } };
     let out;
     try {
@@ -6414,11 +6414,10 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       const fields = [...new Set(all.flatMap((d) => Object.keys(d)))].filter((f) => !["kind", "id", "name", "observed"].includes(f));
       const stats = [];
       for (const f of fields) {
-        const pool = f === "p" ? all : seen;
-        const values = pool.map((d) => d[f]).filter((v) => v !== void 0);
+        const values = all.map((d) => d[f]).filter((v) => v !== void 0);
         if (!values.length)
           continue;
-        const s = summarise(values, void 0, isAngle(f)), a = (f === "p" ? here[0] : happened)?.[f];
+        const s = summarise(values, void 0, isAngle(f)), a = (happened ?? here[0])?.[f];
         stats.push({ field: f, summary: s, actual: a, rank: rankOf(s, values, a) });
         const tf = `true${cap3(f)}`;
         if (fields.includes(tf)) {
@@ -6429,7 +6428,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
           }
         }
       }
-      out.push({ kind: g.kind, id: g.id, name: g.name, observed: g.runs.filter((rs) => rs.some((d) => d.observed !== false)).length / n, records: all.length, happened: !!happened, fields: stats });
+      out.push({ kind: g.kind, id: g.id, name: g.name, observed: g.runs.filter((rs) => rs.some((d) => d.observed !== false)).length / n, records: all.length, happened: actual ? !!happened : null, fields: stats });
     }
     return out.sort((a, b) => a.kind.localeCompare(b.kind) || b.observed - a.observed || String(a.name).localeCompare(String(b.name)));
   }
@@ -6481,9 +6480,9 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       inputs: treeOf(inputs),
       inputList: inputs,
       unusual: [
-        ...observables.flatMap((o) => o.fields.filter((f) => unusualRank(f.summary, f.rank)).map((f) => ({ path: `${o.kind} ${o.name}: ${f.field}`, actual: f.actual, rank: f.rank }))),
-        ...entries.filter((e) => e.summary.kind === "num" && e.varies && unusualRank(e.summary, e.rank))
+        ...observables.flatMap((o) => o.fields.filter((f) => unusualRank(f.summary, f.rank) && !o.fields.some((g) => g.field === `${f.field} error (\xB0)` || g.field === `${f.field} / true`)).map((f) => ({ path: `${o.kind} ${o.name}: ${f.field}`, actual: f.actual, rank: f.rank })))
       ]
+      // (the state's own leaves follow from the draws; their ranks are in the state tree)
     };
   }
   function reproduces(proc, stateFn, actAt, place, actual, { live = null, around = (i, f) => f() } = {}) {
@@ -6491,6 +6490,39 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const fx = around(0, () => attempt(proc, stateFn(), d, { live: live?.(d) }), d);
     fx.tx.discard();
     return JSON.stringify([outcomeLeaves(fx), fx.draws]) === JSON.stringify([outcomeLeaves(actual), actual.draws]);
+  }
+  var fmt = (x) => typeof x !== "number" ? String(x) : Math.abs(x) >= 100 ? x.toFixed(0) : Math.abs(x) >= 1 ? String(+x.toFixed(2)) : String(+x.toPrecision(2));
+  var pct = (x) => `${Math.round(100 * x)}%`;
+  function describeObservable(o) {
+    const by = Object.fromEntries(o.fields.map((f) => [f.field, f]));
+    const parts = [];
+    for (const f of o.fields) {
+      const name = f.field, s = f.summary;
+      if (/^true[A-Z]/.test(name) || / error \(°\)$| \/ true$/.test(name) || name === "name")
+        continue;
+      const constant = s.kind === "cat" ? Object.keys(s.counts).length === 1 : s.kind === "angle" ? s.sd < 0.01 : s.min === s.max;
+      if (constant && s.kind === "cat" && Object.keys(s.counts)[0] === "false")
+        continue;
+      const a = f.actual === void 0 || f.actual === null ? "" : `${fmt(f.actual)}${s.kind === "angle" ? "\xB0" : ""} \xB7 `;
+      let text;
+      if (s.kind === "angle")
+        text = constant ? `${fmt(s.mean)}\xB0` : `${a}${fmt(s.mean)}\xB0 \xB1${fmt(s.sd)}\xB0`;
+      else if (s.kind === "num")
+        text = constant ? fmt(s.min) : `${a}${fmt(s.q[0])}\u2013${fmt(s.q[4])}, median ${fmt(s.q[2])}`;
+      else
+        text = constant ? Object.keys(s.counts)[0] : `${a}${Object.entries(s.counts).sort((x, y) => y[1] - x[1]).slice(0, 4).map(([k, v]) => `${k} ${pct(v)}`).join(", ")}`;
+      const t = by[`true${name.charAt(0).toUpperCase()}${name.slice(1)}`], e = by[`${name} error (\xB0)`] ?? by[`${name} / true`];
+      if (t) {
+        const tv = t.summary.kind === "angle" ? `${fmt(t.summary.mean)}\xB0` : t.summary.kind === "num" ? fmt(t.summary.q[2]) : "";
+        const ev = e ? e.field.endsWith("(\xB0)") ? `off ${fmt(e.summary.q[2])}\xB0 (${fmt(e.summary.q[0])} to ${fmt(e.summary.q[4])})` : `\xD7${fmt(e.summary.q[2])} (${fmt(e.summary.q[0])}\u2013${fmt(e.summary.q[4])})` : "";
+        text += ` [true ${tv}${ev ? `; ${ev}` : ""}]`;
+      }
+      if (f.rank != null && s.kind !== "cat" && !constant && (f.rank < 0.1 || f.rank > 0.9))
+        text += ` (rank ${pct(f.rank)}: unusual)`;
+      parts.push(`${name} ${text}`);
+    }
+    const seen = o.observed === 1 ? "every run" : o.observed === 0 ? "no run" : `${pct(o.observed)} of runs`;
+    return { head: `${o.name}: ${seen}${o.happened === false && o.observed > 0 ? " (not this time)" : o.happened === true && o.observed < 1 ? " (this time, yes)" : ""}`, parts };
   }
 
   // src/craft.js
@@ -6722,6 +6754,12 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
 
   // src/acts.js
   var cap4 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  var roll = (d, kind, id, p, fields = {}) => {
+    const hit = d.act.chance(p);
+    d.note?.(kind, id, { p, observed: hit, ...fields });
+    return hit;
+  };
+  var tried = (d, id, res, fields = {}) => d.note?.("attempt", id, { p: res.p, margin: res.margin, success: res.success, ...fields });
   var r3 = (x) => Math.round(x * 1e3) / 1e3;
   var entityIn = (world) => (id) => [...world.stones, ...world.plants, ...world.animals].find((e) => e.id === id);
   var pluralize = (n) => /fungus$/.test(n) ? n.replace(/fungus$/, "fungi") : /louse$/.test(n) ? n.replace(/louse$/, "lice") : /(s|sh|ch|x)$/.test(n) ? `${n}es` : /[^aeiou]y$/.test(n) ? `${n.slice(0, -1)}ies` : /(deer|fish|trout|elk|grouse|quail|boar)$/.test(n) ? n : `${n}s`;
@@ -6760,7 +6798,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     if (hands)
       body.germs += k * (m - body.germs);
   }
-  function populationAt(world, micro, siteKey, factors, place) {
+  function populationAt(world, micro, siteKey, factors, place, note2 = null) {
     const out = [];
     for (const e of [...world.stones, ...world.plants, ...world.animals]) {
       const h = e.habitats.find((x) => x.micro === micro);
@@ -6768,7 +6806,9 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         continue;
       const ar = place(`abund/${e.id}/${siteKey}`);
       const count = (h.perInstance ?? h.pieces) * Math.exp((e.kind === "stone" ? 0 : 0.35 * factors.fertility) + 0.5 * ar.normal());
-      if (!ar.chance(1 - Math.exp(-count / 2)))
+      const p = 1 - Math.exp(-count / 2), here = ar.chance(p);
+      note2?.("lives here", e.id, { name: e.name, count, p, observed: here });
+      if (!here)
         continue;
       out.push({ e, n: count });
     }
@@ -6776,7 +6816,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   }
   var BONE_VIS = { glade: 1.3, outcrop: 1.3, scree: 1.3, streambed: 1.2, edge: 1, claybank: 1, streambank: 0.8, pond: 0.8, spring: 0.8, woodland: 0.6, deadfall: 0.6 };
   var isFineBoned = (a) => /bird|soarer|fish|frog|lizard/.test(a.traits.key ?? "") || (a.traits.mass ?? 0) < 3;
-  function findBones(world, site2, effort, rng) {
+  function findBones(world, site2, effort, rng, note2 = null) {
     const vis = BONE_VIS[site2.micro] ?? 1;
     const found = { fine: 0, big: 0 };
     for (const a of world.animals) {
@@ -6789,6 +6829,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         p *= rng.next();
       } while (p > L && n < 20);
       found[isFineBoned(a) ? "fine" : "big"] += n - 1;
+      note2?.("bones", a.id, { name: `bones of ${a.name}`, expected: mu, count: n - 1, observed: n > 1 });
     }
     site2.bones ?? (site2.bones = { fine: 0, big: 0 });
     site2.bones.fine = Math.min(4, site2.bones.fine + found.fine);
@@ -6844,16 +6885,18 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       const rows = [], fresh = [], seen = {}, cond = v.here.cond, rng = d.act;
       noteTrail(v.mem, v.site.key);
       const cover = (1 - Math.min(1, cond.snowCm / 20)) * (1 - 0.5 * cond.litter);
-      const present = populationAt(v.world, v.site.micro, v.site.key, v.here.factors, d.place);
+      const present = populationAt(v.world, v.site.micro, v.site.key, v.here.factors, d.place, d.note);
       for (const { e, n } of present) {
         if (e.cryptic)
           continue;
         const low = ["herb", "grass", "moss", "lichen", "mushroom"].includes(e.form) || e.kind !== "plant";
         const now2 = e.kind === "animal" ? animalNow(e, cond) : null;
-        if (now2 && !now2.here)
+        if (now2 && !now2.here) {
+          d.note?.("noticed", e.id, { name: e.name, count: n, p: 0, observed: false, away: true });
           continue;
+        }
         const visible = (e.kind === "animal" ? 0.6 * now2.seen : { herb: 0.85, grass: 0.9, mushroom: 0.6, moss: 0.9, lichen: 0.8 }[e.form] ?? 0.97) * cond.light * (low ? cover : 1) * (e.kind === "plant" ? Math.min(1.2, plantNow(v.world, e, cond.g).notice) : 1);
-        if (!rng.chance(visible))
+        if (!roll(d, "noticed", e.id, visible, { name: e.name, count: n }))
           continue;
         if (!v.mem.entities[memKeyE(e)] && !fresh.includes(e))
           fresh.push(e);
@@ -6862,7 +6905,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         noteKnown(v.site, v.mem, e);
       }
       for (const a of v.world.animals.filter((a2) => a2.cls !== "invertebrate" && a2.signs && a2.habitats.some((h) => h.micro === v.site.micro))) {
-        if (!animalNow(a, cond).here || !rng.chance((1 - Math.exp(-a.perKm2 * 0.3)) * cond.light * (cond.snowCm > 2 ? 1.5 : 1 - 0.6 * cond.litter)))
+        if (!animalNow(a, cond).here || !roll(d, "sign", a.id, (1 - Math.exp(-a.perKm2 * 0.3)) * cond.light * (cond.snowCm > 2 ? 1.5 : 1 - 0.6 * cond.litter), { name: `sign of ${a.name}` }))
           continue;
         const known = v.mem.entities[memKeyE(a)];
         const sign = a.signs.damage ?? (a.signs.track ? `sets of ${a.signs.track.type}` : a.signs.den);
@@ -6871,7 +6914,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         rows.push({ n: 0.5, text: `${/^sets/.test(sign) ? "a few" : "1"} ${sign.replace(/^(the|a) /, "")}${known ? ` (${a.name})` : ", left by some animal"}` });
         seen[`sign of ${a.name}`] = 1;
       }
-      const bones = findBones(v.world, v.site, 0.35, rng);
+      const bones = findBones(v.world, v.site, 0.35, rng, d.note);
       for (const t of boneLines(bones))
         rows.push({ n: 0.4, text: t });
       rows.sort((a, b) => b.n - a.n);
@@ -6897,8 +6940,11 @@ ${lines.join("\n")}`, "survey"]],
     run(v, d) {
       const w = v.here.water;
       v.body.hyd = 1;
-      if (d.act.chance(w.pathogen * POOR_WATER))
-        v.body.pendingSick.push({ at: v.clock.now + 24 + d.act.uniform(0, 18), severity: 0.25 + w.pathogen * 0.5, text: "Cramps and a loose gut. Something in the water, maybe." });
+      if (roll(d, "made ill", w.name, w.pathogen * POOR_WATER, { pathogen: w.pathogen })) {
+        const onset = 24 + d.act.uniform(0, 18);
+        d.note?.("illness to come", w.name, { onsetHours: onset, severity: 0.25 + w.pathogen * 0.5 });
+        v.body.pendingSick.push({ at: v.clock.now + onset, severity: 0.25 + w.pathogen * 0.5, text: "Cramps and a loose gut. Something in the water, maybe." });
+      }
       return { say: [`Drank my fill of ${w.name}.`] };
     }
   };
@@ -6916,7 +6962,7 @@ ${lines.join("\n")}`, "survey"]],
       const cut = b.wound && v.clock.now - b.wound.at < 4;
       if (cut) {
         const i = b.pendingSick.findIndex((x) => x.wound);
-        if (i >= 0 && d.act.chance(0.8))
+        if (i >= 0 && roll(d, "infection washed out", "cut", 0.8))
           b.pendingSick.splice(i, 1);
         b.wound = null;
       }
@@ -6976,6 +7022,7 @@ ${lines.join("\n")}`, "survey"]],
     run(v, d) {
       const { core } = v, rng = d.act;
       const res = knapFlakes(rng, v.body, { props: core.props, provenance: { name: core.from?.name ?? core.name, source: core.from?.id, site: core.from?.site } }, { props: v.hammer.props }, v.anvil);
+      tried(d, "knap", res, { flakes: res.flakes.length });
       const label = `flake, ${core.from.name}`;
       const make = res.flakes.map((f) => ({ name: label, kind: "edge", props: f.props, from: { id: f.provenance?.source, name: f.provenance?.name ?? "", part: label, site: v.site.key } }));
       const say = [make.length ? `Smashed the ${core.from.name} stone ${v.anvil.slab ? "on the slab" : "against a rock"}: ${make.length} usable flake${make.length > 1 ? "s" : ""}.` : `Smashed the ${core.from.name} stone; nothing but crumbs and blunt chunks.`];
@@ -6983,7 +7030,7 @@ ${lines.join("\n")}`, "survey"]],
         v.milestones.edge = true;
         say.push(["My first cutting edge.", "milestone"]);
       }
-      return { make, use: rng.chance(0.25) ? [core] : [], say, report: { success: res.success, margin: res.margin, flakes: make.length } };
+      return { make, use: roll(d, "used up", "core", 0.25) ? [core] : [], say, report: { success: res.success, margin: res.margin, flakes: make.length } };
     }
   };
   var dark = (v) => v.here.dark ? "Too dark to work. Time to sleep." : true;
@@ -7007,6 +7054,7 @@ ${lines.join("\n")}`, "survey"]],
       run(v, d) {
         const { wood, edge } = v, hours = v.mode === "careful" ? 1 : 0.4, say = [];
         const res = notchHearth(d.act, v.body, { props: wood.props, provenance: provOf(wood) }, { props: edge.props, name: "flake" }, hours);
+        tried(d, "notch", res, { notch: res.board.props.notch, edgeLeft: edge.props.sharpness });
         say.push(`${v.mode === "careful" ? "Took my time and" : "Quickly"} split and notched a hearth board from the ${wood.from.name} wood.`);
         dulled(edge, say);
         return { make: [{ name: `hearth board, ${wood.from.name}`, kind: "board", props: res.board.props, from: wood.from }], use: [wood], say, report: { notch: res.board.props.notch, margin: res.margin } };
@@ -7022,6 +7070,7 @@ ${lines.join("\n")}`, "survey"]],
       ready: dark,
       run(v, d) {
         const say = [], res = refineNotch(d.act, v.body, v.board, { props: v.edge.props });
+        tried(d, "refine", res, { before: res.before, after: res.after });
         delete v.board.notes["Inspect the notch"];
         say.push(res.after > res.before ? "Worked the notch slowly; it\u2019s cleaner now." : "The edge slipped and tore the notch a little.");
         dulled(v.edge, say);
@@ -7038,6 +7087,7 @@ ${lines.join("\n")}`, "survey"]],
       ready: dark,
       run(v, d) {
         const { shoot } = v, say = [], res = carveSpindle(d.act, v.body, { props: shoot.props, provenance: provOf(shoot) }, { props: v.edge.props });
+        tried(d, "carve", res, { straightness: res.spindle.props.straightness });
         say.push(`Carved a spindle from the ${shoot.from.name} ${shoot.kind === "shoot" && shoot.props.moisture > 0.3 ? "shoot. It\u2019s green; it will need to dry" : "shoot"}.`);
         dulled(v.edge, say);
         return { make: [{ name: `spindle, ${shoot.from.name}`, kind: "spindle", props: res.spindle.props, from: shoot.from }], use: [shoot], say };
@@ -7067,6 +7117,7 @@ ${lines.join("\n")}`, "survey"]],
         const { stick, tool } = v, cut = tool.kind === "edge", say = [];
         const dens = stick.props.density ?? 0.45;
         const finish = clamp((cut ? 0.6 + 0.4 * (tool.props.sharpness ?? 0.5) : 0.5) * (0.8 + 0.4 * v.body.focus) + d.act.normal(0, 0.08));
+        d.note?.("workmanship", "digstick", { finish });
         const green = (stick.props.moisture ?? 0.15) > 0.3;
         const hardness = clamp(dens * (0.75 + 0.25 * finish) - (green ? 0.08 : 0), 0.1, 0.95);
         if (cut) {
@@ -7091,7 +7142,7 @@ ${lines.join("\n")}`, "survey"]],
       ready: (v) => v.here.dark ? "Too dark to work. Time to sleep." : v.here.fire ? true : "There\u2019s no fire here.",
       run(v, d) {
         const careful = v.mode === "careful", p = v.stick.props, room = 1 - p.hardness;
-        const charred = !careful && d.act.chance(0.35);
+        const charred = !careful && roll(d, "charred", "point", 0.35);
         p.hardness = clamp(p.hardness + room * (careful ? 0.3 : 0.18) * (p.hardened ? 0.4 : 1) - (charred ? 0.08 : 0));
         p.moisture = Math.min(p.moisture ?? 0.2, v.here.ambient + 0.02);
         p.hardened++;
@@ -7112,7 +7163,7 @@ ${lines.join("\n")}`, "survey"]],
           v.site.basin = { kind: "clay-lined pit" };
           return { say: ["Dug a pit beside the water and lined it with clay, smoothed wet. It holds water."] };
         }
-        if (d.act.chance(0.6)) {
+        if (roll(d, "found", "rock hollow", 0.6)) {
           v.site.basin = { kind: "rock hollow" };
           return { say: ["Found a hollow in the rock that holds water: good enough to boil in with hot stones."] };
         }
@@ -7156,6 +7207,7 @@ ${lines.join("\n")}`, "survey"]],
       ready: dark,
       run(v, d) {
         const res = makeTinder(d.act, v.body, { props: v.mat.props, provenance: provOf(v.mat) });
+        tried(d, "tinder", res, { fineness: res.tinder.props.fineness });
         return { make: [{ name: `tinder bundle, ${v.mat.from.name}`, kind: "tinder", props: res.tinder.props, from: v.mat.from }], use: [v.mat], say: [`Shredded the ${v.mat.from.name} ${v.mat.from.part} into a tinder nest.`], report: { fineness: res.tinder.props.fineness } };
       }
     },
@@ -7169,6 +7221,7 @@ ${lines.join("\n")}`, "survey"]],
       ready: dark,
       run(v, d) {
         const res = splinterBone(d.act, v.body, v.bone, { props: v.hammer.props });
+        tried(d, "bone", res, { splinters: res.flakes.length });
         const make = res.flakes.map((f) => ({ name: "bone splinter", kind: "edge", props: f.props, from: v.bone.from }));
         const say = [make.length ? `Cracked the bone: ${make.length} sharp splinter${make.length > 1 ? "s" : ""}.` : "The bone shattered into useless bits."];
         if (make.length && !v.milestones.edge) {
@@ -7203,6 +7256,7 @@ ${lines.join("\n")}`, "survey"]],
     },
     run(v, d) {
       const res = handDrill(d.act, v.body, v.board, v.spindle), use = [];
+      tried(d, "drill", res, { vigor: res.ember ? res.ember.props.vigor : null });
       if (v.board.props.life <= 0.05)
         use.push(v.board);
       if (v.spindle.props.length < 40)
@@ -7228,6 +7282,7 @@ ${lines.join("\n")}`, "survey"]],
       if (!v.wood)
         return { say: [...say, ["An ember, but no wood to feed a flame. It faded.", "warn"]] };
       const res = lightFire(d.act, v.body, v.ember, v.tinder), use = [v.tinder];
+      tried(d, "light", res);
       if (!res.success)
         return { use, say: [...say, ["Tipped the ember into the tinder and blew, but it smothered and died.", "warn"]], report: { fire: false } };
       use.push(v.wood);
@@ -7287,6 +7342,7 @@ ${lines.join("\n")}`, "survey"]],
       run(v, d) {
         const { food } = v, rng = d.act, say = [], use = [];
         const q2 = clamp(0.5 + 0.4 * v.body.focus + rng.normal(0, 0.1));
+        d.note?.("workmanship", id, { quality: q2 });
         let ex, tag, cond = {};
         if (id === "pound") {
           const st = v.stone;
@@ -7313,7 +7369,7 @@ ${lines.join("\n")}`, "survey"]],
         } else if (id === "stoneboil") {
           cond.heatPower = Math.min(1.2, 0.3 * v.stones.length + 0.1);
           for (const st of v.stones)
-            if (rng.chance((st.props.spall ?? 0.3) * 0.4)) {
+            if (roll(d, "burst", st.uid, (st.props.spall ?? 0.3) * 0.4, { name: st.name })) {
               use.push(st);
               say.push([`The ${st.name} burst with a crack in the fire.`, "warn"]);
             }
@@ -7326,7 +7382,7 @@ ${lines.join("\n")}`, "survey"]],
           tag = "dried";
         }
         const before2 = food.props.chem, after = expose(before2, ex, q2, cond);
-        if (id === "roast" && v.mode === "quick" && rng.chance(0.3)) {
+        if (id === "roast" && v.mode === "quick" && roll(d, "charred", "food", 0.3)) {
           food.props.mass *= 0.85;
           say.push("Some of it charred black.");
         }
@@ -7373,10 +7429,11 @@ ${lines.join("\n")}`, "survey"]],
       const outcome = hazard(harm(st) * Math.sqrt(Math.min(1.5, m / 0.2)));
       const germs = (it.props.germs ?? 0) * (cooking ? 0.05 : 1);
       mix([it], b, 0.3);
-      if (rng.chance(Math.min(0.7, (germs + 0.25 * b.germs) * Math.min(1, m / 0.2))))
+      d.note?.("eaten", it.from.name, { kg: m, netKcal: net, harm: outcome, germs });
+      if (roll(d, "made ill", "germs", Math.min(0.7, (germs + 0.25 * b.germs) * Math.min(1, m / 0.2))))
         b.pendingSick.push({ at: v.clock.now + 20, severity: Math.min(0.5, 0.15 + 0.4 * germs), text: "A sour gut, then the runs. Something I ate wasn\u2019t clean." });
       const parasites = st.compounds.parasites ?? 0;
-      if (parasites > 0.02 && rng.chance(Math.min(0.8, parasites * 1.5)))
+      if (parasites > 0.02 && roll(d, "made ill", "parasites", Math.min(0.8, parasites * 1.5)))
         b.pendingSick.push({ at: v.clock.now + 30, severity: Math.min(0.5, 0.2 + parasites), text: "A sour gut and fever. Something I ate raw." });
       const irritant = Object.keys(st.compounds).some((k) => COMPOUNDS[k].effect === "irritant" && st.compounds[k] > 0.1);
       const key = loreKey(entityIn(v.world)(it.from.id), it.from.part);
@@ -8157,7 +8214,6 @@ ${lines.join("\n")}`, "survey"]],
     S.sites.push(s);
     return s;
   }
-  var COMPASS_RANDOM = () => ["north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"][Math.floor(S.rng.next() * 8)];
   var skyView = () => {
     const k = skyNow();
     return { far: seeingFar(k.lux), visibility: k.visibility, hearing: k.hearing };
@@ -8186,8 +8242,10 @@ ${lines.join("\n")}`, "survey"]],
   function associateSmell(c, from) {
     const wkey = c.source.waterKey;
     let sus = S.suspects.find((u) => u.trueKey === (wkey ?? c.key));
+    let g = null;
     const fix = () => {
-      const w = windNow(), dir = (w.from + S.rng.normal(0, 25)) * Math.PI / 180, dist = c.trueDist * Math.exp(S.rng.normal(0, 0.6)) / CELL;
+      const w = windNow(), deg = w.from + S.rng.normal(0, 25), dir = deg * Math.PI / 180, dist = c.trueDist * Math.exp(S.rng.normal(0, 0.6)) / CELL;
+      g = { bearing: (deg + 360) % 360, dist: dist * CELL };
       return { est: { x: clamp(Math.round(from.x + Math.sin(dir) * dist), 0, N - 1), y: clamp(Math.round(from.y - Math.cos(dir) * dist), 0, N - 1) }, err: fixErr("smell", dist * CELL) };
     };
     if (sus) {
@@ -8195,14 +8253,14 @@ ${lines.join("\n")}`, "survey"]],
         Object.assign(sus, fix(), { lost: false });
       sus.obs++;
       noteSeenFrom(sus, from);
-      return { sus, isNew: false };
+      return { sus, isNew: false, g };
     }
     const { est, err } = fix();
     S.lastTag = null;
     const label = wkey ? waterName(wkey, "lake", est) : uniqueName(SMELL_NOUN[c.kind] ?? "smell");
     sus = { id: `u${S.suspects.length + 1}`, kind: wkey ? "lake" : c.kind, group: wkey ? "water" : "smell", trueKey: wkey ?? c.key, truePos: { x: c.x, y: c.y }, est, err, seenAt: { x: from.x, y: from.y }, channel: "smell", obs: 1, label, reached: false, source: c.source };
     S.suspects.push(sus);
-    return { sus, isNew: true };
+    return { sus, isNew: true, g };
   }
   function noteSeenFrom(sus, from) {
     if (!sus.seenAt || Math.hypot(from.x - sus.est.x, from.y - sus.est.y) < Math.hypot(sus.seenAt.x - sus.est.x, sus.seenAt.y - sus.est.y))
@@ -8254,6 +8312,7 @@ ${lines.join("\n")}`, "survey"]],
     }
     return { sus, isNew: true, g };
   }
+  var cueDraw = (c, more) => ({ name: c.key, what: c.kind, channel: c.channel, strength: c.strength, level: c.level, trueBearing: c.trueBearing, trueDist: c.trueDist, ...more });
   var senseEye = 1.7;
   function senseLimits(close = false) {
     const k = skyNow(), w = windAt(S.world, S.day, S.t), out = [];
@@ -8284,24 +8343,34 @@ ${lines.join("\n")}`, "survey"]],
     const cues = lookout || scan ? all : [...all].sort((a, b) => isWaterKind(b.kind) - isWaterKind(a.kind) || b.strength - a.strength).filter((c, i) => isWaterKind(c.kind) || i < 3);
     const before2 = new Set(S.suspects);
     const found = { heard: [], seen: [], land: [], upgraded: [] }, stillSeen = /* @__PURE__ */ new Set();
+    const heardOff = (c) => !cues.includes(c) || c.kind === "brook" && c.trueDist > 100;
+    for (const c of all)
+      if (heardOff(c))
+        note("sensed", c.key, cueDraw(c, { observed: false }));
     for (const c of cues) {
       if (c.kind === "brook" && c.trueDist > 100)
         continue;
       const { sus, isNew, g } = associate(c, s);
+      let became = "new";
       if (!isNew) {
         if (c.channel === "sight" && sus.channel === "sound") {
           sus.channel = "sight";
           found.upgraded.push(`${cuePhrase(c, g, s)} (${sus.label})`);
-        } else if (before2.has(sus))
+          became = "seen now";
+        } else if (before2.has(sus)) {
           stillSeen.add(sus);
-        continue;
-      }
-      (sus.group !== "water" ? found.land : c.channel === "sound" ? found.heard : found.seen).push(`${cuePhrase(c, g, s)} (${sus.another ?? sus.label})`);
+          became = "again";
+        } else
+          became = "merged";
+      } else
+        (sus.group !== "water" ? found.land : c.channel === "sound" ? found.heard : found.seen).push(`${cuePhrase(c, g, s)} (${sus.another ?? sus.label})`);
+      note("sensed", c.key, cueDraw(c, { bearing: (g.bearing + 360) % 360, dist: g.dist, became, suspect: sus.id }));
     }
     const smelled = [];
     if (!lookout && (!focus || focus === "water"))
       for (const c of smellAt(smellsToday(), s, windNow(), S.rng)) {
-        const { sus, isNew } = associateSmell(c, s);
+        const { sus, isNew, g } = associateSmell(c, s);
+        note("smelled", c.key, { name: c.key, what: c.kind, strength: c.strength, trueBearing: c.trueBearing, trueDist: c.trueDist, bearing: g?.bearing, dist: g?.dist, became: isNew ? "new" : "again", suspect: sus.id });
         if (isNew || scan)
           smelled.push(`${c.words} (${sus.label}${isNew ? "" : ", again"})`);
       }
@@ -8321,10 +8390,16 @@ ${lines.join("\n")}`, "survey"]],
         report.push(`Still there: ${[...stillSeen].map((u) => `${u.label} (${bearingWord(bearing(s, u.est))})`).join("; ")}.`);
       if (scan) {
         const cond = condNow(s);
-        const calls = S.world.animals.filter((a) => a.signs?.call && a.cls !== "invertebrate").map((a) => ({ a, now: animalNow(a, cond) })).filter(({ a, now: now2 }) => now2.here && S.rng.chance(clamp(a.perKm2 / 15 * now2.calls * cond.hearing) * (timeOfDay() === "day" ? 0.5 : 1))).slice(0, 3).map(({ a, now: now2 }) => {
-          const call = now2.callNow(S.rng), sig2 = S.mem.signs?.[`call:${call}`];
+        const callers = S.world.animals.filter((a) => a.signs?.call && a.cls !== "invertebrate").map((a) => ({ a, now: animalNow(a, cond) })).map((o) => ({ ...o, p: o.now.here ? clamp(o.a.perKm2 / 15 * o.now.calls * cond.hearing) * (timeOfDay() === "day" ? 0.5 : 1) : 0 }));
+        const heard = callers.filter(({ now: now2, p }) => now2.here && S.rng.chance(p)), kept = heard.slice(0, 3);
+        for (const o of callers)
+          if (!kept.includes(o))
+            note("call", o.a.id, { name: o.a.name, p: o.p, observed: false, drowned: heard.includes(o) });
+        const calls = kept.map(({ a, now: now2, p }) => {
+          const call = now2.callNow(S.rng), sig2 = S.mem.signs?.[`call:${call}`], dir = S.rng.next() * 360;
+          note("call", a.id, { name: a.name, p, bearing: dir, call });
           const who = sig2?.linked ? ` (${entity(sig2.linked)?.name ?? "something"})` : "";
-          return `${call}${who} to the ${COMPASS_RANDOM()}, ${a.cls === "large" ? "some way off" : "close"}`;
+          return `${call}${who} to the ${["north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"][Math.floor(dir / 45)]}, ${a.cls === "large" ? "some way off" : "close"}`;
         });
         if (calls.length)
           report.push(`Calls: ${calls.join("; ")}.`);
@@ -8564,6 +8639,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       const c = perceive(S.L, here, { time: timeOfDay(), sky: skyView(), boost: 1.4 }).find((k) => k.key === sus.trueKey);
       if (c) {
         const g = suspicionFrom(c, here, S.rng);
+        note("sensed again", c.key, cueDraw(c, { bearing: (g.bearing + 360) % 360, dist: g.dist }));
         sus.est = est = g.est;
         sus.err = fixErr(c.channel, g.dist);
         how = `I can still ${c.channel === "sound" ? "hear" : "see"} it`;
@@ -8679,15 +8755,18 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     for (const p of path)
       S.trod.add(cellOf(p.x, p.y));
     let spent = hours * limpFactor();
-    if (total > 0 && S.rng.chance(1 - Math.exp(-total))) {
+    if (total > 0 && roll2("hurt", "on the way", 1 - Math.exp(-total), { expected: total })) {
       let u = S.rng.next() * total, at = parts[parts.length - 1];
       for (const p of parts)
         if ((u -= p[1]) <= 0) {
           at = p;
           break;
         }
-      spent += hurt(injuryAt(S.L, at[0], S.rng), k, { why: injuryReasons(at[2]), c: at[0] });
-    }
+      const inj = injuryAt(S.L, at[0], S.rng);
+      note("injury", "on the way", { type: inj.kind, severity: inj.sev, x: at[0] % N, y: Math.floor(at[0] / N), why: injuryReasons(at[2]).join(" and ") || "nothing in particular" });
+      spent += hurt(inj, k, { why: injuryReasons(at[2]), c: at[0] });
+    } else if (total > 0)
+      note("hurt", "on the way", { p: 1 - Math.exp(-total), observed: false, expected: total });
     return spent;
   }
   function reasonWords(why, k, c) {
@@ -8732,7 +8811,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     if (kind === "cut") {
       S.body.germs = clamp(S.body.germs + 0.2);
       S.body.wound = { at: now(), sev };
-      if (S.rng.chance(0.25 + 0.5 * sev))
+      if (roll2("made ill", "cut", 0.25 + 0.5 * sev, { severity: sev }))
         S.body.pendingSick.push({ at: now() + 30, severity: 0.15 + 0.35 * sev, text: "The cut on my shin is hot, swollen and weeping: it\u2019s gone bad.", wound: true });
       log(`A broken branch tore a gash in my shin.${why} I should wash it soon.`, "warn");
       return 0.1;
@@ -8789,6 +8868,8 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
         return log(`Found ${info.sus.label}, right here.`, "act");
       }
       const c = perceive(S.L, from, { time: timeOfDay(), sky: skyView(), boost: 1.4 }).find((k) => k.key === info.sus.trueKey), g = c && suspicionFrom(c, from, S.rng);
+      if (g)
+        note("sensed again", c.key, cueDraw(c, { bearing: (g.bearing + 360) % 360, dist: g.dist }));
       if (g && (g.est.x !== from.x || g.est.y !== from.y)) {
         info.sus.est = g.est;
         return travelTo({ ...g.est, suspect: info.sus.id }, label);
@@ -8802,7 +8883,11 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       if (++n % 3 && !force)
         return null;
       const c = perceive(S.L, p, { time: timeOfDay(), sky: skyView(), boost: force ? 1.4 : 1 }).find((k) => k.key === sus.trueKey);
-      return c ? suspicionFrom(c, p, S.rng).est : null;
+      if (!c)
+        return null;
+      const g = suspicionFrom(c, p, S.rng);
+      note("homing fix", c.key, cueDraw(c, { bearing: (g.bearing + 360) % 360, dist: g.dist }));
+      return g.est;
     } : null;
     const want = sus?.group === "water" ? waterKeyOf(sus.trueKey) : null;
     const arrived = sus ? (p) => want && /^(lake|river|brook)-/.test(want) ? onWater(p, want) : atTarget(p, { truePos, sus }) : st ? (p) => !!S.L.chan[cellOf(p.x, p.y)] && (Math.hypot(p.x - target.x, p.y - target.y) <= 3 || matchStream(makeFix(p)) === st) : target.lake ? (p) => onWater(p, target.lake) : target.cliff ? (p) => {
@@ -8826,12 +8911,15 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       log(`Mid-stream the current knocked my feet from under me and carried me ${m} m downstream before I could claw my way out. Soaked through, everything I carry with me.`, "warn");
       soakMe(1);
       S.body.fatigue = clamp(S.body.fatigue + 0.15);
-      if (S.rng.chance(0.4)) {
-        const c = cellOf(sw.to.x, sw.to.y);
-        pass(hurt({ kind: S.rng.chance(0.5) ? "fall" : "ankle", sev: clamp(S.rng.logNormal(0.3, 0.5), 0.05, 0.9) }, skyNow(), { why: ["the current"], c }), 100);
+      note("swept", "downstream", { metres: m, fromX: sw.from.x, fromY: sw.from.y });
+      if (roll2("hurt", "in the current", 0.4)) {
+        const c = cellOf(sw.to.x, sw.to.y), inj = { kind: S.rng.chance(0.5) ? "fall" : "ankle", sev: clamp(S.rng.logNormal(0.3, 0.5), 0.05, 0.9) };
+        note("injury", "in the current", { type: inj.kind, severity: inj.sev });
+        pass(hurt(inj, skyNow(), { why: ["the current"], c }), 100);
       }
     }
     const reached = st || area ? arrived(trip.end) : atTarget(trip.end, targetInfo(target));
+    note("walk", "trip", { name: label, hours, cells: trip.path.length, endX: trip.end.x, endY: trip.end.y, end: `${trip.end.x},${trip.end.y}`, reached: !!reached, crossings: trip.crossings.length, swept: trip.sweeps.length });
     S.travelHint = reached ? st?.id ?? sus?.stream ?? null : null;
     const { names, keys, ids } = noteCrossings(trip, S.travelHint);
     noticeCrossings(trip.path);
@@ -8965,6 +9053,12 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
   ]);
   var MEMOS = /* @__PURE__ */ new Set(["treeMemo"]);
   var noteSink = null;
+  var note = (kind, id, fields) => noteSink?.(kind, id, fields);
+  var roll2 = (kind, id, p, fields = {}) => {
+    const hit = S.rng.chance(p);
+    note(kind, id, { p, observed: hit, ...fields });
+    return hit;
+  };
   var withState = (v, d, f) => {
     const real = S, sink = noteSink;
     S = v;
@@ -9058,16 +9152,16 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     return r;
   }
   var fmtN = (x) => typeof x !== "number" ? String(x) : Math.abs(x) >= 100 ? x.toFixed(0) : Math.abs(x) >= 1 ? x.toFixed(2).replace(/\.?0+$/, "") : x.toPrecision(2).replace(/\.?0+$/, "");
-  var pct = (x) => `${Math.round(100 * x)}%`;
+  var pct2 = (x) => `${Math.round(100 * x)}%`;
   function leafWords(e) {
     if (e.present < 1)
-      return `${e.actual === void 0 ? "not this time" : `<b>${esc(fmtN(e.actual))}</b>`} \xB7 <span>in ${pct(e.present)} of runs</span>${e.summary.kind === "num" && e.summary.min !== e.summary.max ? `, ${fmtN(e.summary.q[0])}\u2013${fmtN(e.summary.q[4])}` : e.summary.kind === "num" ? `, ${esc(fmtN(e.summary.min))}` : ""}`;
+      return `${e.actual === void 0 ? "not this time" : `<b>${esc(fmtN(e.actual))}</b>`} \xB7 <span>in ${pct2(e.present)} of runs</span>${e.summary.kind === "num" && e.summary.min !== e.summary.max ? `, ${fmtN(e.summary.q[0])}\u2013${fmtN(e.summary.q[4])}` : e.summary.kind === "num" ? `, ${esc(fmtN(e.summary.min))}` : ""}`;
     const s = e.summary, a = e.actual === void 0 ? "" : `<b>${esc(fmtN(e.actual))}</b>`;
     if (!e.varies)
       return `${a || esc(fmtN(s.kind === "num" ? s.min : Object.keys(s.counts)[0]))} <span class="hint">always</span>`;
     if (s.kind === "num")
-      return `${a}${a ? " \xB7 " : ""}${fmtN(s.q[0])}\u2013${fmtN(s.q[4])}, median ${fmtN(s.q[2])}${s.same != null && s.same > 0 ? `, unchanged ${pct(s.same)}` : ""}${e.rank != null ? ` \xB7 <span class="${e.rank < 0.1 || e.rank > 0.9 ? "odd" : ""}">rank ${pct(e.rank)}</span>` : ""}`;
-    return `${a}${a ? " \xB7 " : ""}${Object.entries(s.counts).sort((x, y) => y[1] - x[1]).slice(0, 6).map(([k, v]) => `${esc(k)} ${pct(v)}`).join(", ")}`;
+      return `${a}${a ? " \xB7 " : ""}${fmtN(s.q[0])}\u2013${fmtN(s.q[4])}, median ${fmtN(s.q[2])}${s.same != null && s.same > 0 ? `, unchanged ${pct2(s.same)}` : ""}${e.rank != null ? ` \xB7 <span class="${e.rank < 0.1 || e.rank > 0.9 ? "odd" : ""}">rank ${pct2(e.rank)}</span>` : ""}`;
+    return `${a}${a ? " \xB7 " : ""}${Object.entries(s.counts).sort((x, y) => y[1] - x[1]).slice(0, 6).map(([k, v]) => `${esc(k)} ${pct2(v)}`).join(", ")}`;
   }
   var anyOdd = (n) => n.leaf?.rank != null && n.leaf.varies && (n.leaf.rank < 0.1 || n.leaf.rank > 0.9) || n.children.some(anyOdd);
   function treeHTML(node, depth2 = 0) {
@@ -9091,10 +9185,19 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     if (!r)
       return `<div class="spread">${head}<p class="hint">Nothing to look into.</p></div>`;
     const vary = { act: "this attempt\u2019s luck", place: "the place\u2019s luck", both: "both" }[r.vary];
-    const unusual = r.unusual.length ? `<p>Unusual luck: ${r.unusual.map((e) => `${esc(e.path)} ${esc(fmtN(e.actual))} (rank ${pct(e.rank)})`).join("; ")}.</p>` : '<p class="hint">Nothing unusual in what happened.</p>';
-    const walk2 = r.walk ? `<details><summary>The walk: ${r.walk.steps.length} steps, ${r.walk.steps.filter((s) => s.p < 0.9).length} of them open; surprisal ${r.walk.bits.toFixed(1)} bits</summary><ul>${r.walk.steps.filter((s) => s.p < 0.9).map((s) => `<li>step ${s.i + 1} from ${s.from.x},${s.from.y}: went ${s.took.x},${s.took.y} (${pct(s.p)})${s.others.length ? `; else ${s.others.slice(0, 3).map((o) => `${o.cell} ${pct(o.p)}`).join(", ")}` : ""}</li>`).join("")}</ul></details>` : "";
+    const unusual = r.unusual.length ? `<p>Unusual luck: ${r.unusual.map((e) => `${esc(e.path)} ${esc(fmtN(e.actual))} (rank ${pct2(e.rank)})`).join("; ")}.</p>` : '<p class="hint">Nothing unusual in what happened.</p>';
+    const walk2 = r.walk ? `<details><summary>The walk: ${r.walk.steps.length} steps, ${r.walk.steps.filter((s) => s.p < 0.9).length} of them open; surprisal ${r.walk.bits.toFixed(1)} bits</summary><ul>${r.walk.steps.filter((s) => s.p < 0.9).map((s) => `<li>step ${s.i + 1} from ${s.from.x},${s.from.y}: went ${s.took.x},${s.took.y} (${pct2(s.p)})${s.others.length ? `; else ${s.others.slice(0, 3).map((o) => `${o.cell} ${pct2(o.p)}`).join(", ")}` : ""}</li>`).join("")}</ul></details>` : "";
+    const kinds = [...new Set(r.observables.map((o) => o.kind))];
+    const draws = kinds.map((k) => {
+      const os = r.observables.filter((o) => o.kind === k);
+      return `<details open><summary>${esc(k)} (${os.length})</summary><ul class="tree">${os.map((o) => {
+        const d = describeObservable(o);
+        return `<li><b>${esc(d.head)}</b>${d.parts.length ? `<ul>${d.parts.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</li>`;
+      }).join("")}</ul></details>`;
+    }).join("");
     return `<div class="spread">${head}<p class="hint">${r.n} runs varying ${vary}${r.reproduces === true ? "; run again with the same dice, it comes out the same" : r.reproduces === false ? '; <span class="odd">run again with the same dice, it comes out differently (it depends on something outside what it read)</span>' : ""}${r.errors.length ? `; ${r.errors.length} runs failed: ${esc(r.errors[0])}` : ""}.</p>${unusual}
-    <details open><summary>What it did</summary><ul class="tree">${treeHTML(r.outcome)}</ul></details>${walk2}
+    ${draws ? `<h4>What it drew, thing by thing</h4>${draws}` : ""}
+    <details><summary>What it changed in the state</summary><ul class="tree">${treeHTML(r.outcome)}</ul></details>${walk2}
     <details><summary>What it read (${r.inputList.length} values)</summary><ul class="tree">${treeHTML(r.inputs)}</ul></details></div>`;
   }
   var TIME = ["day", "t", "body", "inv", "sites", "at", "mind", "lore", "collapsed", "uid", "milestones", "+log"];
@@ -9177,6 +9280,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
         const it = g.fn();
         touch([it], 0.5);
         log(`Gathered ${it.name}.`);
+        note("gathered", it.name, Object.fromEntries(Object.entries(it.props).filter(([, x]) => typeof x === "number")));
       })
     },
     drop: { id: "drop", name: "Leave something behind", reads: ["thing.uid"], writes: ["inv", "+log"], run: hosted((v) => {
@@ -9300,7 +9404,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const chill = S.body.chill >= 0.6 ? " I woke shaking, stiff and grey with cold." : S.body.chill >= 0.3 ? " I woke chilled through." : "";
     if (!forced)
       log(`${words}${reasons.length ? ` ${cap5(reasons.join(", and "))}.` : ""}${chill}${banked ? " Banked the fire with two pieces of wood; it was still glowing at dawn." : ""}${s.hut && q2 >= 0.55 ? " The hut kept the night out." : ""}${s.bed && !s.hut && q2 >= 0.55 ? " The bed of leaves helped." : ""}`, "act");
-    if (S.body.chill >= 0.6 && S.body.sick < 0.3 && !S.body.pendingSick.some((p) => p.chill) && S.rng.chance(S.body.chill - 0.4))
+    if (S.body.chill >= 0.6 && S.body.sick < 0.3 && !S.body.pendingSick.some((p) => p.chill) && roll2("made ill", "chill", S.body.chill - 0.4))
       S.body.pendingSick.push({ at: now() + 12, severity: 0.15 + 0.2 * (S.body.chill - 0.6), text: "A chill has settled on my chest: aching, shivery, coughing.", chill: true });
     for (const p of [...S.body.pendingSick])
       if (now() >= p.at) {
@@ -9582,7 +9686,11 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const e = entity(it.from?.id);
     const field = (name) => e?.fieldTests?.find(([k]) => k.startsWith(name))?.[1];
     const T2 = [];
-    const noisy = (x) => x + S.rng.normal(0, 0.04);
+    const noisy = (x) => {
+      const y = x + S.rng.normal(0, 0.04);
+      note("reading", it.kind, { value: y, trueValue: x });
+      return y;
+    };
     if (["wood", "shoot", "stalk", "board", "spindle"].includes(it.kind)) {
       if (it.props.density !== void 0)
         T2.push(["Thumbnail and heft", () => DENSITY_WORDS(noisy(it.props.density))]);
@@ -9806,7 +9914,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       if (!small)
         continue;
       const p = 1 - Math.exp(-reach * n / (e.kind === "animal" ? 25 : 10));
-      if (!S.rng.chance(p))
+      if (!roll2("found", e.id, p, { name: e.name, count: n }))
         continue;
       if (!S.mem.entities[memKeyE2(e)])
         fresh.push(e);
@@ -9814,7 +9922,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       noteKnown2(s, e);
     }
     const bee = S.world.animals.find((a) => a.traits.key === "bee" && a.habitats.some((h) => h.micro === s.micro));
-    if (bee && !s.hive && ["woodland", "deadfall", "edge"].includes(s.micro) && S.rng.chance(0.25)) {
+    if (bee && !s.hive && ["woodland", "deadfall", "edge"].includes(s.micro) && roll2("found", "hive", 0.25, { name: "a hive" })) {
       s.hive = true;
       noteKnown2(s, bee);
       rows.push({ n: 0.5, text: "a hollow log humming with bees: a hive" });
@@ -9827,7 +9935,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     log(rows.length ? `Poking around (${how}):
 ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half an hour (${how}); nothing worth having.`, "survey");
   }
-  var boneFinds = (s, effort) => findBones(S.world, s, effort, S.rng);
+  var boneFinds = (s, effort) => findBones(S.world, s, effort, S.rng, note);
   var matOf = (e, cls) => S.mats.find((m) => m.source === e.id && m.material === cls);
   var FOCI = {
     spindle: {
@@ -9914,6 +10022,7 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
         if (!want)
           continue;
         const { sus, isNew, g } = associate(c, s);
+        note("sensed", c.key, cueDraw(c, { bearing: (g.bearing + 360) % 360, dist: g.dist, became: isNew ? "new" : "again", suspect: sus.id }));
         if (isNew)
           lines.push(`${cuePhrase(c, g, s)} (${sus.another ?? sus.label})`);
         else if (!passing)
@@ -9930,10 +10039,10 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
       if (hit) {
         const stick = bestStick(), reach = stick ? 1 + 1.5 * stick.props.hardness : 1;
         const p = e.cryptic ? 1 - Math.exp(-reach * hit.n / (e.kind === "animal" ? 15 : 6)) : 0.92;
-        if (S.rng.chance(p)) {
+        if (roll2("found", hit.e.id, p, { name: hit.e.name, count: hit.n })) {
           lines.push(lineFor(hit.e, hit.n));
           noteKnown2(s, hit.e);
-          if (e.traits?.key === "bee" && !s.hive && ["woodland", "deadfall", "edge"].includes(s.micro) && S.rng.chance(0.5)) {
+          if (e.traits?.key === "bee" && !s.hive && ["woodland", "deadfall", "edge"].includes(s.micro) && roll2("found", "hive", 0.5, { name: "a hive" })) {
             s.hive = true;
             lines.push("followed them to a hollow tree humming with bees: a hive");
           }
@@ -9944,11 +10053,11 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
     const F = FOCI[T2.key];
     if (T2.key === "game") {
       for (const a of S.world.animals.filter((a2) => a2.cls !== "invertebrate" && a2.signs && a2.habitats.some((h) => h.micro === s.micro))) {
-        if (!S.rng.chance(1 - Math.exp(-a.perKm2 * (passing ? 0.25 : 0.45))))
+        if (!roll2("sign", a.id, 1 - Math.exp(-a.perKm2 * (passing ? 0.25 : 0.45)), { name: `sign of ${a.name}` }))
           continue;
         const known = S.mem.entities[memKeyE2(a)];
-        for (const sign of [a.signs.track && `${a.signs.track.type}, about ${a.signs.track.lengthCm} cm`, a.signs.scat, a.signs.damage].filter(Boolean))
-          if (S.rng.chance(0.6))
+        for (const [k, sign] of [["track", a.signs.track && `${a.signs.track.type}, about ${a.signs.track.lengthCm} cm`], ["scat", a.signs.scat], ["damage", a.signs.damage]].filter(([, x]) => x))
+          if (roll2("sign", `${a.id}/${k}`, 0.6, { name: `${a.name}: ${k}` }))
             lines.push(`${sign}${known ? ` (${a.name})` : ""}`);
       }
     } else if (T2.key === "bones") {
@@ -9964,6 +10073,7 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
       const m = S.mats.find((x) => x.material === "natural-edge" && here.includes(x.source));
       if (m) {
         const res = searchNaturalEdge(S.rng, S.body, { props: m.props, provenance: { name: m.sourceName, source: m.source } });
+        note("found", `edge/${m.source}`, { name: `a natural edge (${m.sourceName})`, observed: !!res.flake, sharpness: res.flake?.props.sharpness, mass: res.flake?.props.mass });
         if (res.flake) {
           addItem(`natural edge, ${m.sourceName}`, "edge", res.flake.props, { id: m.source, name: m.sourceName, part: "natural edge", site: s.key });
           lines.push(`a piece of broken ${m.sourceName} with a usable edge; took it`);
@@ -10024,14 +10134,14 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
   function breakthroughs(s, focus) {
     if (focus !== "food") {
       S.fruitNoted ?? (S.fruitNoted = {});
-      const fruit = presentAt(s).find(({ e }) => e.kind === "plant" && ["berry", "drupe"].includes(e.traits.fruit) && !S.fruitNoted[e.id] && S.rng.chance(0.6));
+      const fruit = presentAt(s).find(({ e }) => e.kind === "plant" && ["berry", "drupe"].includes(e.traits.fruit) && !S.fruitNoted[e.id] && roll2("noticed in passing", e.id, 0.6, { name: e.name }));
       if (fruit) {
         S.fruitNoted[fruit.e.id] = true;
         log(`Even so, I couldn\u2019t miss ${fruit.e.traits.fruitColor} fruit on ${S.mem.entities[memKeyE2(fruit.e)] ? `the ${fruit.e.name}` : `a bush I haven\u2019t named (${shortDesc(fruit.e)})`}.`, "note");
         noteKnown2(s, fruit.e);
       }
     }
-    const big = S.world.animals.filter((a) => a.cls === "large" && !a.signs?.distant && a.habitats.some((h) => h.micro === s.micro)).find((a) => S.rng.chance(1 - Math.exp(-a.perKm2 * 0.06)));
+    const big = S.world.animals.filter((a) => a.cls === "large" && !a.signs?.distant && a.habitats.some((h) => h.micro === s.micro)).find((a) => roll2("startled", a.id, 1 - Math.exp(-a.perKm2 * 0.06), { name: a.name }));
     if (big) {
       const known = S.mem.entities[memKeyE2(big)];
       log(known ? `A ${big.name} crashed away through the brush ahead.` : `Something big crashed away through the brush ahead: a ${firstCueA(big)}.`, "note");
@@ -10922,8 +11032,8 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
   function exactProps(it) {
     if (it.kind === "food")
       return [...describeState(it.props.chem, it.props.mass), `germs ${it.props.germs.toFixed(2)}`];
-    const fmt = (v) => typeof v === "number" ? Math.abs(v) >= 10 ? Math.round(v) : Math.round(v * 1e3) / 1e3 : Array.isArray(v) ? v.join(", ") : typeof v === "object" && v ? JSON.stringify(v) : String(v);
-    const kv = Object.entries(it.props).map(([k, v]) => `${k} ${fmt(v)}`);
+    const fmt2 = (v) => typeof v === "number" ? Math.abs(v) >= 10 ? Math.round(v) : Math.round(v * 1e3) / 1e3 : Array.isArray(v) ? v.join(", ") : typeof v === "object" && v ? JSON.stringify(v) : String(v);
+    const kv = Object.entries(it.props).map(([k, v]) => `${k} ${fmt2(v)}`);
     return kv.length ? [kv.join("; ")] : ["no hidden properties"];
   }
   function itemRow(it) {
@@ -11069,7 +11179,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       }).observe(box);
     }
   }
-  var BUILD = "hk-2026-10-26d";
+  var BUILD = "hk-2026-10-27a";
   function record(d) {
     S.record ?? (S.record = []);
     S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });

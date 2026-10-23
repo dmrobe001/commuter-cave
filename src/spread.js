@@ -114,10 +114,11 @@ export function byObservable(runs, actual) {
     const fields = [...new Set(all.flatMap(d => Object.keys(d)))].filter(f => !['kind', 'id', 'name', 'observed'].includes(f));
     const stats = [];
     for (const f of fields) {
-      const pool = f === 'p' ? all : seen; // a chance of being observed is there whether it was or not
-      const values = pool.map(d => d[f]).filter(v => v !== undefined);
+      // pooled over every record that has it: what was perceived comes only with an observation, while
+      // what a thing is (its chance of being noticed, how many there are, where it truly lies) comes either way
+      const values = all.map(d => d[f]).filter(v => v !== undefined);
       if (!values.length) continue;
-      const s = summarise(values, undefined, isAngle(f)), a = (f === 'p' ? here[0] : happened)?.[f];
+      const s = summarise(values, undefined, isAngle(f)), a = (happened ?? here[0])?.[f];
       stats.push({ field: f, summary: s, actual: a, rank: rankOf(s, values, a) });
       const tf = `true${cap(f)}`;
       if (fields.includes(tf)) { // how far off the perception was
@@ -125,7 +126,7 @@ export function byObservable(runs, actual) {
         if (errs.length) { const es = summarise(errs), ea = happened && typeof happened[f] === 'number' ? (isAngle(f) ? wrapDeg(happened[f] - happened[tf]) : happened[f] / happened[tf]) : undefined; stats.push({ field: isAngle(f) ? `${f} error (°)` : `${f} / true`, summary: es, actual: ea, rank: rankOf(es, errs, ea) }); }
       }
     }
-    out.push({ kind: g.kind, id: g.id, name: g.name, observed: g.runs.filter(rs => rs.some(d => d.observed !== false)).length / n, records: all.length, happened: !!happened, fields: stats });
+    out.push({ kind: g.kind, id: g.id, name: g.name, observed: g.runs.filter(rs => rs.some(d => d.observed !== false)).length / n, records: all.length, happened: actual ? !!happened : null, fields: stats });
   }
   return out.sort((a, b) => a.kind.localeCompare(b.kind) || b.observed - a.observed || String(a.name).localeCompare(String(b.name)));
 }
@@ -169,9 +170,8 @@ export function spread(proc, stateFn, { n = 200, vary = 'act', seed = 'spread', 
     id: proc.id, name: proc.name ?? proc.id, n: leafRuns.length, vary, errors: [...new Set(errors)],
     observables, outcome: treeOf(entries), leaves: entries, inputs: treeOf(inputs), inputList: inputs,
     unusual: [
-      ...observables.flatMap(o => o.fields.filter(f => unusualRank(f.summary, f.rank)).map(f => ({ path: `${o.kind} ${o.name}: ${f.field}`, actual: f.actual, rank: f.rank }))),
-      ...entries.filter(e => e.summary.kind === 'num' && e.varies && unusualRank(e.summary, e.rank)),
-    ],
+      ...observables.flatMap(o => o.fields.filter(f => unusualRank(f.summary, f.rank) && !o.fields.some(g => g.field === `${f.field} error (°)` || g.field === `${f.field} / true`)).map(f => ({ path: `${o.kind} ${o.name}: ${f.field}`, actual: f.actual, rank: f.rank }))),
+    ], // (the state's own leaves follow from the draws; their ranks are in the state tree)
   };
 }
 
@@ -182,4 +182,35 @@ export function reproduces(proc, stateFn, actAt, place, actual, { live = null, a
   const fx = around(0, () => attempt(proc, stateFn(), d, { live: live?.(d) }), d);
   fx.tx.discard();
   return JSON.stringify([outcomeLeaves(fx), fx.draws]) === JSON.stringify([outcomeLeaves(actual), actual.draws]);
+}
+
+// Words for an observable's summary, shared by the game's panel and the command line: how often it's
+// observed (and whether it was this time), then each field that varies or matters, a perceived value
+// next to its truth and its error. Plain text; the caller escapes it.
+const fmt = x => (typeof x !== 'number' ? String(x) : Math.abs(x) >= 100 ? x.toFixed(0) : Math.abs(x) >= 1 ? String(+x.toFixed(2)) : String(+x.toPrecision(2)));
+const pct = x => `${Math.round(100 * x)}%`;
+export function describeObservable(o) {
+  const by = Object.fromEntries(o.fields.map(f => [f.field, f]));
+  const parts = [];
+  for (const f of o.fields) {
+    const name = f.field, s = f.summary;
+    if (/^true[A-Z]/.test(name) || / error \(°\)$| \/ true$/.test(name) || name === 'name') continue;
+    const constant = s.kind === 'cat' ? Object.keys(s.counts).length === 1 : s.kind === 'angle' ? s.sd < 0.01 : s.min === s.max;
+    if (constant && s.kind === 'cat' && Object.keys(s.counts)[0] === 'false') continue; // a flag never raised: not worth a line
+    const a = f.actual === undefined || f.actual === null ? '' : `${fmt(f.actual)}${s.kind === 'angle' ? '°' : ''} · `;
+    let text;
+    if (s.kind === 'angle') text = constant ? `${fmt(s.mean)}°` : `${a}${fmt(s.mean)}° ±${fmt(s.sd)}°`;
+    else if (s.kind === 'num') text = constant ? fmt(s.min) : `${a}${fmt(s.q[0])}–${fmt(s.q[4])}, median ${fmt(s.q[2])}`;
+    else text = constant ? Object.keys(s.counts)[0] : `${a}${Object.entries(s.counts).sort((x, y) => y[1] - x[1]).slice(0, 4).map(([k, v]) => `${k} ${pct(v)}`).join(', ')}`;
+    const t = by[`true${name.charAt(0).toUpperCase()}${name.slice(1)}`], e = by[`${name} error (°)`] ?? by[`${name} / true`];
+    if (t) {
+      const tv = t.summary.kind === 'angle' ? `${fmt(t.summary.mean)}°` : t.summary.kind === 'num' ? fmt(t.summary.q[2]) : '';
+      const ev = e ? (e.field.endsWith('(°)') ? `off ${fmt(e.summary.q[2])}° (${fmt(e.summary.q[0])} to ${fmt(e.summary.q[4])})` : `×${fmt(e.summary.q[2])} (${fmt(e.summary.q[0])}–${fmt(e.summary.q[4])})`) : '';
+      text += ` [true ${tv}${ev ? `; ${ev}` : ''}]`;
+    }
+    if (f.rank != null && s.kind !== 'cat' && !constant && (f.rank < 0.1 || f.rank > 0.9)) text += ` (rank ${pct(f.rank)}: unusual)`;
+    parts.push(`${name} ${text}`);
+  }
+  const seen = o.observed === 1 ? 'every run' : o.observed === 0 ? 'no run' : `${pct(o.observed)} of runs`;
+  return { head: `${o.name}: ${seen}${o.happened === false && o.observed > 0 ? ' (not this time)' : o.happened === true && o.observed < 1 ? ' (this time, yes)' : ''}`, parts };
 }

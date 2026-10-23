@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // spread.cjs — what else could have happened, for the last action of a game record, from the command
 // line. Replays the record in the built game (undrawn), then runs its last action again with other
-// dice (spread.js, through __hk.spreadLast) and prints the range of every outcome that varies, the
-// unusual luck in what happened, a walk's open steps, and (with --inputs) what the action read.
+// dice (spread.js, through __hk.spreadLast) and prints what it drew, thing by thing (how often each thing
+// is observed, and the numbers perceived of it: exact bearings and distances beside their truth, chances,
+// margins), the unusual luck in what happened, with --state the range of every state change that varies,
+// a walk's open steps, and with --inputs what the action read.
 //
-//   node tools/spread.cjs <record.json | -> [--vary act|place|both] [--n 200] [--all] [--inputs] [--json]
+//   node tools/spread.cjs <record.json | -> [--vary act|place|both] [--n 200] [--state] [--all] [--inputs] [--json]
 //
 // A record is what "Copy game record" gives (Body tab). --all lists outcomes that never vary too;
 // --json prints the whole result.
@@ -27,11 +29,16 @@ function line(e) {
   const g = await game(null, { record: text });
   const r = g.hk.spreadLast(opt('--vary') ?? 'act', opt('--n') ? Number(opt('--n')) : null);
   if (!r) { console.log('No action to look into.'); process.exit(1); }
+  const { describeObservable } = await import('../src/spread.js');
   if (flag('--json')) { console.log(JSON.stringify({ ...r, outcome: undefined, inputs: undefined }, null, 1)); process.exit(0); }
   const vary = { act: "this attempt's luck", place: "the place's luck", both: 'both' }[r.vary];
   console.log(`${r.name}: ${r.n} runs varying ${vary}; run again with the same dice it ${r.reproduces ? 'comes out the same' : 'comes out DIFFERENTLY'}${r.errors.length ? `; ${r.errors.length} errors: ${r.errors[0]}` : ''}`);
   console.log(r.unusual.length ? `unusual luck: ${r.unusual.map(e => `${e.path} ${f(e.actual)} (rank ${pct(e.rank)})`).join('; ')}` : 'nothing unusual in what happened');
-  for (const e of r.leaves) if (flag('--all') || e.varies) console.log(`  ${e.path}: ${line(e)}`);
+  for (const kind of [...new Set(r.observables.map(o => o.kind))]) {
+    console.log(`${kind}:`);
+    for (const o of r.observables.filter(o => o.kind === kind)) { const d = describeObservable(o); console.log(`  ${d.head}`); for (const p of d.parts) console.log(`      ${p}`); }
+  }
+  if (flag('--state')) { console.log('state changes:'); for (const e of r.leaves) if (flag('--all') || e.varies) console.log(`  ${e.path}: ${line(e)}`); }
   if (r.walk) {
     console.log(`walk: ${r.walk.steps.length} steps, surprisal ${r.walk.bits.toFixed(1)} bits; the open ones (the cell taken under 90%):`);
     for (const s of r.walk.steps.filter(s => s.p < 0.9)) console.log(`  step ${s.i + 1} from ${s.from.x},${s.from.y}: went ${s.took.x},${s.took.y} (${pct(s.p)})${s.others.length ? `; else ${s.others.slice(0, 3).map(o => `${o.cell} ${pct(o.p)}`).join(', ')}` : ''}`);
