@@ -404,17 +404,17 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       (byMicro[_a = site2.micro] ?? (byMicro[_a] = [])).push(v);
     }
     const ids = varying.map((t) => t.id);
-    const mean = {}, sd = {}, q2 = {};
+    const mean2 = {}, sd = {}, q2 = {};
     for (const id of ids) {
       const xs = samples.map((s) => s[id]).sort((a, b) => a - b);
-      mean[id] = xs.reduce((a, b) => a + b, 0) / n;
-      sd[id] = Math.sqrt(xs.reduce((a, b) => a + (b - mean[id]) ** 2, 0) / (n - 1));
+      mean2[id] = xs.reduce((a, b) => a + b, 0) / n;
+      sd[id] = Math.sqrt(xs.reduce((a, b) => a + (b - mean2[id]) ** 2, 0) / (n - 1));
       q2[id] = [xs[Math.floor(0.16 * n)], xs[Math.floor(0.84 * n)]];
     }
     const corr = ids.map((a) => ids.map((b) => {
       if (a === b)
         return 1;
-      const c = samples.reduce((s, v) => s + (v[a] - mean[a]) * (v[b] - mean[b]), 0) / (n - 1);
+      const c = samples.reduce((s, v) => s + (v[a] - mean2[a]) * (v[b] - mean2[b]), 0) / (n - 1);
       return sig(c / (sd[a] * sd[b]), 2);
     }));
     const microMeans = {};
@@ -429,7 +429,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         label: t.label,
         kind: t.kind,
         unit: t.unit,
-        mean: sig(mean[t.id], 3),
+        mean: sig(mean2[t.id], 3),
         sd: sig(sd[t.id], 2),
         q16: sig(q2[t.id][0], 3),
         q84: sig(q2[t.id][1], 3)
@@ -1384,8 +1384,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const seenLook = /* @__PURE__ */ new Set();
     for (const form of ["mushroom", "moss", "lichen"]) {
       for (let i = 0; i < fcounts[form]; i++) {
-        const id = `F${i + 1}${form[0]}`;
-        const t = fungusArchetype(fr.fork(id), form, env);
+        const key = `F${i + 1}${form[0]}`, id = form === "moss" ? `F${i + 1}o` : key;
+        const t = fungusArchetype(fr.fork(key), form, env);
         const pool = { mushroom: CAP_COLORS[t.nameKey] ?? [t.color], moss: ["bright green", "dark green", "golden", "pale green"], lichen: ["grey-green", "pale grey", "yellow-green", "orange"] }[form];
         for (let k = 0; k < pool.length && seenLook.has(`${t.sub}:${t.color}`); k++)
           t.color = pool[k];
@@ -2050,7 +2050,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       s.push("mint");
     if (t.defense === "stinging")
       s.push("nettle");
-    let generic;
+    let generic2;
     if (t.form === "tree") {
       if (t.paperBark)
         s.push("paperbark");
@@ -2063,7 +2063,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         s.push("podTree");
       if (t.medicinal?.part === "inner bark")
         s.push("willowish");
-      generic = ["streambank", "pond"].includes(home) ? "treeWet" : "treeGeneric";
+      generic2 = ["streambank", "pond"].includes(home) ? "treeWet" : "treeGeneric";
     } else if (t.form === "shrub") {
       if (t.resin > 0.5)
         s.push("resinShrub");
@@ -2072,7 +2072,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       fruitKeys();
       if (t.spindleStalk)
         s.push("pithShrub");
-      generic = t.pace < -0.3 ? "shrubLeathery" : "shrubGeneric";
+      generic2 = t.pace < -0.3 ? "shrubLeathery" : "shrubGeneric";
     } else if (t.form === "herb") {
       if (t.fruit === "pod")
         s.push("podHerb");
@@ -2085,7 +2085,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         s.push("fluffHerb");
       if (t.spindleStalk)
         s.push("stalkHerb");
-      generic = "herbGeneric";
+      generic2 = "herbGeneric";
     } else {
       if (t.fluff && t.habitat.moisture > 0.8)
         s.push("fluffReed");
@@ -2096,9 +2096,9 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       if (t.storage)
         s.push("rhizomeGrass");
       s.push("grain");
-      generic = "grassGeneric";
+      generic2 = "grassGeneric";
     }
-    return { specific: s, generic, modifiers: plantLooks(t) };
+    return { specific: s, generic: generic2, modifiers: plantLooks(t) };
   }
   var COINED = /* @__PURE__ */ new Set(["ironstone", "sandstone", "woolly bear", "bog moss", "beard lichen", "crust lichen", "brown mushroom", "hoof fungus", "bracket fungus", "sawgrass", "meadow grass", "couch grass"]);
   function makeNamer(rng) {
@@ -2126,12 +2126,12 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
               return claim(`${m} ${n}`, n, true);
       return null;
     };
-    const take = ({ specific, generic, modifiers }) => {
-      const gen = generic ? [generic] : [];
+    const take = ({ specific, generic: generic2, modifiers }) => {
+      const gen = generic2 ? [generic2] : [];
       const found = tryList(specific) ?? tryMods(specific.slice(0, 1), modifiers) ?? tryList(gen) ?? tryMods(gen, modifiers);
       if (found)
         return found;
-      const base = listFor(specific[0] ?? generic)[0];
+      const base = listFor(specific[0] ?? generic2)[0];
       for (const o of ["other", "third", "fourth", "fifth"])
         if (!used.has(`${o} ${base}`))
           return claim(`${o} ${base}`, base, true);
@@ -2233,6 +2233,79 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const flowering = has2(/^flowers$/) > 0.5, fruiting = has2(/^(fruits|berries|nuts|pods|seeds|seed heads|caps)$/) > 0.5;
     const notice = (["herb", "grass"].includes(plant.form) ? 0.3 + 0.7 * leaf : 1) * (flowering ? 1.3 : 1) * (fruiting ? 1.15 : 1) * (plant.form === "mushroom" ? has2(/.*/) : 1);
     return { leaf, flowering, fruiting, notice };
+  }
+  var CUE_PART = [
+    [/berries|fleshy fruits|stonefruit|nuts|pods|seed heads|dry seeds|small seeds|fluff/, /^(berries|fruits|nuts|pods and seeds|seeds|seed heads)$/],
+    [/flowers/, /^flowers$/],
+    [/dead stalks/, /^dead stalks$/]
+  ];
+  var SHOWS = 0.3;
+  function cueShows(world, plant, words, g) {
+    if (!g || plant.kind !== "plant")
+      return true;
+    for (const [cue, part] of CUE_PART) {
+      if (!cue.test(words))
+        continue;
+      const ps = plant.parts.filter((p) => part.test(p.part));
+      return !ps.length || ps.some((p) => partNow(world, plant, p.part, g) >= SHOWS);
+    }
+    if (/leaves|blades|stems/.test(words))
+      return plantNow(world, plant, g).leaf >= SHOWS;
+    return true;
+  }
+  var cuesNow = (world, plant, g) => plant.cues.filter((c) => cueShows(world, plant, c, g));
+  var fruitShows = (world, plant, g) => plant.parts.some((p) => /^(berries|fruits|nuts)$/.test(p.part) && partNow(world, plant, p.part, g) >= 0.5);
+
+  // src/population.js
+  var GUILDS = [
+    { id: "bloom", label: "flowers and pollinators", member: (e) => e.kind === "plant" && (e.traits?.umbel || e.parts?.some((p) => p.part === "flowers") || ["berry", "drupe"].includes(e.traits?.fruit)) ? 0.45 : ["bee", "wasp"].includes(e.traits?.key) ? 0.6 : e.traits?.key === "fly" || e.traits?.key === "caterpillar" ? 0.45 : 0 },
+    { id: "fruit", label: "fruit and the animals that eat it", member: (e) => e.kind === "plant" && ["berry", "drupe", "nut"].includes(e.traits?.fruit) ? 0.45 : ["songbird", "groundbird", "rooter", "rodent"].includes(e.traits?.key) ? 0.45 : 0 },
+    { id: "prey", label: "game and the hunters that follow it", member: (e) => ["browser", "hare", "rodent", "groundbird"].includes(e.traits?.key) ? 0.45 : ["predator", "soarer"].includes(e.traits?.key) ? 0.6 : 0 },
+    { id: "rot", label: "rotting wood, its fungi and grubs", member: (e) => e.form === "mushroom" || ["grub", "beetle", "woodlouse", "termite"].includes(e.traits?.key) ? 0.45 : 0 },
+    { id: "still", label: "still water, biting insects and frogs", member: (e) => ["mosquito", "gnat"].includes(e.traits?.key) ? 0.6 : e.traits?.key === "frog" ? 0.45 : 0 }
+  ];
+  var memo = /* @__PURE__ */ new WeakMap();
+  function guildsOf(e) {
+    if (memo.has(e))
+      return memo.get(e);
+    let gs = GUILDS.map((g) => ({ id: g.id, rho: g.member(e) })).filter((g) => g.rho > 0);
+    const r22 = gs.reduce((a, g) => a + g.rho ** 2, 0);
+    if (r22 > 0.8)
+      gs = gs.map((g) => ({ ...g, rho: g.rho * Math.sqrt(0.8 / r22) }));
+    memo.set(e, gs);
+    return gs;
+  }
+  function siteLuck(e, own2, siteKey, place) {
+    const gs = guildsOf(e);
+    if (!gs.length)
+      return own2;
+    let z = 0, r22 = 0;
+    for (const g of gs) {
+      z += g.rho * place(`guild/${g.id}/${siteKey}`).normal();
+      r22 += g.rho ** 2;
+    }
+    return z + Math.sqrt(1 - r22) * own2;
+  }
+  function populationAt(world, micro, siteKey, factors, place, note2 = null) {
+    const out = [];
+    for (const e of [...world.stones, ...world.plants, ...world.animals]) {
+      const h = e.habitats.find((x) => x.micro === micro);
+      if (!h || e.kind === "animal" && e.cls !== "invertebrate")
+        continue;
+      const ar = place(`abund/${e.id}/${siteKey}`);
+      const z = siteLuck(e, ar.normal(), siteKey, place);
+      const count = (h.perInstance ?? h.pieces) * Math.exp((e.kind === "stone" ? 0 : 0.35 * factors.fertility) + 0.5 * z);
+      const p = 1 - Math.exp(-count / 2), here = ar.chance(p);
+      note2?.("lives here", e.id, { name: e.name, count, luck: z, p, observed: here });
+      if (!here)
+        continue;
+      out.push({ e, n: count });
+    }
+    return out;
+  }
+  function densityAt(a, siteKey, place) {
+    const z = siteLuck(a, place(`dens/${a.id}/${siteKey}`).normal(), siteKey, place);
+    return (a.perKm2 ?? 0) * Math.exp(0.5 * z - 0.125);
   }
 
   // src/notes.js
@@ -2438,7 +2511,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     rooter: "stocky, bristled animal with tusks",
     soarer: "big soaring bird"
   };
-  function firstCue(e) {
+  function firstCue(e, season = null) {
     if (e.kind === "animal") {
       const t = e.traits;
       const base = t.key === "predator" ? t.pack ? "big doglike hunter" : "big catlike hunter" : DESCRIPTOR[t.key];
@@ -2446,18 +2519,19 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       const core = m ? `${m[1]} ${t.color} ${m[2]}` : `${t.color} ${base}`;
       return `${core}${t.hairy ? ", covered in bristly hairs" : ""}`;
     }
+    const cues = season?.g && e.kind === "plant" ? cuesNow(season.world, e, season.g) : e.cues;
     for (const re of CUE_PRIORITY) {
-      const c = e.cues.find((x) => re.test(x));
+      const c = cues.find((x) => re.test(x));
       if (c)
         return c;
     }
-    return e.cues[0];
+    return cues[0] ?? (["herb", "grass"].includes(e.form) ? "dead, brown stems" : "nothing much to tell it by");
   }
   var COUNTABLE = (e) => e.kind === "animal" || e.kind === "plant" && ["tree", "shrub", "mushroom"].includes(e.form);
   var article = (w) => /^[aeiou]/i.test(w) ? "an" : "a";
   var withArticle = (e, n) => COUNTABLE(e) ? `${article(n)} ${n}` : n;
-  function nounPhrase(e) {
-    const cue = firstCue(e);
+  function nounPhrase(e, season = null) {
+    const cue = firstCue(e, season);
     if (e.kind === "animal")
       return `${article(cue)} ${cue}`;
     if (e.kind === "stone")
@@ -2521,10 +2595,11 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   var recentSites = (memory) => (memory.trail ?? []).slice(-2);
   var kindOf = (e) => e.kind === "animal" ? `a:${e.traits.key}` : `${e.kind}:${e.nameBase ?? e.name}`;
   var kindNoun = (e) => e.kind === "animal" ? e.traits.noun : e.nameBase ?? e.name;
-  var shortCue = (e) => firstCue(e).replace(/^(a|an|some) /, "");
-  function compare(e, prev) {
+  var shortCue = (e, season) => firstCue(e, season).replace(/^(a|an|some) /, "");
+  function compare(e, prev, season = null) {
     if (!prev)
       return null;
+    const fruitBoth = !season?.g || fruitShows(season.world, e, season.g) && fruitShows(season.world, prev, season.g);
     const t = e.traits ?? {}, p = prev.traits ?? {};
     if (e.kind === "animal") {
       const rel = t.mass && p.mass ? t.mass / p.mass : (t.sizeFactor ?? 1) / (p.sizeFactor ?? 1);
@@ -2535,7 +2610,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       if (t.color !== p.color)
         return t.color;
     } else if (e.kind === "plant") {
-      if (t.fruitColor && p.fruitColor && t.fruitColor !== p.fruitColor)
+      if (fruitBoth && t.fruitColor && p.fruitColor && t.fruitColor !== p.fruitColor)
         return `${t.fruitColor}-fruited`;
       if (t.color && p.color && t.color !== p.color)
         return t.color;
@@ -2547,7 +2622,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       return e.cues[0].replace(/ blocks?$/, "");
     return "a little different";
   }
-  function namingSentences(es, memory, site2, byId, r) {
+  function namingSentences(es, memory, site2, byId, r, season = null) {
     var _a;
     const out = [];
     memory.namedAt ?? (memory.namedAt = {});
@@ -2567,12 +2642,12 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       const prev = before2.length ? byId?.(before2[before2.length - 1].id) : null;
       const names = g.map((e) => nameOf(memory, e));
       if (g.length > 1) {
-        const cues = g.map(shortCue), says = cues.every((c, i) => new RegExp(`\\b${names[i].split(" ").pop()}s?\\b`, "i").test(c));
+        const cues = g.map((e) => shortCue(e, season)), says = cues.every((c, i) => new RegExp(`\\b${names[i].split(" ").pop()}s?\\b`, "i").test(c));
         out.push(`${g.length === 2 ? "A couple of" : "A few"} different kinds of ${prev ? "other " : ""}${kindNoun(g[0])}${says ? "" : `: ${joinList(cues)}`}. I'll call them ${joinList(names)}.`);
       } else {
-        const e = g[0], n = names[0], np = nounPhrase(e);
+        const e = g[0], n = names[0], np = nounPhrase(e, season);
         if (prev) {
-          const c = compare(e, prev);
+          const c = compare(e, prev, season);
           out.push(c === "a little different" ? `Another ${kindNoun(e)}, much like the one before. I'll call this one ${n}.` : `Another ${kindNoun(e)}; this one is ${c}. I'll call this one ${n}.`);
         } else if (new RegExp(`\\b${n.split(" ").pop()}s?\\b`, "i").test(np))
           out.push(`${cap(np)}.`);
@@ -2592,6 +2667,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     var _a, _b, _c, _d, _e, _f, _g;
     const light = cond?.light ?? 1, hearing = cond?.hearing ?? 1, snow = cond?.snowCm ?? 0, litter = cond?.litter ?? 0;
     const lowCover = (1 - Math.min(1, snow / 20)) * (1 - 0.5 * litter);
+    const season = cond?.g ? { world, g: cond.g } : null;
+    const place = (key) => makeRng(`${world.seed}/${key}`);
     const env = world.environment;
     const all = [...world.stones, ...world.plants, ...world.animals];
     const byId = (id) => all.find((x) => x.id === id);
@@ -2636,12 +2713,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     }
     const items = [], usual = [], sightings = [], signObs = [];
     const noticedKeys = /* @__PURE__ */ new Set();
-    for (const e of all.filter((x) => !x.cryptic && x.habitats.some((h) => h.micro === micro) && !(x.kind === "animal" && x.cls !== "invertebrate"))) {
-      const h = e.habitats.find((x) => x.micro === micro);
-      const ar = makeRng(`${world.seed}/abund/${e.id}/${site2}`);
-      const count = (h.perInstance ?? h.pieces) * Math.exp((e.kind === "stone" ? 0 : 0.35 * f.fertility) + 0.5 * ar.normal());
-      if (!ar.chance(1 - Math.exp(-count / 2)))
-        continue;
+    for (const { e, n: count } of populationAt(world, micro, site2, f, place).filter(({ e: e2 }) => !e2.cryptic)) {
       const now2 = e.kind === "animal" && cond ? animalNow(e, cond) : null;
       if (now2 && !now2.here)
         continue;
@@ -2659,8 +2731,9 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       if (now2 && !now2.here)
         continue;
       const active = activeAt(e, time);
-      const here = 1 - Math.exp(-e.perKm2 * 0.08);
-      const recent = 1 - Math.exp(-e.perKm2 * 0.3);
+      const dens = densityAt(e, site2, place);
+      const here = 1 - Math.exp(-dens * 0.08);
+      const recent = 1 - Math.exp(-dens * 0.3);
       const presentNow = r.chance(here);
       if (s.distant) {
         if (presentNow && r.chance(clamp(0.5 + 0.5 * f.exposure, 0, 1) * (active ? 1 : 0.2) * (now2?.seen ?? 1) * Math.min(1, 2 * light)))
@@ -2697,7 +2770,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       sgt.traits = {};
       if (!sgt.distant) {
         const patch = samplePatch(world, e.id, site2, micro).traits;
-        for (const t of e.varying.filter((v) => v.kind === "visible")) {
+        const shows = (id) => !season || e.kind !== "plant" || (/^fruit/.test(id) ? fruitShows(world, e, season.g) : /^(leafSize|hairiness)$/.test(id) ? plantNow(world, e, season.g).leaf >= 0.3 : true);
+        for (const t of e.varying.filter((v) => v.kind === "visible" && shows(v.id))) {
           sgt.traits[t.id] = { latent: t.scale === "log" ? Math.log(patch[t.id]) + r.normal(0, 0.1) : patch[t.id] + r.normal(0, 0.05), scale: t.scale };
         }
       }
@@ -2770,7 +2844,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       if (!sig2)
         items.push({ score: channel === "call" ? 2.3 : channel === "track" ? 2.4 : 1.8, type: `${channel}New`, desc, cm: so.cm, key, channel });
       else
-        usual.push({ text: channel === "call" ? `${desc} again` : `more ${desc}` });
+        usual.push({ text: channel === "call" ? `${desc} again` : /^an? /.test(desc) ? `another ${desc.replace(/^an? /, "")}` : `more ${desc}` });
     }
     if (bolted) {
       const slow = knownAnimals.filter((a) => !a.signs.distant && a.signs.speed < bolted.signs.speed - 0.15 && a.cls === "large");
@@ -2830,7 +2904,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         continue;
       }
       if (!namedYet) {
-        out.push(...namingSentences(fresh.map((x) => x.e), memory, site2, byId, r));
+        out.push(...namingSentences(fresh.map((x) => x.e), memory, site2, byId, r, season));
         namedYet = true;
       }
     }
@@ -2850,7 +2924,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
           return tpl(memory, r, "water")(it.w.cues.join(", "));
         case "new": {
           const n = nameOf(memory, e);
-          const np = nounPhrase(e);
+          const np = nounPhrase(e, season);
           if (new RegExp(`\\b${n.split(" ").pop()}s?\\b`, "i").test(np))
             return `${cap(np)}.`;
           const key = aware && r.chance(0.35) ? "newName" : "name";
@@ -3472,7 +3546,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     for (const a of A) {
       if (a.birds && time === "night")
         continue;
-      const R2 = a.range * quiet * boost * (1 - 0.35 * vegHere) * (a.birds ? time === "day" ? 0.45 : 1 : L.dyn?.sound(a) ?? 1);
+      const R2 = a.range * quiet * boost * (1 - 0.35 * vegHere) * (a.birds ? (time === "day" ? 0.45 : 1) * (L.dyn?.birds?.(a) ?? 1) : L.dyn?.sound(a) ?? 1);
       if (!R2)
         continue;
       const d = Math.max(30, distM(pos, a));
@@ -3963,8 +4037,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const big = world.animals.filter((a) => a.cls === "large" && a.perKm2 && !a.signs?.distant);
     const r = makeRng(`${world.seed}/carcass/${epoch}`);
     for (const a of big) {
-      const mean = a.perKm2 * 100 * CARCASS_DAYS / (8 * 365) + 0.4;
-      let n = 0, Lp = Math.exp(-mean), p = 1;
+      const mean2 = a.perKm2 * 100 * CARCASS_DAYS / (8 * 365) + 0.4;
+      let n = 0, Lp = Math.exp(-mean2), p = 1;
       do {
         n++;
         p *= r.next();
@@ -4171,8 +4245,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         end++;
       out = [wrap(start), wrap(end + 30)];
     } else {
-      const mean = (d) => world.environment.meanTempC - cal.tempAmp * Math.cos(2 * Math.PI * (d - 15) / 365);
-      const grows = (d) => mean(d) > 6;
+      const mean2 = (d) => world.environment.meanTempC - cal.tempAmp * Math.cos(2 * Math.PI * (d - 15) / 365);
+      const grows = (d) => mean2(d) > 6;
       if (!grows(15)) {
         let start = 15;
         while (start < 380 && !grows(start))
@@ -4277,440 +4351,6 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const d = w.depth * (crossing?.kind === "ford" ? 0.4 : 1), ds = d * w.speed;
     const swept = ds > 0.6 || d > 1.3 ? Math.round(clamp(2 + 6 * (ds - 0.6), 2, 10)) : 0;
     return { hours: 0.02 + 0.094 * d * (1 + w.speed) + (swept ? 0.25 : 0), swept, how: crossing?.kind === "ford" ? "ford" : swept ? "swept" : "wade", depth: d, speed: w.speed };
-  }
-
-  // src/outlook.js
-  var idx4 = (x, y) => y * N + x;
-  var WATER = ["falls", "cascade", "rapids", "river", "stream", "brook", "river trace", "lake", "waterfowl"];
-  var BUDGET = 12;
-  function waterNear(L, p) {
-    let best = null;
-    for (let dy = -3; dy <= 3; dy++)
-      for (let dx = -3; dx <= 3; dx++) {
-        const x = p.x + dx, y = p.y + dy;
-        if (x < 0 || y < 0 || x >= N || y >= N)
-          continue;
-        const c = idx4(x, y);
-        if ((L.chan[c] || L.lake[c]) && (best === null || Math.hypot(dx, dy) < best))
-          best = Math.hypot(dx, dy);
-      }
-    return best === null ? null : best * CELL;
-  }
-  function waterTrial(L, spawn, rng) {
-    let p = { x: spawn.x, y: spawn.y }, hours = 0, lookedOut = false;
-    const reached = () => {
-      const m = waterNear(L, p);
-      return m === null ? null : hours + m / 3e3;
-    };
-    for (let leg = 0; leg < 8 && hours < BUDGET; leg++) {
-      if (leg > 0) {
-        const done = reached();
-        if (done !== null)
-          return done;
-      }
-      const atLookout = isLookout(L, p.x, p.y);
-      hours += 0.5;
-      const cues = perceive(L, p, { time: hours < 1.5 ? "dawn" : "day", lookout: atLookout, boost: atLookout ? 1 : 1.6 }).filter((c) => WATER.includes(c.kind));
-      let target = null, resense = null;
-      if (cues.length) {
-        const c = cues.reduce((a, b) => b.strength > a.strength ? b : a);
-        target = suspicionFrom(c, p, rng).est;
-        let n = 0;
-        resense = (q2) => {
-          if (++n % 6)
-            return null;
-          const k = perceive(L, q2, {}).find((x) => x.key === c.key);
-          return k ? suspicionFrom(k, q2, rng).est : null;
-        };
-      } else if (spawn.lookout && !lookedOut) {
-        target = spawn.lookout;
-        lookedOut = true;
-      } else {
-        const a = rng.uniform(0, 2 * Math.PI);
-        target = { x: Math.max(0, Math.min(N - 1, Math.round(p.x + 20 * Math.sin(a)))), y: Math.max(0, Math.min(N - 1, Math.round(p.y - 20 * Math.cos(a)))) };
-      }
-      const trip = walk(L, p, target, { rng, maxHours: 3, resense, stopAtWater: true });
-      hours += trip.hours;
-      p = trip.end;
-      if (trip.crossings.length)
-        return hours;
-    }
-    return reached() ?? Infinity;
-  }
-  function estimateWater(L, spawn, seed, trials = 9) {
-    const rng = makeRng(`${seed}/outlook/water`);
-    const t = Array.from({ length: trials }, () => waterTrial(L, spawn, rng)).sort((a, b) => a - b);
-    return { hours: t[Math.floor(trials / 2)], trials: t };
-  }
-  var MEAL = 250;
-  var ATTEMPT = 1.75;
-  function estimateFood(world, L, spawn) {
-    const raw = (chem) => ({ kcal: nutrients(chem, chem.gather).net, safe: harm(chem) < 0.12 && !(chem.compounds.parasites > 0.3) });
-    const g = groundAt(world, 1), cond = { doy: g.doy, meanC: g.meanC, weather: "cloudy", wet: false };
-    const options = [
-      ...world.plants.flatMap((p) => p.parts.filter((x) => x.food && x.chem && !/cutting edge|digging stick/.test(x.collect ?? "") && partNow(world, p, x.part, g) >= 0.15).map((x) => ({ ...raw(x.chem), habitats: p.habitats }))),
-      ...world.animals.filter((a) => a.cls === "invertebrate" && a.chem && /^easy/.test(a.catch ?? "") && animalNow(a, cond).here).map((a) => ({ ...raw(a.chem), habitats: a.habitats }))
-    ].filter((o) => o.kcal >= MEAL);
-    const share = {};
-    let n = 0;
-    for (let dy = -19; dy <= 19; dy++)
-      for (let dx = -19; dx <= 19; dx++) {
-        const x = spawn.x + dx, y = spawn.y + dy;
-        if (x < 0 || y < 0 || x >= N || y >= N || dx * dx + dy * dy > 361)
-          continue;
-        const m = L.micro[idx4(x, y)] === "lake" ? "pond" : L.micro[idx4(x, y)];
-        share[m] = (share[m] ?? 0) + 1;
-        n++;
-      }
-    let q2 = 0, cookedOnly = false;
-    for (const [m, k] of Object.entries(share)) {
-      let pNone = 1, safeW = 0, allW = 0;
-      for (const o of options) {
-        const h = o.habitats.find((z) => z.micro === m);
-        if (!h)
-          continue;
-        const occ = 1 - Math.exp(-(h.perInstance ?? h.pieces ?? 0) / 2);
-        allW += occ;
-        if (o.safe) {
-          safeW += occ;
-          pNone *= 1 - occ;
-        } else
-          cookedOnly = true;
-      }
-      if (allW)
-        q2 += k / n * (1 - pNone) * (safeW / allW);
-    }
-    if (q2 <= 0)
-      return { hours: Infinity, cookedOnly };
-    const attempts = Math.max(1, Math.ceil(Math.log(0.5) / Math.log(1 - Math.min(q2, 0.999))));
-    return { hours: attempts * ATTEMPT, q: q2, cookedOnly };
-  }
-  var hoursWords = (h) => !Number.isFinite(h) || h > BUDGET * 2 ? "more than a day" : h < 0.75 ? "under an hour" : h < 1.5 ? "about an hour" : h < 10 ? `about ${Math.round(h)} hours` : `about ${Math.round(h / 2) * 2} hours`;
-  var daysWords = (d) => d == null ? "more than a month" : d <= 1 ? "about a day" : `about ${Math.round(d)} days`;
-  function outlook(world, L, spawn, fireEst, seed) {
-    const water = estimateWater(L, spawn, seed);
-    const food = estimateFood(world, L, spawn);
-    return {
-      water,
-      food,
-      fire: fireEst,
-      text: {
-        water: `water in ${water.hours > BUDGET ? "more than half a day" : hoursWords(water.hours)}`,
-        food: Number.isFinite(food.hours) ? `food in ${hoursWords(food.hours)}` : food.cookedOnly ? "food only once you have fire" : "little food to be had",
-        fire: fireEst.blocked ? `fire looks out of reach (${fireEst.blocked})` : `fire in ${daysWords(fireEst.median)}`
-      }
-    };
-  }
-
-  // src/injury.js
-  var BASE = 1 / 150;
-  var UNDERFOOT = { scree: 3, outcrop: 2, deadfall: 1.8, streambed: 1.8, claybank: 1.6, pond: 1.5, spring: 1.3, woodland: 1.2, edge: 1.1, streambank: 1.2, glade: 1, lake: 1 };
-  var WEATHER = { rain: 1.6, storm: 2, snow: 2, blizzard: 3, fog: 1.2 };
-  function hazardFactors(L, c, env, body, familiar) {
-    const micro = L.micro[c];
-    const f = {
-      steep: 1 + 12 * Math.max(0, L.slope[c] - 0.08),
-      underfoot: (UNDERFOOT[micro] ?? 1) * (L.chan[c] >= 3 ? 1.5 : 1),
-      dark: 1 + 9 * Math.pow(1 - seeingNear(env.lux * (1 - 0.75 * L.veg[c])), 1.5),
-      weather: (WEATHER[env.weather] ?? 1) * (["rain", "storm"].includes(env.weather) && ["scree", "outcrop", "claybank", "streambed"].includes(micro) ? 1.4 : 1),
-      snow: 1 + Math.min(1, (env.snowCm ?? 0) / 30),
-      // snow hides the holes and the roots
-      litter: 1 + 0.15 * (env.litter ?? 0),
-      tired: 1 + 1.5 * body.fatigue ** 2,
-      hungry: 1 + 2 * Math.max(0, 0.3 - body.energy) / 0.3,
-      sick: 1 + 1.5 * body.sick,
-      limp: 1 + (body.limp ?? 0),
-      unfamiliar: familiar ? 1 : 2
-    };
-    return { factors: f, rate: BASE / 2 * Object.values(f).reduce((a, b) => a * b, 1) };
-  }
-  function injuryReasons(factors) {
-    return Object.entries(factors).map(([k, v]) => [k, k === "unfamiliar" ? 1.6 : v]).filter(([, v]) => v >= 1.5).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k]) => k);
-  }
-  function injuryAt(L, c, rng) {
-    const micro = L.micro[c], steep = L.slope[c] > 0.2 || ["scree", "outcrop"].includes(micro);
-    const sev = clamp(rng.logNormal(0.25, 0.6), 0.05, 0.9);
-    let kind;
-    if (L.chan[c] >= 2 || micro === "streambed")
-      kind = rng.chance(0.6) ? "slip" : "ankle";
-    else if (steep)
-      kind = rng.chance(0.6) ? "ankle" : "fall";
-    else if (L.veg[c] > 0.55 || micro === "deadfall")
-      kind = rng.chance(0.5) ? "cut" : "ankle";
-    else
-      kind = rng.chance(0.7) ? "ankle" : "fall";
-    return { kind, sev };
-  }
-
-  // src/body.js
-  var SHELTERS = {
-    open: { windBlock: 0, rainBlock: 0, clo: 0 },
-    hut: { windBlock: 0.9, rainBlock: 0.95, clo: 1.5, floor: 0.4 }
-    // a debris hut: a thick leaf-and-branch shell round me, and leaves under me
-  };
-  function naturalShelter(veg, leaf, micro) {
-    const crown = veg * (0.4 + 0.6 * leaf);
-    return { windBlock: Math.min(0.8, 0.6 * crown + (["outcrop", "scree"].includes(micro) ? 0.3 : 0)), rainBlock: 0.5 * crown, clo: 0 };
-  }
-  function sleepHour({ env, shelter, bed, clothes, fireC = 0, body }) {
-    const wind = env.windMs * (1 - shelter.windBlock);
-    const exposed = env.precip ? 1 - shelter.rainBlock : 0, pour = { storm: 2, blizzard: 1.5 }[env.precip] ?? 1;
-    const air = 0.7 / (1 + 0.25 * wind);
-    const worn = clothes.clo * (1 - 0.6 * clothes.wet);
-    const ground = (bed ? bed.clo * (1 - 0.5 * bed.wet) : 0) + (shelter.floor ?? 0) - 0.4 - 0.3 * env.groundWet - (env.snowCm > 2 ? 0.4 : 0);
-    const have = Math.max(0.2, worn + air + shelter.clo + ground);
-    const T2 = env.tempC + fireC, need = Math.max(0.1, (33 - T2) / 8);
-    const deficit = Math.min(1, Math.max(0, (need - have) / need));
-    const hot = T2 > 30 ? (T2 - 30) / 8 : 0;
-    const cause = [["ground", -ground], ["wind", 0.7 - air], ["wet", clothes.clo * 0.6 * clothes.wet], ["air", need - 1.6]].sort((a, b) => b[1] - a[1])[0][0];
-    const loss = {
-      cold: 1.2 * Math.max(0, deficit - 0.15),
-      hot: 0.3 * hot,
-      rain: 0.3 * exposed * pour,
-      wind: wind > 8 ? 0.1 : 0,
-      biters: env.biters ? 0.2 : 0,
-      hunger: body.energy < 0.2 ? 0.25 : 0,
-      thirst: body.hyd < 0.3 ? 0.2 : 0,
-      pain: 0.3 * (body.limp ?? 0)
-    };
-    const quality = Math.max(0.05, Math.min(1, 1 - Object.values(loss).reduce((a, b) => a + b, 0)));
-    return {
-      quality,
-      deficit,
-      loss,
-      coldCause: cause,
-      chill: deficit > 0.35 ? 0.08 * (deficit - 0.35) : -0.15,
-      // core heat lost, or made back
-      kcal: 150 * Math.max(0, deficit - 0.25),
-      // shivering
-      wetting: exposed * 0.25 * pour,
-      // rain soaking my clothes (and the bed)
-      drying: exposed ? 0 : 0.05 + (fireC > 0 ? 0.15 : 0)
-      // body heat and the fire drying them
-    };
-  }
-
-  // src/mentalmap.js
-  function properCross(p1, p2, q1, q2) {
-    const o = (a, b, c) => Math.sign((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
-    return o(p1, p2, q1) * o(p1, p2, q2) < 0 && o(q1, q2, p1) * o(q1, q2, p2) < 0;
-  }
-  function boundedTime(adj, from, to, limit) {
-    const dist = /* @__PURE__ */ new Map([[from, 0]]), heap = [[0, from]];
-    const push = (x) => {
-      heap.push(x);
-      let i = heap.length - 1;
-      while (i > 0) {
-        const j = i - 1 >> 1;
-        if (heap[j][0] <= heap[i][0])
-          break;
-        [heap[i], heap[j]] = [heap[j], heap[i]];
-        i = j;
-      }
-    };
-    const pop = () => {
-      const top = heap[0], last = heap.pop();
-      if (heap.length) {
-        heap[0] = last;
-        let i = 0;
-        for (; ; ) {
-          const l = 2 * i + 1, r = l + 1;
-          let m = i;
-          if (l < heap.length && heap[l][0] < heap[m][0])
-            m = l;
-          if (r < heap.length && heap[r][0] < heap[m][0])
-            m = r;
-          if (m === i)
-            break;
-          [heap[i], heap[m]] = [heap[m], heap[i]];
-          i = m;
-        }
-      }
-      return top;
-    };
-    while (heap.length) {
-      const [d, u] = pop();
-      if (u === to)
-        return d;
-      if (d > limit)
-        return Infinity;
-      if (d > dist.get(u))
-        continue;
-      for (const [v, w] of adj[u])
-        if (d + w < (dist.get(v) ?? Infinity)) {
-          dist.set(v, d + w);
-          push([d + w, v]);
-        }
-    }
-    return Infinity;
-  }
-  function trailGraph(pts, trails, guess, { detour = 1.5 } = {}) {
-    const n = pts.length, adj = Array.from({ length: n }, () => []), have = /* @__PURE__ */ new Set(), out = [];
-    const key = (a, b) => a < b ? `${a},${b}` : `${b},${a}`;
-    const add = (a, b, hours, walked) => {
-      const g = guess(a, b);
-      have.add(key(a, b));
-      adj[a].push([b, g]);
-      adj[b].push([a, g]);
-      out.push({ a, b, hours, walked });
-    };
-    const crosses = (a, b) => out.some((e) => e.a !== a && e.a !== b && e.b !== a && e.b !== b && properCross(pts[a], pts[b], pts[e.a], pts[e.b]));
-    const joined = (a, b) => Number.isFinite(boundedTime(adj, a, b, Infinity));
-    const held = [];
-    const consider = (a, b, h, walked) => {
-      const g = guess(a, b);
-      if (a === b || have.has(key(a, b)) || boundedTime(adj, a, b, detour * g) <= detour * g)
-        return;
-      if (crosses(a, b))
-        held.push([a, b, h, walked]);
-      else
-        add(a, b, h, walked);
-    };
-    for (const e of [...trails].sort((p, q2) => guess(p.a, p.b) - guess(q2.a, q2.b)))
-      consider(e.a, e.b, e.hours, true);
-    const pairs = [];
-    for (let a = 0; a < n; a++)
-      for (let b = a + 1; b < n; b++)
-        pairs.push([a, b, guess(a, b)]);
-    for (const [a, b, g] of pairs.sort((p, q2) => p[2] - q2[2]))
-      consider(a, b, g, false);
-    for (const [a, b, h, w] of held)
-      if (!have.has(key(a, b)) && !joined(a, b))
-        add(a, b, h, w);
-    return out;
-  }
-  function firstClear(p, candidates, segments) {
-    const ok = (c) => !segments.some(([P, Q]) => P !== c && Q !== c && properCross(c, p, P, Q));
-    return candidates.find(ok) ?? candidates[0];
-  }
-  var SPOTS = [[1, 0], [-1, 0], [1, -1], [1, 1], [-1, -1], [-1, 1], [0, -1], [0, 1]];
-  function overlap(a, b) {
-    return Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)) * Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
-  }
-  function segHitsBox(a, b, box) {
-    let t0 = 0, t1 = 1;
-    const dx = b.x - a.x, dy = b.y - a.y;
-    for (const [p, q2] of [[-dx, a.x - box.x0], [dx, box.x1 - a.x], [-dy, a.y - box.y0], [dy, box.y1 - a.y]]) {
-      if (p === 0) {
-        if (q2 < 0)
-          return false;
-        continue;
-      }
-      const t = q2 / p;
-      if (p < 0) {
-        if (t > t1)
-          return false;
-        if (t > t0)
-          t0 = t;
-      } else {
-        if (t < t0)
-          return false;
-        if (t < t1)
-          t1 = t;
-      }
-    }
-    return true;
-  }
-  function placeLabels(labels, { boxes = [], segs = [], discs = [], bounds = null } = {}) {
-    const placed = [...boxes];
-    return labels.map((L) => {
-      let best = null;
-      SPOTS.forEach(([dx, dy], rank) => {
-        const gap = L.r + 0.25 * L.h, lift = dx && dy ? 0.35 : 1;
-        const x0 = dx > 0 ? L.x + gap : dx < 0 ? L.x - gap - L.w : L.x - L.w / 2;
-        const y0 = dy < 0 ? L.y - lift * gap - L.h : dy > 0 ? L.y + lift * gap : L.y - L.h / 2;
-        const box = { x0, y0, x1: x0 + L.w, y1: y0 + L.h }, unit = L.h * L.h;
-        let cost = 0.05 * rank * unit, clash = 0;
-        for (const b of placed)
-          clash += overlap(box, b);
-        if (bounds)
-          clash += L.w * L.h - overlap(box, bounds);
-        cost += 10 * clash;
-        for (const d of discs)
-          if (d.x !== L.x || d.y !== L.y)
-            cost += 6 * overlap(box, { x0: d.x - d.r, y0: d.y - d.r, x1: d.x + d.r, y1: d.y + d.r });
-        for (const [a, b] of segs)
-          if (segHitsBox(a, b, box))
-            cost += 0.4 * unit;
-        if (!best || cost < best.cost)
-          best = { cost, box, clash };
-      });
-      if (L.optional && best.clash > 1e-9)
-        return null;
-      placed.push(best.box);
-      return best.box;
-    });
-  }
-  function segCross(p1, p2, q1, q2) {
-    const d = (p2.x - p1.x) * (q2.y - q1.y) - (p2.y - p1.y) * (q2.x - q1.x);
-    if (Math.abs(d) < 1e-9)
-      return null;
-    const t = ((q1.x - p1.x) * (q2.y - q1.y) - (q1.y - p1.y) * (q2.x - q1.x)) / d;
-    const u = ((q1.x - p1.x) * (p2.y - p1.y) - (q1.y - p1.y) * (p2.x - p1.x)) / d;
-    return t > 0 && t < 1 && u >= 0 && u <= 1 ? { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y) } : null;
-  }
-  function suspectedCrossings(a, b, streams) {
-    const out = [];
-    for (const s of streams)
-      for (const [p, q2] of s.segs) {
-        const x = segCross(a, b, p, q2);
-        if (x) {
-          out.push({ key: s.key, name: s.name, at: x });
-          break;
-        }
-      }
-    return out;
-  }
-  function timeWords(h, certainty = "guess") {
-    if (certainty === "unknown" || !Number.isFinite(h))
-      return "?";
-    const t = h < 0.12 ? "a few minutes" : h < 0.9 ? `${Math.max(5, Math.round(h * 12) * 5)} min` : h < 1.25 ? certainty === "known" ? "an hour" : "about an hour" : h < 4 ? `${Math.round(h * 2) / 2} h` : h < 10 ? `${Math.round(h)} h` : "most of a day";
-    return certainty === "known" || /few|hour|day/.test(t) ? t : `~${t}`;
-  }
-  var awayWords = (h, certainty) => {
-    const t = timeWords(h, certainty);
-    return t === "?" ? "how far, I can\u2019t say" : `${t.replace(/^~/, "about ")} away`;
-  };
-  function explainTrip(L, path, predicted, actual, { believedDist = null, trueDist = null, idx: idx5, CELL: CELL2, soFar = false } = {}) {
-    if (!Number.isFinite(predicted) || predicted <= 0 || path.length < 3)
-      return null;
-    const ratio = actual / predicted;
-    if (Math.abs(actual - predicted) < Math.max(0.25, 0.35 * predicted))
-      return null;
-    const longer = ratio > 1;
-    let walked = 0, veg = 0, climb = 0, lakeSide = 0;
-    for (let i = 1; i < path.length; i++) {
-      const a = path[i - 1], b = path[i];
-      walked += Math.hypot(b.x - a.x, b.y - a.y);
-      veg += L.veg[idx5(b.x, b.y)];
-      climb += Math.max(0, L.elev[idx5(b.x, b.y)] - L.elev[idx5(a.x, a.y)]);
-      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]])
-        if (L.lake[idx5(Math.max(0, Math.min(127, b.x + dx)), Math.max(0, Math.min(127, b.y + dy)))]) {
-          lakeSide++;
-          break;
-        }
-    }
-    const straight = Math.hypot(path[path.length - 1].x - path[0].x, path[path.length - 1].y - path[0].y) || 1;
-    veg /= path.length - 1;
-    const reasons = [];
-    if (longer) {
-      if (believedDist && trueDist && trueDist > 1.3 * believedDist)
-        reasons.push([trueDist / believedDist - 1, "it was farther than it looked"]);
-      reasons.push([walked / straight - 1.15, "I kept drifting off line and had to correct"]);
-      reasons.push([(veg - 0.45) * 2, "thick brush most of the way"]);
-      reasons.push([climb / 200, `a lot of climbing (${Math.round(climb / 10) * 10} m up, all told)`]);
-      reasons.push([lakeSide / path.length * 3, "water in the way; I had to go round"]);
-    } else {
-      if (believedDist && trueDist && trueDist < 0.75 * believedDist)
-        reasons.push([1 - trueDist / believedDist, "it was closer than it looked"]);
-      reasons.push([(0.35 - veg) * 2, "open ground; easy going"]);
-      reasons.push([0.2 - climb / 400, "mostly downhill or level"]);
-    }
-    const best = reasons.sort((a, b) => b[0] - a[0])[0];
-    const why = best && best[0] > 0 ? best[1] : longer ? "harder going than I guessed" : "easier going than I guessed";
-    if (soFar)
-      return `This is taking much longer than I expected (${timeWords(actual, "known")} so far, against ${timeWords(predicted, "known")} for the whole way): ${why}. I stopped to rethink.`;
-    return `${longer ? "Took longer" : "Quicker"} than I expected (${timeWords(actual, "known")}, not ${timeWords(predicted, "known")}): ${why}.`;
   }
 
   // src/process.js
@@ -5731,6 +5371,669 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   }
   var cap2 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
+  // src/craft.js
+  var bump = (x, lo, hi, tol) => x < lo ? Math.exp(-(((lo - x) / tol) ** 2)) : x > hi ? Math.exp(-(((x - hi) / tol) ** 2)) : 1;
+  var widen = (tol, sk) => tol * (1 + 0.6 * sk);
+  var ROLES = {
+    cutter: (p, sk) => bump(p.sharpness, 0.6, 1, widen(0.2, sk)) * bump(p.hardness, 5.5, 10, widen(1.5, sk)),
+    pounder: (p) => bump(p.hardness, 5.5, 10, 1.5) * bump(p.mass, 300, 1500, 250),
+    anvil: (p) => bump(p.mass, 2e3, 1e5, 800),
+    knapStone: (p, sk) => bump(p.fracture, 0.75, 1, widen(0.25, sk)) * bump(p.flaws, 0, 0.12, widen(0.25, sk)),
+    hearth: (p, sk) => bump(p.density, 0.22, 0.4, widen(0.25, sk)) * bump(p.moisture, 0, 0.13, widen(0.08, sk)) * bump(p.resin, 0, 0.3, widen(0.25, sk)),
+    spindle: (p, sk) => bump(p.straightness, 0.85, 1, widen(0.15, sk)) * bump(p.moisture, 0, 0.13, widen(0.08, sk)) * bump(p.length, 45, 90, widen(12, sk)),
+    tinder: (p, sk) => bump(p.moisture, 0, 0.1, widen(0.07, sk)) * bump(p.fineness, 0.6, 1, widen(0.25, sk))
+  };
+  function newCharacter(skills = {}) {
+    return { skills: { knapping: 0.05, woodwork: 0.1, firecraft: 0.05, ...skills }, fatigue: 0, hands: 0, callus: 0, focus: 1, peakHands: 0, outcomes: {}, attempts: 0 };
+  }
+  function effSkill(ch, skill, handLoad) {
+    return ch.skills[skill] * (1 - 0.6 * ch.fatigue) * (1 - 0.7 * ch.hands * clamp(handLoad / 3)) * (0.5 + 0.5 * ch.focus);
+  }
+  function work(ch, hours, handLoad, kcal) {
+    ch.fatigue = clamp(ch.fatigue + hours * kcal / 2e3);
+    ch.hands = clamp(ch.hands + hours * handLoad * 0.09 * (1 - 0.75 * ch.callus));
+    ch.callus = clamp(ch.callus + hours * handLoad * 6e-3);
+    ch.focus = clamp(ch.focus - hours * 0.06);
+    ch.peakHands = Math.max(ch.peakHands, ch.hands);
+  }
+  function normCdf(x) {
+    const t = 1 / (1 + 0.2316419 * Math.abs(x));
+    const d = 0.3989423 * Math.exp(-x * x / 2);
+    const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+    return x > 0 ? 1 - p : p;
+  }
+  function attempt(r, ch, spec, terms, hours = spec.median) {
+    const se = effSkill(ch, spec.skill, spec.handLoad);
+    const mean2 = terms.reduce((s, [w, x]) => s + w * Math.log(Math.max(x, 1e-3)), 0) + spec.kSkill * se + spec.kEffort * Math.log(hours / spec.median);
+    const sd = 1 - 0.7 * ch.skills[spec.skill];
+    const z = mean2 + sd * r.normal();
+    const p = 1 - normCdf((spec.theta - mean2) / sd);
+    ch.skills[spec.skill] = clamp(ch.skills[spec.skill] + spec.learn * p * (1 - p) * (1 - ch.skills[spec.skill]));
+    work(ch, hours, spec.handLoad, spec.kcal);
+    ch.attempts++;
+    return { success: z > spec.theta, margin: z - spec.theta, p };
+  }
+  var workmanship = (margin) => clamp(1 / (1 + Math.exp(-1.5 * margin)));
+  function dull(tool, hours, workedHardness, k = 1.2) {
+    tool.props.sharpness = clamp(tool.props.sharpness - k * hours * (workedHardness / tool.props.hardness) ** 2);
+  }
+  var woodHardness = (density) => 1 + 3 * density;
+  function dry(item2, days, ambient2) {
+    item2.props.moisture = ambient2 + (item2.props.moisture - ambient2) * Math.exp(-0.4 * days);
+  }
+  var nextId = 1;
+  var item = (name, props, provenance) => ({ id: nextId++, name, props, provenance });
+  function knapFlakes(r, ch, stone, hammer, anvil) {
+    const res = attempt(
+      r,
+      ch,
+      { skill: "knapping", kSkill: 3, theta: -0.5, kEffort: 0.5, median: 0.25, learn: 0.08, handLoad: 1.5, kcal: 200 },
+      [[1, ROLES.knapStone(stone.props, ch.skills.knapping)], [0.5, ROLES.pounder(hammer.props)], [0.3, ROLES.anvil(anvil.props)]]
+    );
+    const n = res.success ? Math.min(4, 1 + Math.floor(res.margin * 2)) : res.margin > -1.2 ? 1 : 0;
+    const flakes = [];
+    for (let i = 0; i < n; i++) {
+      flakes.push(item("flake", {
+        sharpness: clamp(0.55 + 0.3 * stone.props.fracture + 0.08 * res.margin + r.normal(0, 0.05)),
+        hardness: stone.props.hardness,
+        fracture: stone.props.fracture,
+        mass: Math.round(r.uniform(5, 20))
+      }, stone.provenance));
+    }
+    return { ...res, flakes };
+  }
+  var NOTCH = { skill: "woodwork", kSkill: 2.5, theta: -0.4, kEffort: 0.6, median: 0.4, learn: 0.06, handLoad: 1, kcal: 160 };
+  function notchHearth(r, ch, wood, cutter, hours = NOTCH.median) {
+    const res = attempt(r, ch, NOTCH, [[1, ROLES.cutter(cutter.props, ch.skills.woodwork)]], hours);
+    dull(cutter, hours, woodHardness(wood.props.density));
+    const board = item("hearth board", { density: wood.props.density, resin: wood.props.resin, moisture: wood.props.moisture, notch: 0.15 + 0.85 * workmanship(res.margin + 0.5), life: 1, socket: 0 }, wood.provenance);
+    return { ...res, board };
+  }
+  function refineNotch(r, ch, board, cutter, hours = 0.6) {
+    const res = attempt(r, ch, NOTCH, [[1, ROLES.cutter(cutter.props, ch.skills.woodwork)]], hours);
+    dull(cutter, hours, woodHardness(board.props.density));
+    const before2 = board.props.notch;
+    if (res.margin < -1.5)
+      board.props.notch = Math.max(0.15, before2 - 0.05);
+    else
+      board.props.notch = clamp(before2 + (1 - before2) * 0.5 * workmanship(res.margin));
+    return { ...res, before: before2, after: board.props.notch };
+  }
+  function carveSpindle(r, ch, shoot, cutter) {
+    const res = attempt(
+      r,
+      ch,
+      { skill: "woodwork", kSkill: 2.5, theta: -0.4, kEffort: 0.6, median: 0.5, learn: 0.06, handLoad: 1, kcal: 160 },
+      [[1, ROLES.cutter(cutter.props, ch.skills.woodwork)]]
+    );
+    dull(cutter, 0.5, woodHardness(shoot.props.density));
+    const spindle = item("spindle", {
+      density: shoot.props.density,
+      moisture: shoot.props.moisture,
+      length: 70,
+      // A poor tool leaves the shaft rough, but it can't bend a straight shoot: small effect on straightness.
+      straightness: clamp(shoot.props.straightness * (0.93 + 0.07 * workmanship(res.margin)))
+    }, shoot.provenance);
+    return { ...res, spindle };
+  }
+  function makeTinder(r, ch, material) {
+    const res = attempt(r, ch, { skill: "firecraft", kSkill: 2, theta: -0.8, kEffort: 0.5, median: 0.2, learn: 0.04, handLoad: 0.5, kcal: 140 }, []);
+    return { ...res, tinder: item("tinder bundle", { moisture: material.props.moisture, fineness: clamp(0.45 + 0.4 * workmanship(res.margin)) }, material.provenance) };
+  }
+  var HAND_DRILL = { skill: "firecraft", kSkill: 1.89, theta: 1.2, kEffort: 0.5, median: 0.25, learn: 0.08, handLoad: 3, kcal: 400 };
+  function handDrill(r, ch, board, spindle) {
+    var _a;
+    const sk = ch.skills.firecraft;
+    const res = attempt(r, ch, HAND_DRILL, [[1, ROLES.hearth(board.props, sk)], [1, ROLES.spindle(spindle.props, sk)], [0.6, board.props.notch], [0.4, 0.4 + 0.6 * board.props.socket]]);
+    board.props.socket = clamp(board.props.socket + (1 - board.props.socket) * 0.3);
+    board.props.life = clamp(board.props.life - (0.05 + 0.1 * (0.45 - board.props.density)));
+    spindle.props.length -= 1.5;
+    const key = `hearth: ${board.provenance.name}`;
+    const o = (_a = ch.outcomes)[key] ?? (_a[key] = { tries: 0, embers: 0 });
+    o.tries++;
+    if (res.success)
+      o.embers++;
+    return { ...res, ember: res.success ? item("ember", { vigor: workmanship(res.margin) }, board.provenance) : null };
+  }
+  function searchNaturalEdge(r, ch, src) {
+    work(ch, 0.5, 0.2, 180);
+    ch.attempts++;
+    const found = r.chance(clamp(0.25 + 0.6 * src.props.rate) * (0.7 + 0.3 * ch.focus));
+    if (!found)
+      return { flake: null };
+    return { flake: item("natural edge", { sharpness: clamp(src.props.sharpness + r.normal(0, 0.12)), hardness: src.props.hardness, fracture: 0.2, mass: Math.round(r.uniform(10, 40)) }, src.provenance) };
+  }
+  function splinterBone(r, ch, bone, hammer) {
+    const res = attempt(r, ch, { skill: "knapping", kSkill: 1.5, theta: -0.8, kEffort: 0.3, median: 0.2, learn: 0.04, handLoad: 0.5, kcal: 160 }, [[0.5, ROLES.pounder(hammer.props)]]);
+    const n = res.success ? 1 + (res.margin > 0.5 ? 1 : 0) : 0;
+    const out = [];
+    for (let i = 0; i < n; i++)
+      out.push(item("bone splinter", { sharpness: clamp(0.6 + r.normal(0, 0.12)), hardness: 3, fracture: 0.3, mass: Math.round(r.uniform(4, 12)) }, bone.provenance));
+    return { ...res, flakes: out };
+  }
+  function lightFire(r, ch, ember, tinder) {
+    const res = attempt(
+      r,
+      ch,
+      { skill: "firecraft", kSkill: 1.5, theta: -0.6, kEffort: 0.3, median: 0.15, learn: 0.05, handLoad: 0.3, kcal: 180 },
+      [[1, ROLES.tinder(tinder.props, ch.skills.firecraft)], [0.8, ember.props.vigor]]
+    );
+    return res;
+  }
+  function pickMaterials(world, hearthChoice, ambient2) {
+    const mats = materialsOf(world);
+    const site2 = "camp";
+    const withPatch = (m) => {
+      const e = [...world.plants, ...world.stones].find((x) => x.id === m.source);
+      const vary = e?.varying?.find((v) => v.id === "woodDensity");
+      const density = vary ? samplePatch(world, e.id, site2, e.habitats[0].micro).traits.woodDensity : m.props.density;
+      return { ...m, props: { ...m.props, density } };
+    };
+    const stones = mats.filter((m) => m.material === "stone");
+    const knap = [...stones].sort((a, b) => b.props.fracture * (1 - b.props.flaws) - a.props.fracture * (1 - a.props.flaws))[0];
+    const natural = mats.filter((m) => m.material === "natural-edge").sort((a, b) => b.props.rate * b.props.sharpness - a.props.rate * a.props.sharpness)[0];
+    const boneSrc = mats.find((m) => m.material === "bone");
+    const hammer = stones.filter((s) => s.props.hardness >= 5.5).sort((a, b) => b.props.hardness - a.props.hardness)[0] ?? stones[0];
+    const anvil = stones.find((s) => s.props.slab) ?? stones[0];
+    const dead = mats.filter((m) => m.material === "dead-wood").map(withPatch).filter((m) => m.props.resin < 0.5);
+    dead.sort((a, b) => Math.abs(a.props.density - 0.3) - Math.abs(b.props.density - 0.3));
+    const usable = dead.filter((d) => d.props.density >= 0.15 && d.props.density <= 0.55);
+    const hearth = hearthChoice === "best" ? dead[0] : usable.length ? usable[usable.length - 1] : dead[dead.length - 1];
+    const stalk = mats.find((m) => m.material === "dead-stalk");
+    const shoots = mats.filter((m) => m.material === "live-wood" && m.props.straight).map(withPatch);
+    const deadShrub = mats.filter((m) => m.material === "dead-wood" && world.plants.find((p) => p.id === m.source)?.form === "shrub").map(withPatch)[0];
+    const tinderMat = mats.find((m) => m.material === "dry-grass") ?? mats.find((m) => m.material === "fluff") ?? mats.find((m) => m.material === "fungus-tinder" || m.material === "lichen-tinder") ?? mats.find((m) => m.material === "outer-bark" && m.props.papery);
+    if (!stones.length || !hearth || !(stalk || shoots.length) || !tinderMat)
+      return null;
+    const prov = (m) => ({ name: `${m.sourceName} (${m.part})`, source: m.source, part: m.part, site: site2 });
+    return {
+      stone: item("stone", { fracture: knap.props.fracture, flaws: knap.props.flaws, hardness: knap.props.hardness }, prov(knap)),
+      natural: natural ? { props: natural.props, provenance: prov(natural) } : null,
+      bone: boneSrc ? item("bone", { hardness: 3 }, prov(boneSrc)) : null,
+      hammer: item("hammerstone", { hardness: hammer.props.hardness, mass: 700 }, prov(hammer)),
+      anvil: item("anvil", { mass: 6e3 }, prov(anvil)),
+      hearthWood: item("dead wood", { density: hearth.props.density, resin: hearth.props.resin, moisture: ambient2 + 0.08 }, prov(hearth)),
+      spindleStock: stalk ? item("dead stalk", { density: 0.3, moisture: ambient2, straightness: 0.95 }, prov(stalk)) : item("green shoot", { density: shoots[0].props.density, moisture: 0.55, straightness: 0.9 }, prov(shoots[0])),
+      seasonedStock: !stalk && deadShrub ? item("dead shoot", { density: deadShrub.props.density, moisture: ambient2 + 0.02, straightness: 0.72 }, { ...prov(deadShrub), name: `${deadShrub.sourceName} (dead shoots)` }) : null,
+      tinderMat: item("tinder material", { moisture: ambient2 * 0.6 }, prov(tinderMat)),
+      hearthCandidates: dead.map((d) => `${d.sourceName} ${d.props.density.toFixed(2)}`)
+    };
+  }
+  function estimateFire(world, { skill = 0.06, hearthChoice = "best", maxDays = 30, efficiency = 0.5, ambient: amb = null } = {}) {
+    const ambient2 = amb ?? clamp(0.05 + 0.07 * world.environment.water, 0.05, 0.35);
+    const m = pickMaterials(world, hearthChoice, ambient2);
+    if (!m)
+      return { blocked: "a fire-chain material is missing entirely" };
+    const knapMean = Math.log(Math.max(ROLES.knapStone(m.stone.props, skill), 1e-3)) + 3 * skill;
+    const pFlake = 1 - normCdf((-1.7 - knapMean) / (1 - 0.7 * skill));
+    const edgeSource = pFlake >= 0.05 ? "knapping" : m.natural ? "naturally sharp stone" : m.bone ? "bone splinters" : null;
+    if (!edgeSource)
+      return { blocked: `no way to get a cutting edge (stone doesn't flake, no sharp scree, no bones)`, pFlake };
+    const knapOK = (() => {
+      const km = Math.log(Math.max(ROLES.knapStone(m.stone.props, skill), 1e-3)) + 3 * skill;
+      return 1 - normCdf((-1.7 - km) / (1 - 0.7 * skill)) >= 0.05;
+    })();
+    const board = { density: m.hearthWood.props.density, resin: m.hearthWood.props.resin, moisture: ambient2, notch: knapOK ? 0.8 : 0.45 };
+    const pAttempt = (spindle) => {
+      const mean2 = Math.log(Math.max(ROLES.hearth(board, skill), 1e-3)) + Math.log(Math.max(ROLES.spindle(spindle, skill), 1e-3)) + 0.6 * Math.log(board.notch) + HAND_DRILL.kSkill * skill;
+      return 1 - normCdf((HAND_DRILL.theta - mean2) / (1 - 0.7 * skill));
+    };
+    const pLight = 0.85;
+    const ready = m.spindleStock.name === "green shoot" ? Math.log((0.55 - ambient2) / 0.03) / 0.4 + 1 : 1;
+    const late0 = pAttempt({ straightness: m.spindleStock.props.straightness, moisture: m.spindleStock.name === "green shoot" ? ambient2 + 0.02 : m.spindleStock.props.moisture, length: 70 });
+    const early = m.spindleStock.name !== "green shoot" ? late0 : m.seasonedStock ? pAttempt({ ...m.seasonedStock.props, length: 70 }) : 0;
+    const late = pAttempt({ straightness: m.spindleStock.props.straightness, moisture: ambient2 + 0.02, length: 70 });
+    const perAttempt = 0.25 * HAND_DRILL.handLoad * 0.09 * 0.85;
+    const attemptsFirst = Math.floor(0.85 / perAttempt), attemptsLater = Math.floor((0.85 - 0.55 * 0.85) / perAttempt);
+    let survive = 1, median = null;
+    const curve = [];
+    for (let day = 2; day <= maxDays; day++) {
+      const p = (day >= ready ? late : early) * pLight * efficiency;
+      const n = day === 2 ? attemptsFirst : attemptsLater;
+      survive *= (1 - p) ** n;
+      curve.push(1 - survive);
+      if (median === null && survive <= 0.5)
+        median = day;
+    }
+    return { median, pFlake, edgeSource, pFireBy: (d) => curve[d - 2] ?? 1, early, late, ready: Math.ceil(ready), ambient: ambient2, hearth: m.hearthWood, spindle: m.seasonedStock ? "crooked dead shoots, then seasoned green" : m.spindleStock.name };
+  }
+
+  // src/outlook.js
+  var idx4 = (x, y) => y * N + x;
+  var MONTHS = Array.from({ length: 12 }, (_, m) => Math.round(15 + m * 30.42));
+  var mean = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  var WATER_R = 38;
+  function estimateWater(world, L, spawn) {
+    const lakes = [], chans = [];
+    for (let dy = -WATER_R; dy <= WATER_R; dy++)
+      for (let dx = -WATER_R; dx <= WATER_R; dx++) {
+        const x = spawn.x + dx, y = spawn.y + dy;
+        if (x < 0 || y < 0 || x >= N || y >= N)
+          continue;
+        const c = idx4(x, y), d = Math.hypot(dx, dy);
+        if (L.lake[c])
+          lakes.push(d);
+        else if (L.chan[c])
+          chans.push({ c, d });
+      }
+    const nearLake = lakes.length ? Math.min(...lakes) : Infinity;
+    const months = MONTHS.map((day) => {
+      const g = groundAt(world, day);
+      let d = nearLake;
+      for (const { c, d: dc } of chans)
+        if (dc < d && !waterAt(L, g, c).dry)
+          d = dc;
+      return Number.isFinite(d) ? d * CELL / 1e3 / 3 * 1.4 : Infinity;
+    });
+    const finite = months.filter(Number.isFinite), best = Math.min(...months), worst = Math.max(...months);
+    return { hours: finite.length ? mean(finite) : Infinity, months, seasonal: worst === Infinity ? finite.length > 0 : worst > 2 * best + 0.25 };
+  }
+  var NEAR = 19;
+  var WALK_KMH = 2.5;
+  var SURVEY = 0.75;
+  var GATHER = 0.5;
+  function estimateFood(world, L, spawn) {
+    const share = {};
+    let n = 0;
+    for (let dy = -NEAR; dy <= NEAR; dy++)
+      for (let dx = -NEAR; dx <= NEAR; dx++) {
+        const x = spawn.x + dx, y = spawn.y + dy;
+        if (x < 0 || y < 0 || x >= N || y >= N || dx * dx + dy * dy > NEAR * NEAR)
+          continue;
+        const m = L.micro[idx4(x, y)] === "lake" ? "pond" : L.micro[idx4(x, y)];
+        share[m] = (share[m] ?? 0) + 1;
+        n++;
+      }
+    const sources = [
+      ...world.plants.flatMap((p) => p.parts.filter((x) => x.food && x.chem && /^hands/.test(x.collect ?? "")).map((x) => ({ name: `${p.name} ${x.part}`, kind: x.chem.cls, chem: x.chem, habitats: p.habitats, now: (g) => partNow(world, p, x.part, g) }))),
+      ...world.animals.filter((a) => a.cls === "invertebrate" && a.chem && /^easy/.test(a.catch ?? "")).map((a) => ({ name: a.name, kind: "small creatures", chem: a.chem, habitats: a.habitats, now: (g) => animalNow(a, { doy: g.doy, meanC: g.meanC, weather: "cloudy", wet: false }).here }))
+    ];
+    const grounds = MONTHS.map((day) => groundAt(world, day));
+    const rated = [];
+    for (const s of sources) {
+      const kcal = nutrients(s.chem, s.chem.gather).net, safe = harm(s.chem) < 0.12 && !(s.chem.compounds.parasites > 0.3);
+      if (kcal <= 0)
+        continue;
+      let rate = 0;
+      for (const h of s.habitats) {
+        const f = (share[h.micro] ?? 0) / n;
+        if (!f)
+          continue;
+        const found = 1 - Math.exp(-(h.perInstance ?? h.pieces ?? 0) / 2);
+        const walk2 = CELL / Math.sqrt(f) / 1e3 / WALK_KMH;
+        rate = Math.max(rate, found * kcal / (walk2 + SURVEY + GATHER));
+      }
+      if (!rate)
+        continue;
+      const months = grounds.map((g) => rate * clamp(s.now(g)));
+      rated.push({ name: s.name, kind: s.kind, safe, kcal, months, perHour: mean(months) });
+    }
+    const best = (list) => list.sort((a, b) => b.perHour - a.perHour)[0] ?? null;
+    const raw = best(rated.filter((r) => r.safe)), any = best([...rated]);
+    const pick2 = raw ?? any, seasonalOf = (r) => r && Math.max(...r.months) - Math.min(...r.months) > r.perHour;
+    return {
+      perHour: raw?.perHour ?? 0,
+      source: raw,
+      seasonal: seasonalOf(raw),
+      cooked: any && any !== raw && any.perHour > 1.3 * (raw?.perHour ?? 0) ? { perHour: any.perHour, source: any, seasonal: seasonalOf(any) } : null,
+      best: pick2
+    };
+  }
+  var WEATHER_DAMP = { rain: 0.15, storm: 0.25, fog: 0.12, snow: 0.08, blizzard: 0.12 };
+  function estimateFireYear(world) {
+    const base = clamp(0.05 + 0.07 * world.environment.water, 0.05, 0.35);
+    const damp = MONTHS.map((day) => {
+      let sum = 0, n = 0;
+      for (let k = -14; k <= 15; k++)
+        for (const t of [1.5, 7.5, 13.5, 19.5]) {
+          const w = skyAt(world, day + k, t);
+          sum += WEATHER_DAMP[w.weather] ?? (w.weather === "clear" && w.sunAlt > 20 ? -0.03 : 0);
+          n++;
+        }
+      return sum / n;
+    });
+    const year = mean(damp), ambient2 = damp.map((d) => clamp(base + d - year, 0.05, 0.45));
+    const months = ambient2.map((a) => {
+      const est = estimateFire(world, { ambient: a });
+      return est.blocked ? null : est.median;
+    });
+    const days = months.filter((d) => d != null), best = Math.min(...days), any = days.length;
+    return { median: any ? mean(days) : null, months, ambient: ambient2, seasonal: any > 0 && (any < 12 || Math.max(...days) > 2 * best) };
+  }
+  var minutesWords = (h) => !Number.isFinite(h) ? "none within 3 km" : h < 0.2 ? "close by" : h < 0.75 ? `about ${Math.max(5, Math.round(h * 12) * 5)} min away` : h < 1.25 ? "about an hour away" : `about ${Math.round(h * 2) / 2} h away`;
+  var kcalWords = (k) => `about ${k < 100 ? Math.max(10, Math.round(k / 10) * 10) : Math.round(k / 50) * 50} kcal an hour of foraging`;
+  var KIND = { fruit: "fruit", nut: "nuts", seed: "seeds", grain: "grain", pod: "pods", storage: "roots and tubers", root: "roots", leaf: "greens", stem: "greens", flower: "flowers", innerBark: "inner bark", mushroom: "mushrooms", lichen: "lichen" };
+  var daysWords = (d) => d == null ? "more than a month" : d <= 1 ? "about a day" : `about ${Math.round(d)} days`;
+  var seasonalWord = (x) => x ? " (seasonal)" : "";
+  function outlook(world, L, spawn, fireEst, seed) {
+    const water = estimateWater(world, L, spawn), food = estimateFood(world, L, spawn), fire = estimateFireYear(world);
+    const kindOf2 = (r) => KIND[r.kind] ?? r.kind;
+    const foodText = food.source && food.perHour >= 10 ? `food ${kcalWords(food.perHour)} (${kindOf2(food.source)})${seasonalWord(food.seasonal)}${food.cooked ? `, more once cooked (${kindOf2(food.cooked.source)})` : ""}` : food.cooked ? `food mostly needs cooking: ${kcalWords(food.cooked.perHour)} (${kindOf2(food.cooked.source)})${seasonalWord(food.cooked.seasonal)}` : "little food to be had";
+    return {
+      water,
+      food,
+      fire,
+      fireNow: fireEst,
+      seed,
+      text: {
+        water: `water ${minutesWords(water.hours)}${seasonalWord(water.seasonal)}`,
+        food: foodText,
+        fire: fireEst.blocked ? `fire looks out of reach (${fireEst.blocked})` : `fire in ${daysWords(fire.median)}${seasonalWord(fire.seasonal)}`
+      }
+    };
+  }
+
+  // src/injury.js
+  var BASE = 1 / 150;
+  var UNDERFOOT = { scree: 3, outcrop: 2, deadfall: 1.8, streambed: 1.8, claybank: 1.6, pond: 1.5, spring: 1.3, woodland: 1.2, edge: 1.1, streambank: 1.2, glade: 1, lake: 1 };
+  var WEATHER = { rain: 1.6, storm: 2, snow: 2, blizzard: 3, fog: 1.2 };
+  function hazardFactors(L, c, env, body, familiar) {
+    const micro = L.micro[c];
+    const f = {
+      steep: 1 + 12 * Math.max(0, L.slope[c] - 0.08),
+      underfoot: (UNDERFOOT[micro] ?? 1) * (L.chan[c] >= 3 ? 1.5 : 1),
+      dark: 1 + 9 * Math.pow(1 - seeingNear(env.lux * (1 - 0.75 * L.veg[c])), 1.5),
+      weather: (WEATHER[env.weather] ?? 1) * (["rain", "storm"].includes(env.weather) && ["scree", "outcrop", "claybank", "streambed"].includes(micro) ? 1.4 : 1),
+      snow: 1 + Math.min(1, (env.snowCm ?? 0) / 30),
+      // snow hides the holes and the roots
+      litter: 1 + 0.15 * (env.litter ?? 0),
+      tired: 1 + 1.5 * body.fatigue ** 2,
+      hungry: 1 + 2 * Math.max(0, 0.3 - body.energy) / 0.3,
+      sick: 1 + 1.5 * body.sick,
+      limp: 1 + (body.limp ?? 0),
+      unfamiliar: familiar ? 1 : 2
+    };
+    return { factors: f, rate: BASE / 2 * Object.values(f).reduce((a, b) => a * b, 1) };
+  }
+  function injuryReasons(factors) {
+    return Object.entries(factors).map(([k, v]) => [k, k === "unfamiliar" ? 1.6 : v]).filter(([, v]) => v >= 1.5).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k]) => k);
+  }
+  function injuryAt(L, c, rng) {
+    const micro = L.micro[c], steep = L.slope[c] > 0.2 || ["scree", "outcrop"].includes(micro);
+    const sev = clamp(rng.logNormal(0.25, 0.6), 0.05, 0.9);
+    let kind;
+    if (L.chan[c] >= 2 || micro === "streambed")
+      kind = rng.chance(0.6) ? "slip" : "ankle";
+    else if (steep)
+      kind = rng.chance(0.6) ? "ankle" : "fall";
+    else if (L.veg[c] > 0.55 || micro === "deadfall")
+      kind = rng.chance(0.5) ? "cut" : "ankle";
+    else
+      kind = rng.chance(0.7) ? "ankle" : "fall";
+    return { kind, sev };
+  }
+
+  // src/body.js
+  var SHELTERS = {
+    open: { windBlock: 0, rainBlock: 0, clo: 0 },
+    hut: { windBlock: 0.9, rainBlock: 0.95, clo: 1.5, floor: 0.4 }
+    // a debris hut: a thick leaf-and-branch shell round me, and leaves under me
+  };
+  function naturalShelter(veg, leaf, micro) {
+    const crown = veg * (0.4 + 0.6 * leaf);
+    return { windBlock: Math.min(0.8, 0.6 * crown + (["outcrop", "scree"].includes(micro) ? 0.3 : 0)), rainBlock: 0.5 * crown, clo: 0 };
+  }
+  function sleepHour({ env, shelter, bed, clothes, fireC = 0, body }) {
+    const wind = env.windMs * (1 - shelter.windBlock);
+    const exposed = env.precip ? 1 - shelter.rainBlock : 0, pour = { storm: 2, blizzard: 1.5 }[env.precip] ?? 1;
+    const air = 0.7 / (1 + 0.25 * wind);
+    const worn = clothes.clo * (1 - 0.6 * clothes.wet);
+    const ground = (bed ? bed.clo * (1 - 0.5 * bed.wet) : 0) + (shelter.floor ?? 0) - 0.4 - 0.3 * env.groundWet - (env.snowCm > 2 ? 0.4 : 0);
+    const have = Math.max(0.2, worn + air + shelter.clo + ground);
+    const T2 = env.tempC + fireC, need = Math.max(0.1, (33 - T2) / 8);
+    const deficit = Math.min(1, Math.max(0, (need - have) / need));
+    const hot = T2 > 30 ? (T2 - 30) / 8 : 0;
+    const cause = [["ground", -ground], ["wind", 0.7 - air], ["wet", clothes.clo * 0.6 * clothes.wet], ["air", need - 1.6]].sort((a, b) => b[1] - a[1])[0][0];
+    const loss = {
+      cold: 1.2 * Math.max(0, deficit - 0.15),
+      hot: 0.3 * hot,
+      rain: 0.3 * exposed * pour,
+      wind: wind > 8 ? 0.1 : 0,
+      biters: env.biters ? 0.2 : 0,
+      hunger: body.energy < 0.2 ? 0.25 : 0,
+      thirst: body.hyd < 0.3 ? 0.2 : 0,
+      pain: 0.3 * (body.limp ?? 0)
+    };
+    const quality = Math.max(0.05, Math.min(1, 1 - Object.values(loss).reduce((a, b) => a + b, 0)));
+    return {
+      quality,
+      deficit,
+      loss,
+      coldCause: cause,
+      chill: deficit > 0.35 ? 0.08 * (deficit - 0.35) : -0.15,
+      // core heat lost, or made back
+      kcal: 150 * Math.max(0, deficit - 0.25),
+      // shivering
+      wetting: exposed * 0.25 * pour,
+      // rain soaking my clothes (and the bed)
+      drying: exposed ? 0 : 0.05 + (fireC > 0 ? 0.15 : 0)
+      // body heat and the fire drying them
+    };
+  }
+
+  // src/mentalmap.js
+  function properCross(p1, p2, q1, q2) {
+    const o = (a, b, c) => Math.sign((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+    return o(p1, p2, q1) * o(p1, p2, q2) < 0 && o(q1, q2, p1) * o(q1, q2, p2) < 0;
+  }
+  function boundedTime(adj, from, to, limit) {
+    const dist = /* @__PURE__ */ new Map([[from, 0]]), heap = [[0, from]];
+    const push = (x) => {
+      heap.push(x);
+      let i = heap.length - 1;
+      while (i > 0) {
+        const j = i - 1 >> 1;
+        if (heap[j][0] <= heap[i][0])
+          break;
+        [heap[i], heap[j]] = [heap[j], heap[i]];
+        i = j;
+      }
+    };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) {
+        heap[0] = last;
+        let i = 0;
+        for (; ; ) {
+          const l = 2 * i + 1, r = l + 1;
+          let m = i;
+          if (l < heap.length && heap[l][0] < heap[m][0])
+            m = l;
+          if (r < heap.length && heap[r][0] < heap[m][0])
+            m = r;
+          if (m === i)
+            break;
+          [heap[i], heap[m]] = [heap[m], heap[i]];
+          i = m;
+        }
+      }
+      return top;
+    };
+    while (heap.length) {
+      const [d, u] = pop();
+      if (u === to)
+        return d;
+      if (d > limit)
+        return Infinity;
+      if (d > dist.get(u))
+        continue;
+      for (const [v, w] of adj[u])
+        if (d + w < (dist.get(v) ?? Infinity)) {
+          dist.set(v, d + w);
+          push([d + w, v]);
+        }
+    }
+    return Infinity;
+  }
+  function trailGraph(pts, trails, guess, { detour = 1.5 } = {}) {
+    const n = pts.length, adj = Array.from({ length: n }, () => []), have = /* @__PURE__ */ new Set(), out = [];
+    const key = (a, b) => a < b ? `${a},${b}` : `${b},${a}`;
+    const add = (a, b, hours, walked) => {
+      const g = guess(a, b);
+      have.add(key(a, b));
+      adj[a].push([b, g]);
+      adj[b].push([a, g]);
+      out.push({ a, b, hours, walked });
+    };
+    const crosses = (a, b) => out.some((e) => e.a !== a && e.a !== b && e.b !== a && e.b !== b && properCross(pts[a], pts[b], pts[e.a], pts[e.b]));
+    const joined = (a, b) => Number.isFinite(boundedTime(adj, a, b, Infinity));
+    const held = [];
+    const consider = (a, b, h, walked) => {
+      const g = guess(a, b);
+      if (a === b || have.has(key(a, b)) || boundedTime(adj, a, b, detour * g) <= detour * g)
+        return;
+      if (crosses(a, b))
+        held.push([a, b, h, walked]);
+      else
+        add(a, b, h, walked);
+    };
+    for (const e of [...trails].sort((p, q2) => guess(p.a, p.b) - guess(q2.a, q2.b)))
+      consider(e.a, e.b, e.hours, true);
+    const pairs = [];
+    for (let a = 0; a < n; a++)
+      for (let b = a + 1; b < n; b++)
+        pairs.push([a, b, guess(a, b)]);
+    for (const [a, b, g] of pairs.sort((p, q2) => p[2] - q2[2]))
+      consider(a, b, g, false);
+    for (const [a, b, h, w] of held)
+      if (!have.has(key(a, b)) && !joined(a, b))
+        add(a, b, h, w);
+    return out;
+  }
+  function firstClear(p, candidates, segments) {
+    const ok = (c) => !segments.some(([P, Q]) => P !== c && Q !== c && properCross(c, p, P, Q));
+    return candidates.find(ok) ?? candidates[0];
+  }
+  var SPOTS = [[1, 0], [-1, 0], [1, -1], [1, 1], [-1, -1], [-1, 1], [0, -1], [0, 1]];
+  function overlap(a, b) {
+    return Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)) * Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  }
+  function segHitsBox(a, b, box) {
+    let t0 = 0, t1 = 1;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    for (const [p, q2] of [[-dx, a.x - box.x0], [dx, box.x1 - a.x], [-dy, a.y - box.y0], [dy, box.y1 - a.y]]) {
+      if (p === 0) {
+        if (q2 < 0)
+          return false;
+        continue;
+      }
+      const t = q2 / p;
+      if (p < 0) {
+        if (t > t1)
+          return false;
+        if (t > t0)
+          t0 = t;
+      } else {
+        if (t < t0)
+          return false;
+        if (t < t1)
+          t1 = t;
+      }
+    }
+    return true;
+  }
+  function placeLabels(labels, { boxes = [], segs = [], discs = [], bounds = null } = {}) {
+    const placed = [...boxes];
+    return labels.map((L) => {
+      let best = null;
+      SPOTS.forEach(([dx, dy], rank) => {
+        const gap = L.r + 0.25 * L.h, lift = dx && dy ? 0.35 : 1;
+        const x0 = dx > 0 ? L.x + gap : dx < 0 ? L.x - gap - L.w : L.x - L.w / 2;
+        const y0 = dy < 0 ? L.y - lift * gap - L.h : dy > 0 ? L.y + lift * gap : L.y - L.h / 2;
+        const box = { x0, y0, x1: x0 + L.w, y1: y0 + L.h }, unit = L.h * L.h;
+        let cost = 0.05 * rank * unit, clash = 0;
+        for (const b of placed)
+          clash += overlap(box, b);
+        if (bounds)
+          clash += L.w * L.h - overlap(box, bounds);
+        cost += 10 * clash;
+        for (const d of discs)
+          if (d.x !== L.x || d.y !== L.y)
+            cost += 6 * overlap(box, { x0: d.x - d.r, y0: d.y - d.r, x1: d.x + d.r, y1: d.y + d.r });
+        for (const [a, b] of segs)
+          if (segHitsBox(a, b, box))
+            cost += 0.4 * unit;
+        if (!best || cost < best.cost)
+          best = { cost, box, clash };
+      });
+      if (L.optional && best.clash > 1e-9)
+        return null;
+      placed.push(best.box);
+      return best.box;
+    });
+  }
+  function segCross(p1, p2, q1, q2) {
+    const d = (p2.x - p1.x) * (q2.y - q1.y) - (p2.y - p1.y) * (q2.x - q1.x);
+    if (Math.abs(d) < 1e-9)
+      return null;
+    const t = ((q1.x - p1.x) * (q2.y - q1.y) - (q1.y - p1.y) * (q2.x - q1.x)) / d;
+    const u = ((q1.x - p1.x) * (p2.y - p1.y) - (q1.y - p1.y) * (p2.x - p1.x)) / d;
+    return t > 0 && t < 1 && u >= 0 && u <= 1 ? { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y) } : null;
+  }
+  function suspectedCrossings(a, b, streams) {
+    const out = [];
+    for (const s of streams)
+      for (const [p, q2] of s.segs) {
+        const x = segCross(a, b, p, q2);
+        if (x) {
+          out.push({ key: s.key, name: s.name, at: x });
+          break;
+        }
+      }
+    return out;
+  }
+  function timeWords(h, certainty = "guess") {
+    if (certainty === "unknown" || !Number.isFinite(h))
+      return "?";
+    const t = h < 0.12 ? "a few minutes" : h < 0.9 ? `${Math.max(5, Math.round(h * 12) * 5)} min` : h < 1.25 ? certainty === "known" ? "an hour" : "about an hour" : h < 4 ? `${Math.round(h * 2) / 2} h` : h < 10 ? `${Math.round(h)} h` : "most of a day";
+    return certainty === "known" || /few|hour|day/.test(t) ? t : `~${t}`;
+  }
+  var awayWords = (h, certainty) => {
+    const t = timeWords(h, certainty);
+    return t === "?" ? "how far, I can\u2019t say" : `${t.replace(/^~/, "about ")} away`;
+  };
+  function explainTrip(L, path, predicted, actual, { believedDist = null, trueDist = null, idx: idx5, CELL: CELL2, soFar = false } = {}) {
+    if (!Number.isFinite(predicted) || predicted <= 0 || path.length < 3)
+      return null;
+    const ratio = actual / predicted;
+    if (Math.abs(actual - predicted) < Math.max(0.25, 0.35 * predicted))
+      return null;
+    const longer = ratio > 1;
+    let walked = 0, veg = 0, climb = 0, lakeSide = 0;
+    for (let i = 1; i < path.length; i++) {
+      const a = path[i - 1], b = path[i];
+      walked += Math.hypot(b.x - a.x, b.y - a.y);
+      veg += L.veg[idx5(b.x, b.y)];
+      climb += Math.max(0, L.elev[idx5(b.x, b.y)] - L.elev[idx5(a.x, a.y)]);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]])
+        if (L.lake[idx5(Math.max(0, Math.min(127, b.x + dx)), Math.max(0, Math.min(127, b.y + dy)))]) {
+          lakeSide++;
+          break;
+        }
+    }
+    const straight = Math.hypot(path[path.length - 1].x - path[0].x, path[path.length - 1].y - path[0].y) || 1;
+    veg /= path.length - 1;
+    const reasons = [];
+    if (longer) {
+      if (believedDist && trueDist && trueDist > 1.3 * believedDist)
+        reasons.push([trueDist / believedDist - 1, "it was farther than it looked"]);
+      reasons.push([walked / straight - 1.15, "I kept drifting off line and had to correct"]);
+      reasons.push([(veg - 0.45) * 2, "thick brush most of the way"]);
+      reasons.push([climb / 200, `a lot of climbing (${Math.round(climb / 10) * 10} m up, all told)`]);
+      reasons.push([lakeSide / path.length * 3, "water in the way; I had to go round"]);
+    } else {
+      if (believedDist && trueDist && trueDist < 0.75 * believedDist)
+        reasons.push([1 - trueDist / believedDist, "it was closer than it looked"]);
+      reasons.push([(0.35 - veg) * 2, "open ground; easy going"]);
+      reasons.push([0.2 - climb / 400, "mostly downhill or level"]);
+    }
+    const best = reasons.sort((a, b) => b[0] - a[0])[0];
+    const why = best && best[0] > 0 ? best[1] : longer ? "harder going than I guessed" : "easier going than I guessed";
+    if (soFar)
+      return `This is taking much longer than I expected (${timeWords(actual, "known")} so far, against ${timeWords(predicted, "known")} for the whole way): ${why}. I stopped to rethink.`;
+    return `${longer ? "Took longer" : "Quicker"} than I expected (${timeWords(actual, "known")}, not ${timeWords(predicted, "known")}): ${why}.`;
+  }
+
   // src/pack.js
   var b64 = (bytes) => {
     let s = "";
@@ -6261,7 +6564,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     };
     return tx;
   }
-  function attempt(proc, state, dice2, { live = null, finish = null } = {}) {
+  function attempt2(proc, state, dice2, { live = null, finish = null } = {}) {
     const tx = begin(proc, state, { live }), draws = [];
     const d = { ...dice2, note: (kind, id, fields = {}) => {
       draws.push({ ...fields, kind, id: String(id) });
@@ -6346,12 +6649,12 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     if (values.length && nums.length === values.length) {
       if (angle) {
         const s = nums.reduce((a, x) => a + Math.sin(x * Math.PI / 180), 0) / nums.length, c = nums.reduce((a, x) => a + Math.cos(x * Math.PI / 180), 0) / nums.length;
-        const mean2 = (Math.atan2(s, c) * 180 / Math.PI + 360) % 360, R2 = Math.hypot(s, c);
-        const dev = nums.map((x) => wrapDeg(x - mean2)).sort((a, b) => a - b);
-        return { kind: "angle", n: nums.length, mean: mean2, sd: R2 >= 1 ? 0 : Math.sqrt(-2 * Math.log(Math.max(R2, 1e-9))) * 180 / Math.PI, q: [0.05, 0.25, 0.5, 0.75, 0.95].map((p) => (mean2 + q(dev, p) + 360) % 360) };
+        const mean3 = (Math.atan2(s, c) * 180 / Math.PI + 360) % 360, R2 = Math.hypot(s, c);
+        const dev = nums.map((x) => wrapDeg(x - mean3)).sort((a, b) => a - b);
+        return { kind: "angle", n: nums.length, mean: mean3, sd: R2 >= 1 ? 0 : Math.sqrt(-2 * Math.log(Math.max(R2, 1e-9))) * 180 / Math.PI, q: [0.05, 0.25, 0.5, 0.75, 0.95].map((p) => (mean3 + q(dev, p) + 360) % 360) };
       }
-      const xs = [...nums].sort((a, b) => a - b), mean = xs.reduce((a, b) => a + b, 0) / xs.length;
-      return { kind: "num", n: xs.length, mean, min: xs[0], max: xs[xs.length - 1], q: [0.05, 0.25, 0.5, 0.75, 0.95].map((p) => q(xs, p)), same: before2 === void 0 ? null : xs.filter((x) => x === before2).length / xs.length };
+      const xs = [...nums].sort((a, b) => a - b), mean2 = xs.reduce((a, b) => a + b, 0) / xs.length;
+      return { kind: "num", n: xs.length, mean: mean2, min: xs[0], max: xs[xs.length - 1], q: [0.05, 0.25, 0.5, 0.75, 0.95].map((p) => q(xs, p)), same: before2 === void 0 ? null : xs.filter((x) => x === before2).length / xs.length };
     }
     const counts = {};
     for (const v of values) {
@@ -6441,7 +6744,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     for (let i = 0; i < n; i++) {
       const d = diceFor(i);
       try {
-        const fx = around(i, () => attempt(proc, stateFn(), d, { live: live?.(d) }), d);
+        const fx = around(i, () => attempt2(proc, stateFn(), d, { live: live?.(d) }), d);
         fx.tx.discard();
         leafRuns.push(outcomeLeaves(fx));
         drawRuns.push(fx.draws);
@@ -6487,7 +6790,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   }
   function reproduces(proc, stateFn, actAt, place, actual, { live = null, around = (i, f) => f() } = {}) {
     const d = { act: actAt.copy(), place };
-    const fx = around(0, () => attempt(proc, stateFn(), d, { live: live?.(d) }), d);
+    const fx = around(0, () => attempt2(proc, stateFn(), d, { live: live?.(d) }), d);
     fx.tx.discard();
     return JSON.stringify([outcomeLeaves(fx), fx.draws]) === JSON.stringify([outcomeLeaves(actual), actual.draws]);
   }
@@ -6523,233 +6826,6 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     }
     const seen = o.observed === 1 ? "every run" : o.observed === 0 ? "no run" : `${pct(o.observed)} of runs`;
     return { head: `${o.name}: ${seen}${o.happened === false && o.observed > 0 ? " (not this time)" : o.happened === true && o.observed < 1 ? " (this time, yes)" : ""}`, parts };
-  }
-
-  // src/craft.js
-  var bump = (x, lo, hi, tol) => x < lo ? Math.exp(-(((lo - x) / tol) ** 2)) : x > hi ? Math.exp(-(((x - hi) / tol) ** 2)) : 1;
-  var widen = (tol, sk) => tol * (1 + 0.6 * sk);
-  var ROLES = {
-    cutter: (p, sk) => bump(p.sharpness, 0.6, 1, widen(0.2, sk)) * bump(p.hardness, 5.5, 10, widen(1.5, sk)),
-    pounder: (p) => bump(p.hardness, 5.5, 10, 1.5) * bump(p.mass, 300, 1500, 250),
-    anvil: (p) => bump(p.mass, 2e3, 1e5, 800),
-    knapStone: (p, sk) => bump(p.fracture, 0.75, 1, widen(0.25, sk)) * bump(p.flaws, 0, 0.12, widen(0.25, sk)),
-    hearth: (p, sk) => bump(p.density, 0.22, 0.4, widen(0.25, sk)) * bump(p.moisture, 0, 0.13, widen(0.08, sk)) * bump(p.resin, 0, 0.3, widen(0.25, sk)),
-    spindle: (p, sk) => bump(p.straightness, 0.85, 1, widen(0.15, sk)) * bump(p.moisture, 0, 0.13, widen(0.08, sk)) * bump(p.length, 45, 90, widen(12, sk)),
-    tinder: (p, sk) => bump(p.moisture, 0, 0.1, widen(0.07, sk)) * bump(p.fineness, 0.6, 1, widen(0.25, sk))
-  };
-  function newCharacter(skills = {}) {
-    return { skills: { knapping: 0.05, woodwork: 0.1, firecraft: 0.05, ...skills }, fatigue: 0, hands: 0, callus: 0, focus: 1, peakHands: 0, outcomes: {}, attempts: 0 };
-  }
-  function effSkill(ch, skill, handLoad) {
-    return ch.skills[skill] * (1 - 0.6 * ch.fatigue) * (1 - 0.7 * ch.hands * clamp(handLoad / 3)) * (0.5 + 0.5 * ch.focus);
-  }
-  function work(ch, hours, handLoad, kcal) {
-    ch.fatigue = clamp(ch.fatigue + hours * kcal / 2e3);
-    ch.hands = clamp(ch.hands + hours * handLoad * 0.09 * (1 - 0.75 * ch.callus));
-    ch.callus = clamp(ch.callus + hours * handLoad * 6e-3);
-    ch.focus = clamp(ch.focus - hours * 0.06);
-    ch.peakHands = Math.max(ch.peakHands, ch.hands);
-  }
-  function normCdf(x) {
-    const t = 1 / (1 + 0.2316419 * Math.abs(x));
-    const d = 0.3989423 * Math.exp(-x * x / 2);
-    const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
-    return x > 0 ? 1 - p : p;
-  }
-  function attempt2(r, ch, spec, terms, hours = spec.median) {
-    const se = effSkill(ch, spec.skill, spec.handLoad);
-    const mean = terms.reduce((s, [w, x]) => s + w * Math.log(Math.max(x, 1e-3)), 0) + spec.kSkill * se + spec.kEffort * Math.log(hours / spec.median);
-    const sd = 1 - 0.7 * ch.skills[spec.skill];
-    const z = mean + sd * r.normal();
-    const p = 1 - normCdf((spec.theta - mean) / sd);
-    ch.skills[spec.skill] = clamp(ch.skills[spec.skill] + spec.learn * p * (1 - p) * (1 - ch.skills[spec.skill]));
-    work(ch, hours, spec.handLoad, spec.kcal);
-    ch.attempts++;
-    return { success: z > spec.theta, margin: z - spec.theta, p };
-  }
-  var workmanship = (margin) => clamp(1 / (1 + Math.exp(-1.5 * margin)));
-  function dull(tool, hours, workedHardness, k = 1.2) {
-    tool.props.sharpness = clamp(tool.props.sharpness - k * hours * (workedHardness / tool.props.hardness) ** 2);
-  }
-  var woodHardness = (density) => 1 + 3 * density;
-  function dry(item2, days, ambient2) {
-    item2.props.moisture = ambient2 + (item2.props.moisture - ambient2) * Math.exp(-0.4 * days);
-  }
-  var nextId = 1;
-  var item = (name, props, provenance) => ({ id: nextId++, name, props, provenance });
-  function knapFlakes(r, ch, stone, hammer, anvil) {
-    const res = attempt2(
-      r,
-      ch,
-      { skill: "knapping", kSkill: 3, theta: -0.5, kEffort: 0.5, median: 0.25, learn: 0.08, handLoad: 1.5, kcal: 200 },
-      [[1, ROLES.knapStone(stone.props, ch.skills.knapping)], [0.5, ROLES.pounder(hammer.props)], [0.3, ROLES.anvil(anvil.props)]]
-    );
-    const n = res.success ? Math.min(4, 1 + Math.floor(res.margin * 2)) : res.margin > -1.2 ? 1 : 0;
-    const flakes = [];
-    for (let i = 0; i < n; i++) {
-      flakes.push(item("flake", {
-        sharpness: clamp(0.55 + 0.3 * stone.props.fracture + 0.08 * res.margin + r.normal(0, 0.05)),
-        hardness: stone.props.hardness,
-        fracture: stone.props.fracture,
-        mass: Math.round(r.uniform(5, 20))
-      }, stone.provenance));
-    }
-    return { ...res, flakes };
-  }
-  var NOTCH = { skill: "woodwork", kSkill: 2.5, theta: -0.4, kEffort: 0.6, median: 0.4, learn: 0.06, handLoad: 1, kcal: 160 };
-  function notchHearth(r, ch, wood, cutter, hours = NOTCH.median) {
-    const res = attempt2(r, ch, NOTCH, [[1, ROLES.cutter(cutter.props, ch.skills.woodwork)]], hours);
-    dull(cutter, hours, woodHardness(wood.props.density));
-    const board = item("hearth board", { density: wood.props.density, resin: wood.props.resin, moisture: wood.props.moisture, notch: 0.15 + 0.85 * workmanship(res.margin + 0.5), life: 1, socket: 0 }, wood.provenance);
-    return { ...res, board };
-  }
-  function refineNotch(r, ch, board, cutter, hours = 0.6) {
-    const res = attempt2(r, ch, NOTCH, [[1, ROLES.cutter(cutter.props, ch.skills.woodwork)]], hours);
-    dull(cutter, hours, woodHardness(board.props.density));
-    const before2 = board.props.notch;
-    if (res.margin < -1.5)
-      board.props.notch = Math.max(0.15, before2 - 0.05);
-    else
-      board.props.notch = clamp(before2 + (1 - before2) * 0.5 * workmanship(res.margin));
-    return { ...res, before: before2, after: board.props.notch };
-  }
-  function carveSpindle(r, ch, shoot, cutter) {
-    const res = attempt2(
-      r,
-      ch,
-      { skill: "woodwork", kSkill: 2.5, theta: -0.4, kEffort: 0.6, median: 0.5, learn: 0.06, handLoad: 1, kcal: 160 },
-      [[1, ROLES.cutter(cutter.props, ch.skills.woodwork)]]
-    );
-    dull(cutter, 0.5, woodHardness(shoot.props.density));
-    const spindle = item("spindle", {
-      density: shoot.props.density,
-      moisture: shoot.props.moisture,
-      length: 70,
-      // A poor tool leaves the shaft rough, but it can't bend a straight shoot: small effect on straightness.
-      straightness: clamp(shoot.props.straightness * (0.93 + 0.07 * workmanship(res.margin)))
-    }, shoot.provenance);
-    return { ...res, spindle };
-  }
-  function makeTinder(r, ch, material) {
-    const res = attempt2(r, ch, { skill: "firecraft", kSkill: 2, theta: -0.8, kEffort: 0.5, median: 0.2, learn: 0.04, handLoad: 0.5, kcal: 140 }, []);
-    return { ...res, tinder: item("tinder bundle", { moisture: material.props.moisture, fineness: clamp(0.45 + 0.4 * workmanship(res.margin)) }, material.provenance) };
-  }
-  var HAND_DRILL = { skill: "firecraft", kSkill: 1.89, theta: 1.2, kEffort: 0.5, median: 0.25, learn: 0.08, handLoad: 3, kcal: 400 };
-  function handDrill(r, ch, board, spindle) {
-    var _a;
-    const sk = ch.skills.firecraft;
-    const res = attempt2(r, ch, HAND_DRILL, [[1, ROLES.hearth(board.props, sk)], [1, ROLES.spindle(spindle.props, sk)], [0.6, board.props.notch], [0.4, 0.4 + 0.6 * board.props.socket]]);
-    board.props.socket = clamp(board.props.socket + (1 - board.props.socket) * 0.3);
-    board.props.life = clamp(board.props.life - (0.05 + 0.1 * (0.45 - board.props.density)));
-    spindle.props.length -= 1.5;
-    const key = `hearth: ${board.provenance.name}`;
-    const o = (_a = ch.outcomes)[key] ?? (_a[key] = { tries: 0, embers: 0 });
-    o.tries++;
-    if (res.success)
-      o.embers++;
-    return { ...res, ember: res.success ? item("ember", { vigor: workmanship(res.margin) }, board.provenance) : null };
-  }
-  function searchNaturalEdge(r, ch, src) {
-    work(ch, 0.5, 0.2, 180);
-    ch.attempts++;
-    const found = r.chance(clamp(0.25 + 0.6 * src.props.rate) * (0.7 + 0.3 * ch.focus));
-    if (!found)
-      return { flake: null };
-    return { flake: item("natural edge", { sharpness: clamp(src.props.sharpness + r.normal(0, 0.12)), hardness: src.props.hardness, fracture: 0.2, mass: Math.round(r.uniform(10, 40)) }, src.provenance) };
-  }
-  function splinterBone(r, ch, bone, hammer) {
-    const res = attempt2(r, ch, { skill: "knapping", kSkill: 1.5, theta: -0.8, kEffort: 0.3, median: 0.2, learn: 0.04, handLoad: 0.5, kcal: 160 }, [[0.5, ROLES.pounder(hammer.props)]]);
-    const n = res.success ? 1 + (res.margin > 0.5 ? 1 : 0) : 0;
-    const out = [];
-    for (let i = 0; i < n; i++)
-      out.push(item("bone splinter", { sharpness: clamp(0.6 + r.normal(0, 0.12)), hardness: 3, fracture: 0.3, mass: Math.round(r.uniform(4, 12)) }, bone.provenance));
-    return { ...res, flakes: out };
-  }
-  function lightFire(r, ch, ember, tinder) {
-    const res = attempt2(
-      r,
-      ch,
-      { skill: "firecraft", kSkill: 1.5, theta: -0.6, kEffort: 0.3, median: 0.15, learn: 0.05, handLoad: 0.3, kcal: 180 },
-      [[1, ROLES.tinder(tinder.props, ch.skills.firecraft)], [0.8, ember.props.vigor]]
-    );
-    return res;
-  }
-  function pickMaterials(world, hearthChoice, ambient2) {
-    const mats = materialsOf(world);
-    const site2 = "camp";
-    const withPatch = (m) => {
-      const e = [...world.plants, ...world.stones].find((x) => x.id === m.source);
-      const vary = e?.varying?.find((v) => v.id === "woodDensity");
-      const density = vary ? samplePatch(world, e.id, site2, e.habitats[0].micro).traits.woodDensity : m.props.density;
-      return { ...m, props: { ...m.props, density } };
-    };
-    const stones = mats.filter((m) => m.material === "stone");
-    const knap = [...stones].sort((a, b) => b.props.fracture * (1 - b.props.flaws) - a.props.fracture * (1 - a.props.flaws))[0];
-    const natural = mats.filter((m) => m.material === "natural-edge").sort((a, b) => b.props.rate * b.props.sharpness - a.props.rate * a.props.sharpness)[0];
-    const boneSrc = mats.find((m) => m.material === "bone");
-    const hammer = stones.filter((s) => s.props.hardness >= 5.5).sort((a, b) => b.props.hardness - a.props.hardness)[0] ?? stones[0];
-    const anvil = stones.find((s) => s.props.slab) ?? stones[0];
-    const dead = mats.filter((m) => m.material === "dead-wood").map(withPatch).filter((m) => m.props.resin < 0.5);
-    dead.sort((a, b) => Math.abs(a.props.density - 0.3) - Math.abs(b.props.density - 0.3));
-    const usable = dead.filter((d) => d.props.density >= 0.15 && d.props.density <= 0.55);
-    const hearth = hearthChoice === "best" ? dead[0] : usable.length ? usable[usable.length - 1] : dead[dead.length - 1];
-    const stalk = mats.find((m) => m.material === "dead-stalk");
-    const shoots = mats.filter((m) => m.material === "live-wood" && m.props.straight).map(withPatch);
-    const deadShrub = mats.filter((m) => m.material === "dead-wood" && world.plants.find((p) => p.id === m.source)?.form === "shrub").map(withPatch)[0];
-    const tinderMat = mats.find((m) => m.material === "dry-grass") ?? mats.find((m) => m.material === "fluff") ?? mats.find((m) => m.material === "fungus-tinder" || m.material === "lichen-tinder") ?? mats.find((m) => m.material === "outer-bark" && m.props.papery);
-    if (!stones.length || !hearth || !(stalk || shoots.length) || !tinderMat)
-      return null;
-    const prov = (m) => ({ name: `${m.sourceName} (${m.part})`, source: m.source, part: m.part, site: site2 });
-    return {
-      stone: item("stone", { fracture: knap.props.fracture, flaws: knap.props.flaws, hardness: knap.props.hardness }, prov(knap)),
-      natural: natural ? { props: natural.props, provenance: prov(natural) } : null,
-      bone: boneSrc ? item("bone", { hardness: 3 }, prov(boneSrc)) : null,
-      hammer: item("hammerstone", { hardness: hammer.props.hardness, mass: 700 }, prov(hammer)),
-      anvil: item("anvil", { mass: 6e3 }, prov(anvil)),
-      hearthWood: item("dead wood", { density: hearth.props.density, resin: hearth.props.resin, moisture: ambient2 + 0.08 }, prov(hearth)),
-      spindleStock: stalk ? item("dead stalk", { density: 0.3, moisture: ambient2, straightness: 0.95 }, prov(stalk)) : item("green shoot", { density: shoots[0].props.density, moisture: 0.55, straightness: 0.9 }, prov(shoots[0])),
-      seasonedStock: !stalk && deadShrub ? item("dead shoot", { density: deadShrub.props.density, moisture: ambient2 + 0.02, straightness: 0.72 }, { ...prov(deadShrub), name: `${deadShrub.sourceName} (dead shoots)` }) : null,
-      tinderMat: item("tinder material", { moisture: ambient2 * 0.6 }, prov(tinderMat)),
-      hearthCandidates: dead.map((d) => `${d.sourceName} ${d.props.density.toFixed(2)}`)
-    };
-  }
-  function estimateFire(world, { skill = 0.06, hearthChoice = "best", maxDays = 30, efficiency = 0.5 } = {}) {
-    const ambient2 = clamp(0.05 + 0.07 * world.environment.water, 0.05, 0.35);
-    const m = pickMaterials(world, hearthChoice, ambient2);
-    if (!m)
-      return { blocked: "a fire-chain material is missing entirely" };
-    const knapMean = Math.log(Math.max(ROLES.knapStone(m.stone.props, skill), 1e-3)) + 3 * skill;
-    const pFlake = 1 - normCdf((-1.7 - knapMean) / (1 - 0.7 * skill));
-    const edgeSource = pFlake >= 0.05 ? "knapping" : m.natural ? "naturally sharp stone" : m.bone ? "bone splinters" : null;
-    if (!edgeSource)
-      return { blocked: `no way to get a cutting edge (stone doesn't flake, no sharp scree, no bones)`, pFlake };
-    const knapOK = (() => {
-      const km = Math.log(Math.max(ROLES.knapStone(m.stone.props, skill), 1e-3)) + 3 * skill;
-      return 1 - normCdf((-1.7 - km) / (1 - 0.7 * skill)) >= 0.05;
-    })();
-    const board = { density: m.hearthWood.props.density, resin: m.hearthWood.props.resin, moisture: ambient2, notch: knapOK ? 0.8 : 0.45 };
-    const pAttempt = (spindle) => {
-      const mean = Math.log(Math.max(ROLES.hearth(board, skill), 1e-3)) + Math.log(Math.max(ROLES.spindle(spindle, skill), 1e-3)) + 0.6 * Math.log(board.notch) + HAND_DRILL.kSkill * skill;
-      return 1 - normCdf((HAND_DRILL.theta - mean) / (1 - 0.7 * skill));
-    };
-    const pLight = 0.85;
-    const ready = m.spindleStock.name === "green shoot" ? Math.log((0.55 - ambient2) / 0.03) / 0.4 + 1 : 1;
-    const late0 = pAttempt({ straightness: m.spindleStock.props.straightness, moisture: m.spindleStock.name === "green shoot" ? ambient2 + 0.02 : m.spindleStock.props.moisture, length: 70 });
-    const early = m.spindleStock.name !== "green shoot" ? late0 : m.seasonedStock ? pAttempt({ ...m.seasonedStock.props, length: 70 }) : 0;
-    const late = pAttempt({ straightness: m.spindleStock.props.straightness, moisture: ambient2 + 0.02, length: 70 });
-    const perAttempt = 0.25 * HAND_DRILL.handLoad * 0.09 * 0.85;
-    const attemptsFirst = Math.floor(0.85 / perAttempt), attemptsLater = Math.floor((0.85 - 0.55 * 0.85) / perAttempt);
-    let survive = 1, median = null;
-    const curve = [];
-    for (let day = 2; day <= maxDays; day++) {
-      const p = (day >= ready ? late : early) * pLight * efficiency;
-      const n = day === 2 ? attemptsFirst : attemptsLater;
-      survive *= (1 - p) ** n;
-      curve.push(1 - survive);
-      if (median === null && survive <= 0.5)
-        median = day;
-    }
-    return { median, pFlake, edgeSource, pFireBy: (d) => curve[d - 2] ?? 1, early, late, ready: Math.ceil(ready), ambient: ambient2, hearth: m.hearthWood, spindle: m.seasonedStock ? "crooked dead shoots, then seasoned green" : m.spindleStock.name };
   }
 
   // src/acts.js
@@ -6798,31 +6874,15 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     if (hands)
       body.germs += k * (m - body.germs);
   }
-  function populationAt(world, micro, siteKey, factors, place, note2 = null) {
-    const out = [];
-    for (const e of [...world.stones, ...world.plants, ...world.animals]) {
-      const h = e.habitats.find((x) => x.micro === micro);
-      if (!h || e.kind === "animal" && e.cls !== "invertebrate")
-        continue;
-      const ar = place(`abund/${e.id}/${siteKey}`);
-      const count = (h.perInstance ?? h.pieces) * Math.exp((e.kind === "stone" ? 0 : 0.35 * factors.fertility) + 0.5 * ar.normal());
-      const p = 1 - Math.exp(-count / 2), here = ar.chance(p);
-      note2?.("lives here", e.id, { name: e.name, count, p, observed: here });
-      if (!here)
-        continue;
-      out.push({ e, n: count });
-    }
-    return out;
-  }
   var BONE_VIS = { glade: 1.3, outcrop: 1.3, scree: 1.3, streambed: 1.2, edge: 1, claybank: 1, streambank: 0.8, pond: 0.8, spring: 0.8, woodland: 0.6, deadfall: 0.6 };
   var isFineBoned = (a) => /bird|soarer|fish|frog|lizard/.test(a.traits.key ?? "") || (a.traits.mass ?? 0) < 3;
-  function findBones(world, site2, effort, rng, note2 = null) {
+  function findBones(world, site2, effort, rng, note2 = null, place = null) {
     const vis = BONE_VIS[site2.micro] ?? 1;
     const found = { fine: 0, big: 0 };
     for (const a of world.animals) {
       if (a.cls === "invertebrate" || !a.habitats.some((h) => h.micro === site2.micro))
         continue;
-      const mu = effort * vis * (a.perKm2 ?? 0) * (a.traits.mass ?? 0) / 600;
+      const mu = effort * vis * (place ? densityAt(a, site2.key, place) : a.perKm2 ?? 0) * (a.traits.mass ?? 0) / 600;
       let n = 0, L = Math.exp(-mu), p = 1;
       do {
         n++;
@@ -6847,34 +6907,35 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     ((_a = mem.entities)[_b = memKeyE(e)] ?? (_a[_b] = { seen: 0, traits: {} })).seen++;
   }
   function smellsHere(v, here, rng) {
-    const out = [], mem = v.mem;
+    const out = [], mem = v.mem, cond = v.here.cond, g = cond.g;
     const nm = (e) => mem.entities[memKeyE(e)] ? ` (${e.name})` : "";
-    const find = (f) => here.find((e) => e.kind === "plant" && f(e.traits ?? {}));
+    const find = (f) => here.find((e) => e.kind === "plant" && f(e.traits ?? {}, e));
+    const about = (e) => animalNow(e, cond).here;
     const resin = find((t) => t.resin > 0.5);
     if (resin)
       out.push(`resin${nm(resin)}`);
-    const onion = find((t) => t.defense === "sulfur");
+    const onion = find((t, e) => t.defense === "sulfur" && plantNow(v.world, e, g).leaf >= 0.3);
     if (onion)
       out.push(`onion, underfoot${nm(onion)}`);
-    const mint = find((t) => t.defense === "aromatic");
+    const mint = find((t, e) => t.defense === "aromatic" && plantNow(v.world, e, g).leaf >= 0.3);
     if (mint)
       out.push(`something sharp and minty${nm(mint)}`);
-    const fruit = find((t) => ["berry", "drupe"].includes(t.fruit));
+    const fruit = find((t, e) => ["berry", "drupe"].includes(t.fruit) && fruitShows(v.world, e, g));
     if (fruit)
       out.push(`ripe fruit${nm(fruit)}`);
-    if (here.some((e) => e.form === "mushroom"))
+    if (here.some((e) => e.form === "mushroom" && plantNow(v.world, e, g).notice >= 0.3))
       out.push("damp, mushroomy earth");
-    if (here.some((e) => e.traits?.key === "bee"))
+    if (here.some((e) => e.traits?.key === "bee" && about(e)))
       out.push("a waxy sweetness where bees are working");
-    if (here.some((e) => e.traits?.key === "fly") && rng.chance(0.4))
+    if (here.some((e) => e.traits?.key === "fly" && about(e)) && rng.chance(0.4))
       out.push("droppings somewhere close, by the flies");
-    if (v.world.animals.some((a) => a.traits.key === "predator" && a.habitats.some((h) => h.micro === v.site.micro)) && rng.chance(0.3))
+    if (v.world.animals.some((a) => a.traits.key === "predator" && about(a) && a.habitats.some((h) => h.micro === v.site.micro)) && rng.chance(0.3))
       out.push("a musky reek where something has marked its ground");
     if (v.site.micro === "pond" && v.here.marsh)
       out.push("stagnant water and rotting reeds");
     return out;
   }
-  var SURVEY = {
+  var SURVEY2 = {
     id: "survey",
     name: "Survey",
     reads: ["site.key", "site.micro", "here.factors", "here.cond", "here.water", "here.marsh", "here.seeing", "world"],
@@ -6905,7 +6966,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         noteKnown(v.site, v.mem, e);
       }
       for (const a of v.world.animals.filter((a2) => a2.cls !== "invertebrate" && a2.signs && a2.habitats.some((h) => h.micro === v.site.micro))) {
-        if (!animalNow(a, cond).here || !roll(d, "sign", a.id, (1 - Math.exp(-a.perKm2 * 0.3)) * cond.light * (cond.snowCm > 2 ? 1.5 : 1 - 0.6 * cond.litter), { name: `sign of ${a.name}` }))
+        if (!animalNow(a, cond).here || !roll(d, "sign", a.id, (1 - Math.exp(-densityAt(a, v.site.key, d.place) * 0.3)) * cond.light * (cond.snowCm > 2 ? 1.5 : 1 - 0.6 * cond.litter), { name: `sign of ${a.name}` }))
           continue;
         const known = v.mem.entities[memKeyE(a)];
         const sign = a.signs.damage ?? (a.signs.track ? `sets of ${a.signs.track.type}` : a.signs.den);
@@ -6914,13 +6975,13 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
         rows.push({ n: 0.5, text: `${/^sets/.test(sign) ? "a few" : "1"} ${sign.replace(/^(the|a) /, "")}${known ? ` (${a.name})` : ", left by some animal"}` });
         seen[`sign of ${a.name}`] = 1;
       }
-      const bones = findBones(v.world, v.site, 0.35, rng, d.note);
+      const bones = findBones(v.world, v.site, 0.35, rng, d.note, d.place);
       for (const t of boneLines(bones))
         rows.push({ n: 0.4, text: t });
       rows.sort((a, b) => b.n - a.n);
       const water = v.world.water.find((w) => w.micro === (v.site.micro === "streambed" ? "streambank" : v.site.micro));
       const sm = smellsHere(v, present.map((r) => r.e), rng);
-      const lines = [...water ? [v.here.water ? `water: ${water.name}` : "water: none now; the bed is dry"] : [], ...rows.map((r) => r.text), ...sm.length ? [`smells: ${sm.join("; ")}`] : [], ...namingSentences(fresh, v.mem, v.site.key, entityIn(v.world), rng)];
+      const lines = [...water ? [v.here.water ? `water: ${water.name}` : "water: none now; the bed is dry"] : [], ...rows.map((r) => r.text), ...sm.length ? [`smells: ${sm.join("; ")}`] : [], ...namingSentences(fresh, v.mem, v.site.key, entityIn(v.world), rng, { world: v.world, g: cond.g })];
       return {
         say: [...v.here.seeing ? [[v.here.seeing, "thought"]] : [], [`Surveying what I can see from here:
 ${lines.join("\n")}`, "survey"]],
@@ -7595,19 +7656,19 @@ ${lines.join("\n")}`, "survey"]],
   var skyNow = () => S._sky?.k === `${S.day}/${S.t}` ? S._sky.v : (S._sky = { k: `${S.day}/${S.t}`, v: skyAt(S.world, S.day, S.t) }).v;
   var groundNow = () => groundAt(S.world, S.day);
   function landNow(L) {
-    let memo = { day: null, g: null, cross: /* @__PURE__ */ new Map() };
+    let memo2 = { day: null, g: null, cross: /* @__PURE__ */ new Map() };
     const today = () => {
-      if (memo.day !== S.day)
-        memo = { day: S.day, g: groundNow(), cross: /* @__PURE__ */ new Map() };
-      return memo.g;
+      if (memo2.day !== S.day)
+        memo2 = { day: S.day, g: groundNow(), cross: /* @__PURE__ */ new Map() };
+      return memo2.g;
     };
     return {
       cross(c) {
         const g = today();
-        let v = memo.cross.get(c);
+        let v = memo2.cross.get(c);
         if (!v) {
           v = crossingNow(L, g, c, crossingAt(c % N, Math.floor(c / N)));
-          memo.cross.set(c, v);
+          memo2.cross.set(c, v);
         }
         return v;
       },
@@ -7619,7 +7680,12 @@ ${lines.join("\n")}`, "survey"]],
       sound(a) {
         const w = waterAt(L, today(), cellOf(a.x, a.y));
         return !w ? 1 : w.dry ? 0 : w.frozen ? 0.3 : Math.sqrt(Math.min(4, today().flow));
+      },
+      birds() {
+        const g = today();
+        return g.week < -4 ? 0 : g.phase < 0 && S.world.environment.seasonality > 0.35 ? 0.3 : 1;
       }
+      // waterbirds leave an iced lake, and are fewer and quieter out of the growing season
     };
   }
   var isNight = () => skyNow().sunAlt < -6;
@@ -7636,7 +7702,7 @@ ${lines.join("\n")}`, "survey"]],
   }
   function makeWorld(seed, preset) {
     const store = typeof window !== "undefined" ? window.__worldStore : null;
-    const key = `${seed}|${preset ?? ""}|mc150|${false ? "dev" : "0b4e687bdeca"}`;
+    const key = `${seed}|${preset ?? ""}|mc150|${false ? "dev" : "c844b94a6e0e"}`;
     const kept = store?.get(key);
     if (kept)
       return unpack(kept);
@@ -7734,8 +7800,8 @@ ${lines.join("\n")}`, "survey"]],
     const m = S.L.micro[cellOf(x, y)];
     return m === "lake" ? "pond" : m;
   }
-  var SITE_NOUN = { woodland: "wood", edge: "thicket", glade: "clearing", streambank: "stream bank", streambed: "gravel bar", pond: "marsh", outcrop: "rocks", scree: "scree", claybank: "clay bank", spring: "spring", deadfall: "deadfall" };
-  var LANDMARK_NOUN = { hill: "hill", cliff: "cliff", lake: "lake", waterfowl: "lake", falls: "falls", cascade: "cascade", rapids: "river", river: "river", stream: "stream", brook: "brook", "river trace": "tree line" };
+  var SITE_NOUN = { woodland: "wood", edge: "thicket", glade: "clearing", streambank: "stream bank", streambed: "gravel bar", pond: "marsh", outcrop: "outcrop", scree: "scree slope", claybank: "clay bank", spring: "spring", deadfall: "deadfall" };
+  var LANDMARK_NOUN = { hill: "hill", cliff: "cliff", lake: "lake", waterfowl: "lake", falls: "waterfall", cascade: "cascade", rapids: "river", river: "river", stream: "stream", brook: "brook", "river trace": "tree line" };
   function looksOf(kind, x, y) {
     const c = cellOf(x, y), veg = S.L.veg[c], tags = [];
     if (kind === "hill") {
@@ -7759,14 +7825,25 @@ ${lines.join("\n")}`, "survey"]],
     }
     return tags.filter(Boolean);
   }
+  var article2 = (w) => /^[aeiou]/i.test(w) ? "an" : "a";
+  var generic = (w) => `${article2(w)} ${w}`;
+  var isGeneric = (name) => /^an? /.test(name ?? "");
+  var nameAfter = (label, more = "") => isGeneric(label) ? more ? ` (${more})` : "" : ` (${label}${more ? `, ${more}` : ""})`;
+  var NUMBER = ["", "one", "two", "three", "four", "five", "six"];
+  function countSame(names) {
+    const n = /* @__PURE__ */ new Map();
+    for (const x of names)
+      n.set(x, (n.get(x) ?? 0) + 1);
+    return [...n].map(([x, k]) => k > 1 && isGeneric(x) && /^an? \w+$/.test(x) ? `${NUMBER[k] ?? k} ${x.replace(/^an? /, "")}s` : k > 1 ? Array(k).fill(x).join(" and ") : x);
+  }
   function uniqueName(base) {
     S.lastTag = null;
-    return `the ${base}`;
+    return generic(base);
   }
   function waterName(wkey, kind, pos) {
     if (S.waterNames[wkey])
       return S.waterNames[wkey];
-    const noun = /^lake/.test(wkey) ? "lake" : /^falls/.test(wkey) ? kind === "cascade" ? "cascade" : "falls" : /^brook/.test(wkey) ? "brook" : ["river", "rapids"].includes(kind) ? "river" : "stream";
+    const noun = /^lake/.test(wkey) ? "lake" : /^falls/.test(wkey) ? kind === "cascade" ? "cascade" : "waterfall" : /^brook/.test(wkey) ? "brook" : ["river", "rapids"].includes(kind) ? "river" : "stream";
     return S.waterNames[wkey] = uniqueName(noun);
   }
   var SIZE_NOUN = ["", "brook", "stream", "river"];
@@ -7825,7 +7902,7 @@ ${lines.join("\n")}`, "survey"]],
   }
   function newStream(size, pos) {
     const id = `s${S.streams.length + 1}`, noun = SIZE_NOUN[size];
-    const st = { id, name: `the ${noun}`, size, fixes: [] };
+    const st = { id, name: generic(noun), size, fixes: [] };
     S.waterNames[id] = st.name;
     S.streams.push(st);
     return st;
@@ -7868,8 +7945,8 @@ ${lines.join("\n")}`, "survey"]],
     return { st, isNew: true, fix };
   }
   function streamTrees() {
-    const memo = `${S.streamVer ?? 0}/${[...S.streamGaps ?? []].length}`;
-    if (S.treeMemo?.key === memo)
+    const memo2 = `${S.streamVer ?? 0}/${[...S.streamGaps ?? []].length}`;
+    if (S.treeMemo?.key === memo2)
       return S.treeMemo.trees;
     const gapKey = (a, b) => `${a.x},${a.y}>${b.x},${b.y}`;
     const trees = S.streams.filter((st) => st.fixes.length).map((st) => {
@@ -7895,7 +7972,7 @@ ${lines.join("\n")}`, "survey"]],
       const lone = st.fixes.filter((f) => !segs.some(([a, b]) => a === f || b === f));
       return { id: st.id, name: st.name, segs, lone };
     });
-    S.treeMemo = { key: memo, trees };
+    S.treeMemo = { key: memo2, trees };
     return trees;
   }
   function nearestOnStream(t, from) {
@@ -7936,7 +8013,7 @@ ${lines.join("\n")}`, "survey"]],
   var segAt = (c) => Object.values(S.segNames ?? {}).find((g) => g.cells.includes(c)) ?? null;
   function waterNameAt(st, x, y) {
     const g = segAt(cellOf(x, y));
-    return g ? g.name : st?.name ?? "the stream";
+    return g ? g.name : st?.name ?? "a stream";
   }
   var titleCase = (w) => w.split(/[\s-]+/).map(cap5).join(" ");
   function newSegmentName(cells) {
@@ -8069,8 +8146,8 @@ ${lines.join("\n")}`, "survey"]],
   }
   var DETOUR = 1.5;
   function placeLinks() {
-    const memo = `${S.sites.length}/${JSON.stringify(S.walked)}`;
-    if (S.linkMemo?.key === memo)
+    const memo2 = `${S.sites.length}/${JSON.stringify(S.walked)}`;
+    if (S.linkMemo?.key === memo2)
       return S.linkMemo.edges;
     const ix = new Map(S.sites.map((t, i) => [t.key, i]));
     const trails = Object.entries(S.walked).map(([k, w]) => {
@@ -8078,7 +8155,7 @@ ${lines.join("\n")}`, "survey"]],
       return { a, b, hours: w.hours };
     }).filter((e) => e.a !== void 0 && e.b !== void 0);
     const edges = trailGraph(S.sites, trails, (a, b) => lineHours2(S.L, S.sites[a], S.sites[b]), { detour: DETOUR });
-    S.linkMemo = { key: memo, edges };
+    S.linkMemo = { key: memo2, edges };
     return edges;
   }
   var byDistance = (p) => [...S.sites].sort((s, t) => Math.hypot(s.x - p.x, s.y - p.y) - Math.hypot(t.x - p.x, t.y - p.y));
@@ -8208,7 +8285,7 @@ ${lines.join("\n")}`, "survey"]],
     const same = S.sites.find((t) => t.x === x && t.y === y);
     if (same)
       return same;
-    const noun = { fork: "fork", falls: "falls", spring: "spring", mouth: "mouth", outlet: "outlet", crossing: "crossing" }[waterMark({ x, y, micro })] ?? SITE_NOUN[micro] ?? micro;
+    const noun = { fork: "fork", falls: "waterfall", spring: "spring", mouth: "stream mouth", outlet: "lake outlet", crossing: "crossing" }[waterMark({ x, y, micro })] ?? SITE_NOUN[micro] ?? micro;
     const headOf = noun === "fork" ? Object.values(S.segNames ?? {}).find((g) => g.top.x === x && g.top.y === y) : null;
     const s = { key: `p${x}_${y}`, x, y, micro, name: name ?? headOf?.name ?? uniqueName(noun), known: /* @__PURE__ */ new Set(), visits: 0, hut: false, fireUntil: -1 };
     S.sites.push(s);
@@ -8355,7 +8432,7 @@ ${lines.join("\n")}`, "survey"]],
       if (!isNew) {
         if (c.channel === "sight" && sus.channel === "sound") {
           sus.channel = "sight";
-          found.upgraded.push(`${cuePhrase(c, g, s)} (${sus.label})`);
+          found.upgraded.push(`${cuePhrase(c, g, s)}${nameAfter(sus.label)}`);
           became = "seen now";
         } else if (before2.has(sus)) {
           stillSeen.add(sus);
@@ -8363,7 +8440,7 @@ ${lines.join("\n")}`, "survey"]],
         } else
           became = "merged";
       } else
-        (sus.group !== "water" ? found.land : c.channel === "sound" ? found.heard : found.seen).push(`${cuePhrase(c, g, s)} (${sus.another ?? sus.label})`);
+        (sus.group !== "water" ? found.land : c.channel === "sound" ? found.heard : found.seen).push(`${cuePhrase(c, g, s)}${sus.another ? ` (${sus.another})` : nameAfter(sus.label)}`);
       note("sensed", c.key, cueDraw(c, { bearing: (g.bearing + 360) % 360, dist: g.dist, became, suspect: sus.id }));
     }
     const smelled = [];
@@ -8372,7 +8449,7 @@ ${lines.join("\n")}`, "survey"]],
         const { sus, isNew, g } = associateSmell(c, s);
         note("smelled", c.key, { name: c.key, what: c.kind, strength: c.strength, trueBearing: c.trueBearing, trueDist: c.trueDist, bearing: g?.bearing, dist: g?.dist, became: isNew ? "new" : "again", suspect: sus.id });
         if (isNew || scan)
-          smelled.push(`${c.words} (${sus.label}${isNew ? "" : ", again"})`);
+          smelled.push(`${c.words}${nameAfter(sus.label, isNew ? "" : "again")}`);
       }
     const report = [];
     if (found.heard.length)
@@ -8929,7 +9006,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const before2 = new Set(ids.slice(0, endsOnWater ? -1 : void 0));
     const crossed = names.filter((_, i) => before2.has(keys[i]));
     const where = S.L.veg[cellOf(trip.end.x, trip.end.y)] > 0.55 ? "thick woodland" : S.L.veg[cellOf(trip.end.x, trip.end.y)] > 0.3 ? "scrubby woodland" : "open ground";
-    const text = `${S.looking ? "Walked, watching for " + S.looking.label + "," : "Pushed"} ${label} for ${dur}, through ${where}${crossed.length ? `; crossed ${crossed.join(" and ")}` : ""}.${stoppedAtWater ? " Parched, I stopped at the water." : ""}${hours >= 2.9 && !stoppedAtWater && budget >= 3 ? " Stopped to get my bearings." : ""}`;
+    const text = `${S.looking ? "Walked, watching for " + S.looking.label + "," : "Pushed"} ${label} for ${dur}, through ${where}${crossed.length ? `; crossed ${countSame(crossed).join(" and ")}` : ""}.${stoppedAtWater ? " Parched, I stopped at the water." : ""}${hours >= 2.9 && !stoppedAtWater && budget >= 3 ? " Stopped to get my bearings." : ""}`;
     arrive(trip.end.x, trip.end.y, text, () => {
       notePassing(trip.path);
       lookAlong(trip.path);
@@ -9092,10 +9169,10 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const [hours, kcal] = peek(proc, stateFor(binding), (v) => [hoursOf(proc, v), kcalOf(proc, v)]);
     if (hours > 0)
       pass(hours, kcal);
-    const real = S, outer = noteSink, d = { ...dice(), note: outer ? (kind, id, f) => outer(kind, `${proc.id}/${id}`, f) : null }, memo = {};
-    const live = { has: (k) => k === "rng" || LIVE.has(k) || MEMOS.has(k), get: (k) => k === "rng" ? d.act : MEMOS.has(k) ? memo[k] : real[k], set: (k, x) => {
+    const real = S, outer = noteSink, d = { ...dice(), note: outer ? (kind, id, f) => outer(kind, `${proc.id}/${id}`, f) : null }, memo2 = {};
+    const live = { has: (k) => k === "rng" || LIVE.has(k) || MEMOS.has(k), get: (k) => k === "rng" ? d.act : MEMOS.has(k) ? memo2[k] : real[k], set: (k, x) => {
       if (MEMOS.has(k))
-        memo[k] = x;
+        memo2[k] = x;
       else
         real[k] = x;
     } };
@@ -9103,7 +9180,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     depth++;
     let fx;
     try {
-      fx = attempt(proc, stateFor(binding), d, { live, finish: finishFor(quiet) });
+      fx = attempt2(proc, stateFor(binding), d, { live, finish: finishFor(quiet) });
     } catch (e) {
       if (/without declaring/.test(e.message) && depth === 1)
         console.error(`contract: ${e.message}`);
@@ -9872,31 +9949,31 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       return e.cues.slice(0, 2).join("; ");
     if (e.kind === "animal")
       return e.cues[0];
-    const t = e.traits, b = [];
+    const t = e.traits, b = [], g = groundNow(), shows = (w) => cueShows(S.world, e, w, g);
     b.push({ tree: "tree", shrub: "bush", herb: "low plant", grass: t.habitat.moisture > 0.8 ? "tall reed" : "grass" }[t.form]);
     if (t.paperBark)
       b.push("papery white bark");
     else if (t.resin > 0.5)
       b.push("resinous bark");
-    if (t.umbel)
+    if (t.umbel && shows("flowers"))
       b.push("umbrella-shaped flowers");
-    if (t.squareStem)
+    if (t.squareStem && shows("stems"))
       b.push("square stems");
-    if (t.defense === "stinging")
+    if (t.defense === "stinging" && shows("stems"))
       b.push("stiff stinging hairs");
     if (t.defense === "thorns")
       b.push("thorny");
-    if (t.defense === "silica")
+    if (t.defense === "silica" && shows("blades"))
       b.push("sharp-edged blades");
     const fruit = { berry: `${t.fruitColor} berries`, drupe: `${t.fruitColor} stonefruit`, nut: t.defense === "tannin" ? "acorn-like nuts" : "nuts", pod: "pods", seed: "small seeds", grain: "nodding seed heads" }[t.fruit];
-    if (fruit)
+    if (fruit && shows(fruit))
       b.push(fruit);
-    if (t.fluff)
+    if (t.fluff && shows("fluff"))
       b.push("fluffy seed heads");
-    if (t.spindleStalk && t.form === "herb")
+    if (t.spindleStalk && t.form === "herb" && shows("dead stalks"))
       b.push("tall dead stalks");
     if (b.length < 3)
-      b.push(t.pace > 0.3 ? "soft leaves" : t.pace < -0.3 ? "leathery leaves" : "plain leaves");
+      b.push(!shows("leaves") ? ["tree", "shrub"].includes(t.form) ? "bare twigs" : "dead stems" : t.pace > 0.3 ? "soft leaves" : t.pace < -0.3 ? "leathery leaves" : "plain leaves");
     return b.slice(0, 4).join(", ");
   }
   var memKeyE2 = (e) => e.lookalike?.mimics ?? e.id;
@@ -9931,12 +10008,14 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       stick.props.hardness = Math.max(0.15, stick.props.hardness - 0.03 * (1 - stick.props.hardness));
     rows.sort((a, b) => b.n - a.n);
     const how = `turned stones and logs, peeled bark, prodded the litter${stick ? " with the digging stick" : " with my fingers"}`;
-    const named = namingSentences(fresh, S.mem, s.key, entity, S.rng);
+    const named = namingSentences(fresh, S.mem, s.key, entity, S.rng, { world: S.world, g: groundNow() });
     log(rows.length ? `Poking around (${how}):
 ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half an hour (${how}); nothing worth having.`, "survey");
   }
-  var boneFinds = (s, effort) => findBones(S.world, s, effort, S.rng, note);
+  var boneFinds = (s, effort) => findBones(S.world, s, effort, S.rng, note, dice().place);
   var matOf = (e, cls) => S.mats.find((m) => m.source === e.id && m.material === cls);
+  var partUp = (e, re) => e.kind === "plant" && e.parts.some((p) => re.test(p.part) && partNow(S.world, e, p.part, groundNow()) >= SHOWS);
+  var aboutNow = (e) => e.kind !== "animal" || animalNow(e, condNow()).here;
   var FOCI = {
     spindle: {
       label: "spindle wood",
@@ -9944,13 +10023,13 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
       nearLabel: "bushes and tall plants",
       rank: (e) => e.traits.spindleStalk ? 2 : 0,
       makeshift: (e) => e.kind === "plant" && ["tree", "shrub"].includes(e.form) ? "only crooked dead twigs; would need a lot of trimming" : null,
-      match: (e) => e.kind === "plant" && (e.traits.spindleStalk && e.form === "herb" ? "tall, straight dead stalks" : e.form === "shrub" && matOf(e, "live-wood")?.props.straight ? "straight shoots" : null)
+      match: (e) => e.kind === "plant" && (e.traits.spindleStalk && e.form === "herb" && partUp(e, /^dead stalks$/) ? "tall, straight dead stalks" : e.form === "shrub" && matOf(e, "live-wood")?.props.straight ? "straight shoots" : null)
     },
     hearth: {
       label: "hearth-board wood",
       match: (e) => e.kind === "plant" && ["tree", "shrub"].includes(e.form) ? `fallen dead wood; ${e.cues.find((c) => /bark/.test(c)) ?? "bark unremarkable"}${e.traits.resin > 0.5 ? " (resinous: poor for a hearth)" : ""}` : null,
       rank: (e) => (e.traits.resin > 0.5 ? -2 : 0) + (e.form === "tree" ? 1 : 0),
-      makeshift: (e) => e.kind === "plant" && e.traits.spindleStalk && e.form === "herb" ? "thick dead stalks; a makeshift hearth at best" : null,
+      makeshift: (e) => e.kind === "plant" && e.traits.spindleStalk && e.form === "herb" && partUp(e, /^dead stalks$/) ? "thick dead stalks; a makeshift hearth at best" : null,
       near: ["woodland", "edge"],
       nearLabel: "trees"
     },
@@ -9961,7 +10040,7 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
       nearLabel: "open grassy ground",
       rank: (e) => e.traits?.paperBark ? 2 : e.traits?.fluff ? 1 : 0,
       makeshift: (e) => e.kind === "plant" && ["tree", "shrub"].includes(e.form) ? "dead leaves and shredded bark, if dry" : e.form === "moss" ? "dry moss; weak alone" : null,
-      match: (e) => e.kind === "plant" && (e.traits.paperBark ? "papery bark" : e.traits.fluff ? "fluffy seed heads" : e.traits.tinderFungus ? "hoof-shaped brackets, suede-like inside" : e.traits.sub === "beard" ? "dry, beard-like lichen" : e.form === "grass" ? "standing dry grass" : null)
+      match: (e) => e.kind === "plant" && (e.traits.paperBark ? "papery bark" : e.traits.fluff && cuesNow(S.world, e, groundNow()).some((c) => /fluff/.test(c)) ? "fluffy seed heads" : e.traits.tinderFungus ? "hoof-shaped brackets, suede-like inside" : e.traits.sub === "beard" ? "dry, beard-like lichen" : e.form === "grass" && partUp(e, /^dry grass$/) ? "standing dry grass" : null)
     },
     fibre: {
       label: "fibre",
@@ -9976,8 +10055,8 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
       near: ["edge", "glade", "streambank"],
       nearLabel: "open, sunny ground",
       rank: (e) => e.traits?.fruit === "nut" ? 2 : ["berry", "drupe"].includes(e.traits?.fruit) ? 1 : 0,
-      makeshift: (e) => e.kind === "plant" && e.form !== "tree" && e.traits.pace > 0.2 ? "soft leaves; barely food" : null,
-      match: (e) => e.cryptic ? null : e.kind === "plant" && (e.form === "mushroom" && e.parts[0]?.food ? "mushrooms" : null) || e.kind === "plant" && ({ berry: `${e.traits.fruitColor} berries`, drupe: `${e.traits.fruitColor} stonefruit`, nut: "nuts", pod: "pods", grain: "seed heads" }[e.traits.fruit] ?? (e.traits.defense === "sulfur" ? "onion-like leaves" : null)) || (e.traits?.key === "bee" ? "follow them home: a hive means honey" : e.kind === "animal" && e.food && e.food.cooked !== void 0 ? "small creatures to gather" : null)
+      makeshift: (e) => e.kind === "plant" && e.form !== "tree" && e.traits.pace > 0.2 && plantNow(S.world, e, groundNow()).leaf >= SHOWS ? "soft leaves; barely food" : null,
+      match: (e) => e.cryptic || !aboutNow(e) ? null : e.kind === "plant" && (e.form === "mushroom" && e.parts[0]?.food && plantNow(S.world, e, groundNow()).notice >= SHOWS ? "mushrooms" : null) || e.kind === "plant" && (partUp(e, /^(berries|fruits|nuts|pods and seeds|seed heads)$/) ? { berry: `${e.traits.fruitColor} berries`, drupe: `${e.traits.fruitColor} stonefruit`, nut: "nuts", pod: "pods", grain: "seed heads" }[e.traits.fruit] : null) || e.kind === "plant" && (e.traits.defense === "sulfur" && plantNow(S.world, e, groundNow()).leaf >= SHOWS ? "onion-like leaves" : null) || (e.traits?.key === "bee" ? "follow them home: a hive means honey" : e.kind === "animal" && e.food && e.food.cooked !== void 0 ? "small creatures to gather" : null)
     },
     bones: { label: "bones", special: true, near: ["glade", "outcrop", "scree", "streambed"], nearLabel: "open ground, where bones would show" },
     sharp: { label: "naturally sharp stone", special: true },
@@ -10024,7 +10103,7 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
         const { sus, isNew, g } = associate(c, s);
         note("sensed", c.key, cueDraw(c, { bearing: (g.bearing + 360) % 360, dist: g.dist, became: isNew ? "new" : "again", suspect: sus.id }));
         if (isNew)
-          lines.push(`${cuePhrase(c, g, s)} (${sus.another ?? sus.label})`);
+          lines.push(`${cuePhrase(c, g, s)}${sus.another ? ` (${sus.another})` : nameAfter(sus.label)}`);
         else if (!passing)
           lines.push(`${sus.label} again, to the ${bearingWord(bearing(s, sus.est))}`);
       }
@@ -10053,7 +10132,7 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
     const F = FOCI[T2.key];
     if (T2.key === "game") {
       for (const a of S.world.animals.filter((a2) => a2.cls !== "invertebrate" && a2.signs && a2.habitats.some((h) => h.micro === s.micro))) {
-        if (!roll2("sign", a.id, 1 - Math.exp(-a.perKm2 * (passing ? 0.25 : 0.45)), { name: `sign of ${a.name}` }))
+        if (!roll2("sign", a.id, 1 - Math.exp(-densityAt(a, s.key, dice().place) * (passing ? 0.25 : 0.45)), { name: `sign of ${a.name}` }))
           continue;
         const known = S.mem.entities[memKeyE2(a)];
         for (const [k, sign] of [["track", a.signs.track && `${a.signs.track.type}, about ${a.signs.track.lengthCm} cm`], ["scat", a.signs.scat], ["damage", a.signs.damage]].filter(([, x]) => x))
@@ -10110,7 +10189,7 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
     const before2 = new Set(Object.keys(S.mem.entities));
     const lines = lookAt(s, false);
     const fresh = Object.keys(S.mem.entities).filter((k) => !before2.has(k)).map(entity).filter(Boolean);
-    lines.push(...namingSentences(fresh, S.mem, s.key, entity, S.rng));
+    lines.push(...namingSentences(fresh, S.mem, s.key, entity, S.rng, { world: S.world, g: groundNow() }));
     log(`Looking for ${S.looking.label}:
 ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
   }
@@ -10134,14 +10213,14 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
   function breakthroughs(s, focus) {
     if (focus !== "food") {
       S.fruitNoted ?? (S.fruitNoted = {});
-      const fruit = presentAt(s).find(({ e }) => e.kind === "plant" && ["berry", "drupe"].includes(e.traits.fruit) && !S.fruitNoted[e.id] && roll2("noticed in passing", e.id, 0.6, { name: e.name }));
+      const fruit = presentAt(s).find(({ e }) => e.kind === "plant" && ["berry", "drupe"].includes(e.traits.fruit) && fruitShows(S.world, e, groundNow()) && !S.fruitNoted[e.id] && roll2("noticed in passing", e.id, 0.6, { name: e.name }));
       if (fruit) {
         S.fruitNoted[fruit.e.id] = true;
         log(`Even so, I couldn\u2019t miss ${fruit.e.traits.fruitColor} fruit on ${S.mem.entities[memKeyE2(fruit.e)] ? `the ${fruit.e.name}` : `a bush I haven\u2019t named (${shortDesc(fruit.e)})`}.`, "note");
         noteKnown2(s, fruit.e);
       }
     }
-    const big = S.world.animals.filter((a) => a.cls === "large" && !a.signs?.distant && a.habitats.some((h) => h.micro === s.micro)).find((a) => roll2("startled", a.id, 1 - Math.exp(-a.perKm2 * 0.06), { name: a.name }));
+    const big = S.world.animals.filter((a) => a.cls === "large" && !a.signs?.distant && a.habitats.some((h) => h.micro === s.micro)).find((a) => roll2("startled", a.id, 1 - Math.exp(-densityAt(a, s.key, dice().place) * 0.06), { name: a.name }));
     if (big) {
       const known = S.mem.entities[memKeyE2(big)];
       log(known ? `A ${big.name} crashed away through the brush ahead.` : `Something big crashed away through the brush ahead: a ${firstCueA(big)}.`, "note");
@@ -10162,9 +10241,10 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     return [...new Set(out)];
   }
   function inspect(e) {
-    const parts = e.kind === "plant" ? e.parts.map((p) => p.part) : e.kind === "stone" ? [] : e.products;
+    const g = groundNow(), cues = e.kind === "plant" ? cuesNow(S.world, e, g) : e.cues;
+    const parts = e.kind === "plant" ? e.parts.filter((p) => partNow(S.world, e, p.part, g) >= SHOWS).map((p) => p.part) : e.kind === "stone" ? [] : e.products;
     const learned = learnedAbout(e);
-    log(`Looked closely at the ${e.name}: ${e.cues.filter((c) => !/^active:/.test(c)).join("; ")}.${parts.length ? ` Parts worth noting: ${parts.join(", ")}.` : ""}${learned.length ? ` What I\u2019ve learned: ${learned.join("; ")}.` : ""}`, "note");
+    log(`Looked closely at the ${e.name}: ${cues.filter((c) => !/^active:/.test(c)).join("; ") || "nothing in leaf, flower or fruit to go by"}.${parts.length ? ` Parts worth noting: ${parts.join(", ")}.` : ""}${learned.length ? ` What I\u2019ve learned: ${learned.join("; ")}.` : ""}`, "note");
   }
   function assess(e) {
     if (S.body.focus < 0.25)
@@ -10427,8 +10507,8 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     }
   }
   function seenPieces(kind) {
-    const memo = `${kind}/${S.seenVer ?? 0}`;
-    if (S.pieceMemo?.[kind]?.key === memo)
+    const memo2 = `${kind}/${S.seenVer ?? 0}`;
+    if (S.pieceMemo?.[kind]?.key === memo2)
       return S.pieceMemo[kind].pieces;
     const esc2 = cliffIndex(), test = kind === "lake" ? (c) => S.L.lake[c] : (c) => esc2[c] >= 0, done = new Uint8Array(N * N), pieces = [];
     for (let c0 = 0; c0 < N * N; c0++) {
@@ -10447,9 +10527,9 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       if (kind === "cliff" && g.length < 3)
         continue;
       const cells = g.map((c) => ({ x: c % N, y: Math.floor(c / N) })), key = kind === "lake" ? waterKeyAt(S.L, cells[0].x, cells[0].y) : `cliff-${esc2[c0]}`;
-      pieces.push({ id: `${kind}:${cells[0].x}_${cells[0].y}`, kind, key, cells, name: (kind === "lake" ? S.waterNames[key] : S.cliffNames?.[key]) ?? `the ${kind}`, x: cells.reduce((a, q2) => a + q2.x, 0) / cells.length, y: cells.reduce((a, q2) => a + q2.y, 0) / cells.length });
+      pieces.push({ id: `${kind}:${cells[0].x}_${cells[0].y}`, kind, key, cells, name: (kind === "lake" ? S.waterNames[key] : S.cliffNames?.[key]) ?? generic(kind), x: cells.reduce((a, q2) => a + q2.x, 0) / cells.length, y: cells.reduce((a, q2) => a + q2.y, 0) / cells.length });
     }
-    (S.pieceMemo ?? (S.pieceMemo = {}))[kind] = { key: memo, pieces };
+    (S.pieceMemo ?? (S.pieceMemo = {}))[kind] = { key: memo2, pieces };
     return pieces;
   }
   function cliffLine(piece) {
@@ -10522,8 +10602,8 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     return S.L._lakeDist = D;
   }
   function lakeShapes() {
-    const memo = `${S.seenVer ?? 0}`;
-    if (S.lakeMemo?.key === memo)
+    const memo2 = `${S.seenVer ?? 0}`;
+    if (S.lakeMemo?.key === memo2)
       return S.lakeMemo.lakes;
     const D = lakeDistance(), by = /* @__PURE__ */ new Map();
     for (const q2 of seenPieces("lake")) {
@@ -10544,7 +10624,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const big = circles[0];
       return { ...e, circles, x: big.x, y: big.y };
     });
-    S.lakeMemo = { key: memo, lakes };
+    S.lakeMemo = { key: memo2, lakes };
     return lakes;
   }
   function scaleBar(span) {
@@ -10689,13 +10769,13 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         t.h = fs;
       } else if (t.feature) {
         const q2 = t.feature;
-        t.text = typo(q2.name.replace(/^the /, ""));
+        t.text = typo(q2.name.replace(/^(the|an?) /, ""));
         t.at = q2.kind === "cliff" ? q2.line.pts[Math.floor(q2.line.pts.length / 2)] : { x: q2.x, y: q2.y };
         t.r = fs * 0.3;
         t.h = fs * 0.9;
       } else {
         const v = M2.nodes[t.i];
-        t.text = `${typo(v.name.replace(/^the /, ""))}${v.certainty === "unknown" ? "?" : ""}`;
+        t.text = `${typo(v.name.replace(/^(the|an?) /, ""))}${v.certainty === "unknown" ? "?" : ""}`;
         t.at = v;
         t.r = radius(t.i);
         t.h = fs;
@@ -10912,7 +10992,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     const s = site();
     switch (id) {
       case "survey":
-        perform(SURVEY);
+        perform(SURVEY2);
         break;
       case "poke":
         perform(GAME.poke);
@@ -11179,7 +11259,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       }).observe(box);
     }
   }
-  var BUILD = "hk-2026-10-27a";
+  var BUILD = "hk-2026-10-27b";
   function record(d) {
     S.record ?? (S.record = []);
     S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
@@ -11407,9 +11487,9 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       checked = { seed, preset, ...checkWorld(seed, preset) };
       const { world, outlook: o } = checked;
       const e = world.environment;
-      const odds = `For a beginner, roughly: ${o.text.water}, ${o.text.food}, ${o.text.fire}.`;
+      const odds = `Near where I\u2019d wake, averaged over a year: ${o.text.water}; ${o.text.food}; ${o.text.fire}.`;
       out.innerHTML = `<p><strong>${esc(typo(cap5(e.biome)))}</strong> on ${esc(e.bedrockLabel)}. ${e.meanTempC < 10 ? "Cold nights." : e.meanTempC > 18 ? "Hot days." : "Mild weather."}</p>
-      <p>${esc(typo(odds))}</p><p class="hint">Indicative: a few quick trial runs of a sensible start, not a promise.</p>
+      <p>${esc(typo(odds))}</p><p class="hint">From what\u2019s there, not a promise: the walk to the nearest water; the best food a bare-handed beginner can take, per hour spent foraging for it; the days a beginner takes to make fire. \u201CSeasonal\u201D where the months differ widely.</p>
       <div class="row"><button id="begin">Begin here</button><button class="ghost" id="reroll">Try another world</button></div>`;
     }, 20);
   }

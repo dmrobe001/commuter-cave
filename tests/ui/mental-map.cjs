@@ -19,8 +19,8 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   click('[data-here="scan"]');
   click('[data-maproutes]'); // routes are hidden until asked for
   // out to the nearest landmark, on to a second, then home by tapping a route: an earlier place, then home
-  click('[data-hike]', /hill|cliff|lake|falls|stream|river|brook/);
-  click('[data-hike]', /hill|cliff|lake|falls|stream|river|brook/);
+  click('[data-hike]', /hill|cliff|lake|falls|waterfall|stream|river|brook/);
+  click('[data-hike]', /hill|cliff|lake|falls|waterfall|stream|river|brook/);
   click('[data-here="scan"]');
   const back = [...d.querySelectorAll('[data-hike]')].filter(g => /^Head back to/.test(g.getAttribute('aria-label')) && !/where I woke/.test(g.getAttribute('aria-label')));
   if (back[0]) back[0].dispatchEvent(new w.MouseEvent('click', { bubbles: true }));

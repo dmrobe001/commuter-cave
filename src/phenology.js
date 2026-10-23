@@ -41,3 +41,26 @@ export function plantNow(world, plant, g) {
   const notice = (['herb', 'grass'].includes(plant.form) ? 0.3 + 0.7 * leaf : 1) * (flowering ? 1.3 : 1) * (fruiting ? 1.15 : 1) * (plant.form === 'mushroom' ? has(/.*/) : 1);
   return { leaf, flowering, fruiting, notice };
 }
+// Whether a plant's visible feature (one of its cues, in words) shows now. A feature of a part that
+// isn't there in this season (berries, nuts, seed heads, flowers, last year's stalks; leaves on a
+// bare tree or a died-back herb) can't be seen, so it can't be noticed, described, or named from.
+// Bark, thorns, resin and the like show all year. g: ground.js state for the day; none, all show.
+const CUE_PART = [
+  [/berries|fleshy fruits|stonefruit|nuts|pods|seed heads|dry seeds|small seeds|fluff/, /^(berries|fruits|nuts|pods and seeds|seeds|seed heads)$/],
+  [/flowers/, /^flowers$/],
+  [/dead stalks/, /^dead stalks$/],
+];
+export const SHOWS = 0.3; // how much of a part there must be to be seen
+export function cueShows(world, plant, words, g) {
+  if (!g || plant.kind !== 'plant') return true;
+  for (const [cue, part] of CUE_PART) {
+    if (!cue.test(words)) continue;
+    const ps = plant.parts.filter(p => part.test(p.part));
+    return !ps.length || ps.some(p => partNow(world, plant, p.part, g) >= SHOWS);
+  }
+  if (/leaves|blades|stems/.test(words)) return plantNow(world, plant, g).leaf >= SHOWS;
+  return true;
+}
+export const cuesNow = (world, plant, g) => plant.cues.filter(c => cueShows(world, plant, c, g));
+// whether the fruit (berries, stonefruit, nuts) is on the plant now, ripe enough to catch the eye or the nose
+export const fruitShows = (world, plant, g) => plant.parts.some(p => /^(berries|fruits|nuts)$/.test(p.part) && partNow(world, plant, p.part, g) >= 0.5);

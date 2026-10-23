@@ -433,8 +433,8 @@ export function generatePlants(rng, env, seed, namer, mc) {
   const seenLook = new Set();
   for (const form of ['mushroom', 'moss', 'lichen']) {
     for (let i = 0; i < fcounts[form]; i++) {
-      const id = `F${i + 1}${form[0]}`;
-      const t = fungusArchetype(fr.fork(id), form, env);
+      const key = `F${i + 1}${form[0]}`, id = form === 'moss' ? `F${i + 1}o` : key; // mushrooms and mosses both begin with m: ids must differ (the key keeps the draws as they were)
+      const t = fungusArchetype(fr.fork(key), form, env);
       const pool = { mushroom: CAP_COLORS[t.nameKey] ?? [t.color], moss: ['bright green', 'dark green', 'golden', 'pale green'], lichen: ['grey-green', 'pale grey', 'yellow-green', 'orange'] }[form];
       for (let k = 0; k < pool.length && seenLook.has(`${t.sub}:${t.color}`); k++) t.color = pool[k]; // two alike look different
       seenLook.add(`${t.sub}:${t.color}`);

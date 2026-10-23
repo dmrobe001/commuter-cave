@@ -18,7 +18,7 @@ const click = el => el?.dispatchEvent(new w.MouseEvent('click', { bubbles: true 
 const lines = () => [...d.querySelectorAll('.entry')].map(e => e.textContent);
 const at = () => { const c = d.querySelector('.mapsvg .node.here circle'); return `${c?.getAttribute('cx')},${c?.getAttribute('cy')}`; };
 const play = (seed, actions) => { d.querySelector('#replay-text').value = JSON.stringify({ game: 'hands-and-knowledge', seed, preset: '', actions: actions.map(a => ({ d: typeof a === 'string' ? (a === 'scan' ? { here: 'scan' } : { hike: a }) : a })) }); d.querySelector('#replay').click(); };
-const PLAIN = /^(hill|cliff|lake|falls|cascade|river|stream|brook|tree line|crossing|fork|spring|mouth|outlet|where I woke|wood|thicket|clearing|stream bank|gravel bar|marsh|rocks|scree|clay bank|deadfall|dead thing|sulfur smell|musky smell|smell|patch)\??$/;
+const PLAIN = /^(hill|cliff|lake|waterfall|cascade|river|stream|brook|tree line|crossing|fork|spring|stream mouth|lake outlet|where I woke|wood|thicket|clearing|stream bank|gravel bar|marsh|outcrop|scree slope|clay bank|deadfall|dead thing|sulfur smell|musky smell|smell|patch)\??$/;
 setTimeout(async () => {
   // stretches named on seed gbn2f: up from the falls to the fork, up both branches to their outlets, down to the mouth
   play('gbn2f', ['go:70_54', 'follow:up:71_55', 'follow:up:71_56', 'go:71_55', 'follow:up:72_56', 'go:71_55', 'follow:down', 'follow:down']);
@@ -41,7 +41,7 @@ setTimeout(async () => {
   if (d.querySelector('.mapsvg .crossed')) fails.push(`gbn2f: a crossing still marked on its own after walking along the stream there: ${[...d.querySelectorAll('.mapsvg .crossed')].map(g => g.getAttribute('aria-label')).join('; ')}`);
   // a crossing not joined to the stream by any walking keeps its marker
   play('gbn2f', ['go:70_54', 'go:71_60']);
-  if (!lines().some(t => /crossed the stream/.test(t))) fails.push('gbn2f: the walk from the falls to 71,60 should cross the stream');
+  if (!lines().some(t => /crossed a stream/.test(t))) fails.push('gbn2f: the walk from the falls to 71,60 should cross the stream');
   else if (!d.querySelector('.mapsvg .crossed')) fails.push('gbn2f: crossed a stream, but no marker where I crossed');
 
   // an item's origin named: the place keeps its marker after I leave
@@ -70,7 +70,7 @@ setTimeout(async () => {
       if (!arrow) { fails.push(`hbgk9: no shore arrow (water on my ${side}) at ${before}`); break; }
       click(arrow);
       if (at() === before) fails.push(`hbgk9: walking the shore (water on my ${side}) didn't move me from ${before}`);
-      if (!lines().slice(n).some(t => /Walked the shore of the lake/.test(t))) fails.push(`hbgk9: no "Walked the shore" line: ${lines().slice(n).join(' | ')}`);
+      if (!lines().slice(n).some(t => /Walked the shore of (a|the) lake/.test(t))) fails.push(`hbgk9: no "Walked the shore" line: ${lines().slice(n).join(' | ')}`);
     }
   }
   if (errors.length) fails.push(...errors);

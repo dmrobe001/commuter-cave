@@ -10,7 +10,7 @@ import { outlook } from './outlook.js';
 import { windFor, smellSources, smellAt } from './smell.js';
 import { hazardFactors, injuryReasons, injuryAt } from './injury.js';
 import { groundAt, waterAt, crossingNow, snowCm, litterAt, deciduousShare } from './ground.js';
-import { partNow, plantNow } from './phenology.js';
+import { partNow, plantNow, cuesNow, cueShows, fruitShows, SHOWS } from './phenology.js';
 import { sleepHour, SHELTERS, naturalShelter } from './body.js';
 import { windAt, skyAt, dawnAt, dayLength, seasonOf, dayOfYear, temperature, seeingFar, seeingNear, throughAir, moonWords, WEATHER_WORDS } from './sky.js';
 import { cloneChem, expose, nutrients, harm, tasteWords, smellWords, textureWords, describeState, COMPOUNDS, PREP } from './food.js';
@@ -18,6 +18,7 @@ import { walkOdds, chooseSpawn, perceive, suspicionFrom, walk, followStage, shor
 import { trailGraph, firstClear, placeLabels, suspectedCrossings, timeWords, awayWords, explainTrip } from './mentalmap.js';
 import { materialsOf, expandGoal, thought, ITEMS, lookHint, PROCESSES } from './process.js';
 import { pack, unpack } from './pack.js';
+import { densityAt } from './population.js';
 import { spread, reproduces, describeObservable } from './spread.js';
 import { attempt, peek, stateOver, hoursOf, kcalOf, readyFor, readable } from './act.js';
 import { TICKS, SLEEP_HOUR, CRAFTS, DRILL_ATTEMPT, EMBER, HANDLE, REST, DRINK, WASH_HANDS, MAKE_BED, BUILD_HUT, FEED_FIRE, KNAP, PREPARE, EAT, SURVEY, GUT_KG, loreKey, populationAt, findBones, boneLines, noteKnown as knowIt, pluralize, lineFor, mix } from './acts.js';
@@ -51,6 +52,7 @@ function landNow(L) {
     cross(c) { const g = today(); let v = memo.cross.get(c); if (!v) { v = crossingNow(L, g, c, crossingAt(c % GN, Math.floor(c / GN))); memo.cross.set(c, v); } return v; },
     slow(c) { const cm = snowCm(L, today(), c); return cm > 2 ? 1 + cm / 40 : 1; }, // knee-deep snow (40 cm) doubles the time
     sound(a) { const w = waterAt(L, today(), cellOf(a.x, a.y)); return !w ? 1 : w.dry ? 0 : w.frozen ? 0.3 : Math.sqrt(Math.min(4, today().flow)); },
+    birds() { const g = today(); return g.week < -4 ? 0 : g.phase < 0 && S.world.environment.seasonality > 0.35 ? 0.3 : 1; }, // waterbirds leave an iced lake, and are fewer and quieter out of the growing season
   };
 }
 const isNight = () => skyNow().sunAlt < -6; // too dark to work: the sun more than 6° down (civil twilight over)
@@ -145,8 +147,8 @@ function microAt(x, y) { const m = S.L.micro[cellOf(x, y)]; return m === 'lake' 
 // lake, the stream bank. Proper names come in two ways: I name a place myself (renaming where I stand,
 // or naming where something I collected came from), or a stretch of stream gets a name once I've walked
 // every cell of it from end to end (see "names for streams"). A name I gave is never replaced.
-const SITE_NOUN = { woodland: 'wood', edge: 'thicket', glade: 'clearing', streambank: 'stream bank', streambed: 'gravel bar', pond: 'marsh', outcrop: 'rocks', scree: 'scree', claybank: 'clay bank', spring: 'spring', deadfall: 'deadfall' };
-const LANDMARK_NOUN = { hill: 'hill', cliff: 'cliff', lake: 'lake', waterfowl: 'lake', falls: 'falls', cascade: 'cascade', rapids: 'river', river: 'river', stream: 'stream', brook: 'brook', 'river trace': 'tree line' };
+const SITE_NOUN = { woodland: 'wood', edge: 'thicket', glade: 'clearing', streambank: 'stream bank', streambed: 'gravel bar', pond: 'marsh', outcrop: 'outcrop', scree: 'scree slope', claybank: 'clay bank', spring: 'spring', deadfall: 'deadfall' };
+const LANDMARK_NOUN = { hill: 'hill', cliff: 'cliff', lake: 'lake', waterfowl: 'lake', falls: 'waterfall', cascade: 'cascade', rapids: 'river', river: 'river', stream: 'stream', brook: 'brook', 'river trace': 'tree line' };
 const namesInUse = () => new Set([...S.sites.map(t => t.name), ...S.suspects.map(u => u.label), ...Object.values(S.waterNames), ...Object.values(S.cliffNames ?? {})]);
 function looksOf(kind, x, y) {
   const c = cellOf(x, y), veg = S.L.veg[c], tags = [];
@@ -164,13 +166,27 @@ function looksOf(kind, x, y) {
   }
   return tags.filter(Boolean);
 }
-function uniqueName(base) { // things are called what they are: "the hill", however many hills there are
+// Things without a name of their own are what they are: "a hill", however many hills there are, until
+// one is named (a stretch of stream walked end to end, or named by me). A generic name begins "a"/"an".
+const article = w => (/^[aeiou]/i.test(w) ? 'an' : 'a');
+const generic = w => `${article(w)} ${w}`;
+const isGeneric = name => /^an? /.test(name ?? '');
+// a thing's name after a description of it, where it adds something: "a hill to the west (Bald Knob)", not "(a hill)"
+const nameAfter = (label, more = '') => (isGeneric(label) ? (more ? ` (${more})` : '') : ` (${label}${more ? `, ${more}` : ''})`);
+// The same generic name more than once, counted: ["a stream", "a stream", "Elm Brook"] → ["two streams", "Elm Brook"].
+const NUMBER = ['', 'one', 'two', 'three', 'four', 'five', 'six'];
+function countSame(names) {
+  const n = new Map();
+  for (const x of names) n.set(x, (n.get(x) ?? 0) + 1);
+  return [...n].map(([x, k]) => (k > 1 && isGeneric(x) && /^an? \w+$/.test(x) ? `${NUMBER[k] ?? k} ${x.replace(/^an? /, '')}s` : k > 1 ? Array(k).fill(x).join(' and ') : x));
+}
+function uniqueName(base) {
   S.lastTag = null;
-  return `the ${base}`;
+  return generic(base);
 }
 function waterName(wkey, kind, pos) {
   if (S.waterNames[wkey]) return S.waterNames[wkey];
-  const noun = /^lake/.test(wkey) ? 'lake' : /^falls/.test(wkey) ? (kind === 'cascade' ? 'cascade' : 'falls') : /^brook/.test(wkey) ? 'brook' : ['river', 'rapids'].includes(kind) ? 'river' : 'stream';
+  const noun = /^lake/.test(wkey) ? 'lake' : /^falls/.test(wkey) ? (kind === 'cascade' ? 'cascade' : 'waterfall') : /^brook/.test(wkey) ? 'brook' : ['river', 'rapids'].includes(kind) ? 'river' : 'stream';
   return (S.waterNames[wkey] = uniqueName(noun));
 }
 
@@ -230,7 +246,7 @@ function matchStream(fix) {
 }
 function newStream(size, pos) {
   const id = `s${S.streams.length + 1}`, noun = SIZE_NOUN[size];
-  const st = { id, name: `the ${noun}`, size, fixes: [] };
+  const st = { id, name: generic(noun), size, fixes: [] };
   S.waterNames[id] = st.name;
   S.streams.push(st);
   return st;
@@ -310,12 +326,12 @@ function nearestOnStream(t, from) {
   }
   return best;
 }
-// A place where I found a landmark takes its name ("the hill"); water I reach leaves the place its own.
+// A place where I found a landmark takes its name ("a hill"); water I reach leaves the place its own.
 const placeNameFor = u => (u.group === 'water' ? null : u.label);
 
 // ------------------------------------------------------------ names for streams
 //
-// A stream is "the brook", "the stream" or "the river" until I've walked one stretch of it from end to
+// A stream is "a brook", "a stream" or "a river" until I've walked one stretch of it from end to
 // end. A stretch is an unbranched run of water between two of: a spring or other source (where the
 // water starts), a fork (where streams join), a mouth (where it runs into a lake), an outlet (where it
 // leaves one). Once every cell of a stretch is one I've stood in, crossed or walked along, it gets a
@@ -339,7 +355,7 @@ function segmentFrom(top) { // the stretch from a top cell down to the next fork
 }
 const segAt = c => Object.values(S.segNames ?? {}).find(g => g.cells.includes(c)) ?? null;
 // What to call the water at a cell: the name of its stretch, if it has one, else what it is.
-function waterNameAt(st, x, y) { const g = segAt(cellOf(x, y)); return g ? g.name : st?.name ?? 'the stream'; }
+function waterNameAt(st, x, y) { const g = segAt(cellOf(x, y)); return g ? g.name : st?.name ?? 'a stream'; }
 const titleCase = w => w.split(/[\s-]+/).map(cap).join(' ');
 function newSegmentName(cells) {
   const bottom = cells[cells.length - 1], noun = titleCase(SIZE_NOUN[S.L.chan[bottom] || 1]);
@@ -542,7 +558,7 @@ function newSite(x, y, name) {
   const micro = microAt(x, y);
   const same = S.sites.find(t => t.x === x && t.y === y);
   if (same) return same;
-  const noun = { fork: 'fork', falls: 'falls', spring: 'spring', mouth: 'mouth', outlet: 'outlet', crossing: 'crossing' }[waterMark({ x, y, micro })] ?? SITE_NOUN[micro] ?? micro; // a place by water named for what makes it one
+  const noun = { fork: 'fork', falls: 'waterfall', spring: 'spring', mouth: 'stream mouth', outlet: 'lake outlet', crossing: 'crossing' }[waterMark({ x, y, micro })] ?? SITE_NOUN[micro] ?? micro; // a place by water named for what makes it one
   const headOf = noun === 'fork' ? Object.values(S.segNames ?? {}).find(g => g.top.x === x && g.top.y === y) : null; // a fork bears the name of the stretch below it
   const s = { key: `p${x}_${y}`, x, y, micro, name: name ?? headOf?.name ?? uniqueName(noun), known: new Set(), visits: 0, hut: false, fireUntil: -1 };
   S.sites.push(s);
@@ -672,16 +688,16 @@ function sense(s, lookout = false, { scan = false, focus = null } = {}) {
     const { sus, isNew, g } = associate(c, s);
     let became = 'new';
     if (!isNew) {
-      if (c.channel === 'sight' && sus.channel === 'sound') { sus.channel = 'sight'; found.upgraded.push(`${cuePhrase(c, g, s)} (${sus.label})`); became = 'seen now'; }
+      if (c.channel === 'sight' && sus.channel === 'sound') { sus.channel = 'sight'; found.upgraded.push(`${cuePhrase(c, g, s)}${nameAfter(sus.label)}`); became = 'seen now'; }
       else if (before.has(sus)) { stillSeen.add(sus); became = 'again'; } else became = 'merged';
-    } else (sus.group !== 'water' ? found.land : c.channel === 'sound' ? found.heard : found.seen).push(`${cuePhrase(c, g, s)} (${sus.another ?? sus.label})`);
+    } else (sus.group !== 'water' ? found.land : c.channel === 'sound' ? found.heard : found.seen).push(`${cuePhrase(c, g, s)}${sus.another ? ` (${sus.another})` : nameAfter(sus.label)}`);
     note('sensed', c.key, cueDraw(c, { bearing: (g.bearing + 360) % 360, dist: g.dist, became, suspect: sus.id }));
   }
   const smelled = [];
   if (!lookout && (!focus || focus === 'water')) for (const c of smellAt(smellsToday(), s, windNow(), S.rng)) {
     const { sus, isNew, g } = associateSmell(c, s);
     note('smelled', c.key, { name: c.key, what: c.kind, strength: c.strength, trueBearing: c.trueBearing, trueDist: c.trueDist, bearing: g?.bearing, dist: g?.dist, became: isNew ? 'new' : 'again', suspect: sus.id });
-    if (isNew || scan) smelled.push(`${c.words} (${sus.label}${isNew ? '' : ', again'})`);
+    if (isNew || scan) smelled.push(`${c.words}${nameAfter(sus.label, isNew ? '' : 'again')}`);
   }
   const report = [];
   if (found.heard.length) report.push(`Water I can hear: ${found.heard.join('; ')}.`);
@@ -1124,7 +1140,7 @@ function travelTo(target, label) {
   const before = new Set(ids.slice(0, endsOnWater ? -1 : undefined));
   const crossed = names.filter((_, i) => before.has(keys[i])); // water I ended up in wasn't crossed
   const where = S.L.veg[cellOf(trip.end.x, trip.end.y)] > 0.55 ? 'thick woodland' : S.L.veg[cellOf(trip.end.x, trip.end.y)] > 0.3 ? 'scrubby woodland' : 'open ground';
-  const text = `${S.looking ? 'Walked, watching for ' + S.looking.label + ',' : 'Pushed'} ${label} for ${dur}, through ${where}${crossed.length ? `; crossed ${crossed.join(' and ')}` : ''}.${stoppedAtWater ? ' Parched, I stopped at the water.' : ''}${hours >= 2.9 && !stoppedAtWater && budget >= 3 ? ' Stopped to get my bearings.' : ''}`;
+  const text = `${S.looking ? 'Walked, watching for ' + S.looking.label + ',' : 'Pushed'} ${label} for ${dur}, through ${where}${crossed.length ? `; crossed ${countSame(crossed).join(' and ')}` : ''}.${stoppedAtWater ? ' Parched, I stopped at the water.' : ''}${hours >= 2.9 && !stoppedAtWater && budget >= 3 ? ' Stopped to get my bearings.' : ''}`;
   arrive(trip.end.x, trip.end.y, text, () => { notePassing(trip.path); lookAlong(trip.path); });
   S.travelHint = null;
   rememberTrip(from, trip.path, hours, trip.crossings.map((c, i) => ({ ...c, id: ids[i] })), knownBefore);
@@ -1762,19 +1778,19 @@ function drill(board, spindle, keepGoing) {
 function shortDesc(e) {
   if (e.kind === 'stone') return e.cues.slice(0, 2).join('; ');
   if (e.kind === 'animal') return e.cues[0];
-  const t = e.traits, b = [];
+  const t = e.traits, b = [], g = groundNow(), shows = w => cueShows(S.world, e, w, g); // only what shows this season
   b.push({ tree: 'tree', shrub: 'bush', herb: 'low plant', grass: t.habitat.moisture > 0.8 ? 'tall reed' : 'grass' }[t.form]);
   if (t.paperBark) b.push('papery white bark'); else if (t.resin > 0.5) b.push('resinous bark');
-  if (t.umbel) b.push('umbrella-shaped flowers');
-  if (t.squareStem) b.push('square stems');
-  if (t.defense === 'stinging') b.push('stiff stinging hairs');
+  if (t.umbel && shows('flowers')) b.push('umbrella-shaped flowers');
+  if (t.squareStem && shows('stems')) b.push('square stems');
+  if (t.defense === 'stinging' && shows('stems')) b.push('stiff stinging hairs');
   if (t.defense === 'thorns') b.push('thorny');
-  if (t.defense === 'silica') b.push('sharp-edged blades');
+  if (t.defense === 'silica' && shows('blades')) b.push('sharp-edged blades');
   const fruit = { berry: `${t.fruitColor} berries`, drupe: `${t.fruitColor} stonefruit`, nut: t.defense === 'tannin' ? 'acorn-like nuts' : 'nuts', pod: 'pods', seed: 'small seeds', grain: 'nodding seed heads' }[t.fruit];
-  if (fruit) b.push(fruit);
-  if (t.fluff) b.push('fluffy seed heads');
-  if (t.spindleStalk && t.form === 'herb') b.push('tall dead stalks');
-  if (b.length < 3) b.push(t.pace > 0.3 ? 'soft leaves' : t.pace < -0.3 ? 'leathery leaves' : 'plain leaves');
+  if (fruit && shows(fruit)) b.push(fruit);
+  if (t.fluff && shows('fluff')) b.push('fluffy seed heads');
+  if (t.spindleStalk && t.form === 'herb' && shows('dead stalks')) b.push('tall dead stalks');
+  if (b.length < 3) b.push(!shows('leaves') ? (['tree', 'shrub'].includes(t.form) ? 'bare twigs' : 'dead stems') : t.pace > 0.3 ? 'soft leaves' : t.pace < -0.3 ? 'leathery leaves' : 'plain leaves');
   return b.slice(0, 4).join(', ');
 }
 const memKeyE = e => e.lookalike?.mimics ?? e.id;
@@ -1812,30 +1828,33 @@ function pokeAround(s) {
   if (stick) stick.props.hardness = Math.max(0.15, stick.props.hardness - 0.03 * (1 - stick.props.hardness));
   rows.sort((a, b) => b.n - a.n);
   const how = `turned stones and logs, peeled bark, prodded the litter${stick ? ' with the digging stick' : ' with my fingers'}`;
-  const named = namingSentences(fresh, S.mem, s.key, entity, S.rng);
+  const named = namingSentences(fresh, S.mem, s.key, entity, S.rng, { world: S.world, g: groundNow() });
   log(rows.length ? `Poking around (${how}):\n${[...rows.map(r => r.text), ...named].join('\n')}` : `Poked around for half an hour (${how}); nothing worth having.`, 'survey');
 }
 
-const boneFinds = (s, effort) => findBones(S.world, s, effort, S.rng, note); // bones (acts.js)
+const boneFinds = (s, effort) => findBones(S.world, s, effort, S.rng, note, dice().place); // bones (acts.js)
 
 // ------------------------------------------------------------ focused search
 
 // Each focus matches only what the character can see. Returns a short detail string, or null.
 const matOf = (e, cls) => S.mats.find(m => m.source === e.id && m.material === cls);
+// whether a plant part (by name) is there to be seen now, and whether an animal is about this season
+const partUp = (e, re) => e.kind === 'plant' && e.parts.some(p => re.test(p.part) && partNow(S.world, e, p.part, groundNow()) >= SHOWS);
+const aboutNow = e => e.kind !== 'animal' || animalNow(e, condNow()).here;
 const FOCI = {
   spindle: { label: 'spindle wood', near: ['edge', 'woodland', 'glade'], nearLabel: 'bushes and tall plants',
     rank: e => (e.traits.spindleStalk ? 2 : 0),
-    makeshift: e => e.kind === 'plant' && ['tree', 'shrub'].includes(e.form) ? 'only crooked dead twigs; would need a lot of trimming' : null, match: e => e.kind === 'plant' && (e.traits.spindleStalk && e.form === 'herb' ? 'tall, straight dead stalks' : e.form === 'shrub' && matOf(e, 'live-wood')?.props.straight ? 'straight shoots' : null) },
+    makeshift: e => e.kind === 'plant' && ['tree', 'shrub'].includes(e.form) ? 'only crooked dead twigs; would need a lot of trimming' : null, match: e => e.kind === 'plant' && (e.traits.spindleStalk && e.form === 'herb' && partUp(e, /^dead stalks$/) ? 'tall, straight dead stalks' : e.form === 'shrub' && matOf(e, 'live-wood')?.props.straight ? 'straight shoots' : null) },
   hearth: { label: 'hearth-board wood', match: e => e.kind === 'plant' && ['tree', 'shrub'].includes(e.form) ? `fallen dead wood; ${e.cues.find(c => /bark/.test(c)) ?? 'bark unremarkable'}${e.traits.resin > 0.5 ? ' (resinous: poor for a hearth)' : ''}` : null,
     rank: e => (e.traits.resin > 0.5 ? -2 : 0) + (e.form === 'tree' ? 1 : 0),
-    makeshift: e => e.kind === 'plant' && e.traits.spindleStalk && e.form === 'herb' ? 'thick dead stalks; a makeshift hearth at best' : null, near: ['woodland', 'edge'], nearLabel: 'trees' },
+    makeshift: e => e.kind === 'plant' && e.traits.spindleStalk && e.form === 'herb' && partUp(e, /^dead stalks$/) ? 'thick dead stalks; a makeshift hearth at best' : null, near: ['woodland', 'edge'], nearLabel: 'trees' },
   stone: { label: 'stone for edges', near: ['outcrop', 'scree', 'streambed'], nearLabel: 'bare rock or gravel', rank: e => (/glassy|waxy/.test(e.cues[1]) ? 2 : /sugary/.test(e.cues[1]) ? 1 : 0), match: e => e.kind === 'stone' ? `${e.cues[1]}${/glassy|waxy|sugary/.test(e.cues[1]) ? ' (promising)' : ''}` : null },
   tinder: { label: 'tinder', near: ['glade', 'edge'], nearLabel: 'open grassy ground', rank: e => (e.traits?.paperBark ? 2 : e.traits?.fluff ? 1 : 0),
-    makeshift: e => e.kind === 'plant' && ['tree', 'shrub'].includes(e.form) ? 'dead leaves and shredded bark, if dry' : e.form === 'moss' ? 'dry moss; weak alone' : null, match: e => e.kind === 'plant' && (e.traits.paperBark ? 'papery bark' : e.traits.fluff ? 'fluffy seed heads' : e.traits.tinderFungus ? 'hoof-shaped brackets, suede-like inside' : e.traits.sub === 'beard' ? 'dry, beard-like lichen' : e.form === 'grass' ? 'standing dry grass' : null) },
+    makeshift: e => e.kind === 'plant' && ['tree', 'shrub'].includes(e.form) ? 'dead leaves and shredded bark, if dry' : e.form === 'moss' ? 'dry moss; weak alone' : null, match: e => e.kind === 'plant' && (e.traits.paperBark ? 'papery bark' : e.traits.fluff && cuesNow(S.world, e, groundNow()).some(c => /fluff/.test(c)) ? 'fluffy seed heads' : e.traits.tinderFungus ? 'hoof-shaped brackets, suede-like inside' : e.traits.sub === 'beard' ? 'dry, beard-like lichen' : e.form === 'grass' && partUp(e, /^dry grass$/) ? 'standing dry grass' : null) },
   fibre: { label: 'fibre', near: ['woodland', 'edge', 'streambank'], nearLabel: 'trees', rank: e => (e.traits?.fiberCue ? 1 : 0),
     makeshift: e => e.kind === 'plant' && e.form === 'grass' ? 'grass blades; weak but twistable' : null, match: e => e.kind === 'plant' && (e.traits.fiberCue ? 'long, stringy stems' : e.form === 'tree' ? 'inner bark (needs an edge to strip)' : null) },
   food: { label: 'food', near: ['edge', 'glade', 'streambank'], nearLabel: 'open, sunny ground', rank: e => (e.traits?.fruit === 'nut' ? 2 : ['berry', 'drupe'].includes(e.traits?.fruit) ? 1 : 0),
-    makeshift: e => e.kind === 'plant' && e.form !== 'tree' && e.traits.pace > 0.2 ? 'soft leaves; barely food' : null, match: e => e.cryptic ? null : (e.kind === 'plant' && (e.form === 'mushroom' && e.parts[0]?.food ? 'mushrooms' : null) || e.kind === 'plant' && ({ berry: `${e.traits.fruitColor} berries`, drupe: `${e.traits.fruitColor} stonefruit`, nut: 'nuts', pod: 'pods', grain: 'seed heads' }[e.traits.fruit] ?? (e.traits.defense === 'sulfur' ? 'onion-like leaves' : null))) || (e.traits?.key === 'bee' ? 'follow them home: a hive means honey' : e.kind === 'animal' && e.food && e.food.cooked !== undefined ? 'small creatures to gather' : null) },
+    makeshift: e => e.kind === 'plant' && e.form !== 'tree' && e.traits.pace > 0.2 && plantNow(S.world, e, groundNow()).leaf >= SHOWS ? 'soft leaves; barely food' : null, match: e => e.cryptic || !aboutNow(e) ? null : (e.kind === 'plant' && (e.form === 'mushroom' && e.parts[0]?.food && plantNow(S.world, e, groundNow()).notice >= SHOWS ? 'mushrooms' : null) || e.kind === 'plant' && (partUp(e, /^(berries|fruits|nuts|pods and seeds|seed heads)$/) ? { berry: `${e.traits.fruitColor} berries`, drupe: `${e.traits.fruitColor} stonefruit`, nut: 'nuts', pod: 'pods', grain: 'seed heads' }[e.traits.fruit] : null) || e.kind === 'plant' && (e.traits.defense === 'sulfur' && plantNow(S.world, e, groundNow()).leaf >= SHOWS ? 'onion-like leaves' : null)) || (e.traits?.key === 'bee' ? 'follow them home: a hive means honey' : e.kind === 'animal' && e.food && e.food.cooked !== undefined ? 'small creatures to gather' : null) },
   bones: { label: 'bones', special: true, near: ['glade', 'outcrop', 'scree', 'streambed'], nearLabel: 'open ground, where bones would show' },
   sharp: { label: 'naturally sharp stone', special: true },
   game: { label: 'game sign', special: true },
@@ -1881,7 +1900,7 @@ function lookAt(s, passing) {
       if (!want) continue;
       const { sus, isNew, g } = associate(c, s);
       note('sensed', c.key, cueDraw(c, { bearing: (g.bearing + 360) % 360, dist: g.dist, became: isNew ? 'new' : 'again', suspect: sus.id }));
-      if (isNew) lines.push(`${cuePhrase(c, g, s)} (${sus.another ?? sus.label})`);
+      if (isNew) lines.push(`${cuePhrase(c, g, s)}${sus.another ? ` (${sus.another})` : nameAfter(sus.label)}`);
       else if (!passing) lines.push(`${sus.label} again, to the ${bearingWord(bearing(s, sus.est))}`);
     }
     if (!passing && T.key === 'high' && isLookout(S.L, s.x, s.y)) lines.unshift('this spot gives a view: worth looking out from');
@@ -1903,7 +1922,7 @@ function lookAt(s, passing) {
   const F = FOCI[T.key];
   if (T.key === 'game') {
     for (const a of S.world.animals.filter(a => a.cls !== 'invertebrate' && a.signs && a.habitats.some(h => h.micro === s.micro))) {
-      if (!roll('sign', a.id, 1 - Math.exp(-a.perKm2 * (passing ? 0.25 : 0.45)), { name: `sign of ${a.name}` })) continue;
+      if (!roll('sign', a.id, 1 - Math.exp(-densityAt(a, s.key, dice().place) * (passing ? 0.25 : 0.45)), { name: `sign of ${a.name}` })) continue;
       const known = S.mem.entities[memKeyE(a)];
       for (const [k, sign] of [['track', a.signs.track && `${a.signs.track.type}, about ${a.signs.track.lengthCm} cm`], ['scat', a.signs.scat], ['damage', a.signs.damage]].filter(([, x]) => x)) if (roll('sign', `${a.id}/${k}`, 0.6, { name: `${a.name}: ${k}` })) lines.push(`${sign}${known ? ` (${a.name})` : ''}`);
     }
@@ -1939,7 +1958,7 @@ function lookHere(s) {
   const before = new Set(Object.keys(S.mem.entities));
   const lines = lookAt(s, false);
   const fresh = Object.keys(S.mem.entities).filter(k => !before.has(k)).map(entity).filter(Boolean);
-  lines.push(...namingSentences(fresh, S.mem, s.key, entity, S.rng));
+  lines.push(...namingSentences(fresh, S.mem, s.key, entity, S.rng, { world: S.world, g: groundNow() }));
   log(`Looking for ${S.looking.label}:\n${lines.length ? lines.join('\n') : 'nothing here'}`, 'survey');
 }
 // While looking, glance over each patch passed on the way (about every 500 m). Finds become places.
@@ -1961,10 +1980,10 @@ function lookAlong(path) {
 function breakthroughs(s, focus) {
   if (focus !== 'food') {
     S.fruitNoted ??= {};
-    const fruit = presentAt(s).find(({ e }) => e.kind === 'plant' && ['berry', 'drupe'].includes(e.traits.fruit) && !S.fruitNoted[e.id] && roll('noticed in passing', e.id, 0.6, { name: e.name }));
+    const fruit = presentAt(s).find(({ e }) => e.kind === 'plant' && ['berry', 'drupe'].includes(e.traits.fruit) && fruitShows(S.world, e, groundNow()) && !S.fruitNoted[e.id] && roll('noticed in passing', e.id, 0.6, { name: e.name }));
     if (fruit) { S.fruitNoted[fruit.e.id] = true; log(`Even so, I couldn’t miss ${fruit.e.traits.fruitColor} fruit on ${S.mem.entities[memKeyE(fruit.e)] ? `the ${fruit.e.name}` : `a bush I haven’t named (${shortDesc(fruit.e)})`}.`, 'note'); noteKnown(s, fruit.e); }
   }
-  const big = S.world.animals.filter(a => a.cls === 'large' && !a.signs?.distant && a.habitats.some(h => h.micro === s.micro)).find(a => roll('startled', a.id, 1 - Math.exp(-a.perKm2 * 0.06), { name: a.name }));
+  const big = S.world.animals.filter(a => a.cls === 'large' && !a.signs?.distant && a.habitats.some(h => h.micro === s.micro)).find(a => roll('startled', a.id, 1 - Math.exp(-densityAt(a, s.key, dice().place) * 0.06), { name: a.name }));
   if (big) {
     const known = S.mem.entities[memKeyE(big)];
     log(known ? `A ${big.name} crashed away through the brush ahead.` : `Something big crashed away through the brush ahead: a ${firstCueA(big)}.`, 'note');
@@ -1984,10 +2003,12 @@ function learnedAbout(e) {
   for (const [k, l] of Object.entries(S.lore)) if (k.startsWith(`${e.lookalike?.mimics ?? e.id}:`)) out.push(`the ${k.split(':')[1]} ${loreWords(l)}`);
   return [...new Set(out)];
 }
+// What shows now: a bare tree is looked at without its leaves or fruit, and parts out of season aren't there to note.
 function inspect(e) {
-  const parts = e.kind === 'plant' ? e.parts.map(p => p.part) : e.kind === 'stone' ? [] : e.products;
+  const g = groundNow(), cues = e.kind === 'plant' ? cuesNow(S.world, e, g) : e.cues;
+  const parts = e.kind === 'plant' ? e.parts.filter(p => partNow(S.world, e, p.part, g) >= SHOWS).map(p => p.part) : e.kind === 'stone' ? [] : e.products;
   const learned = learnedAbout(e);
-  log(`Looked closely at the ${e.name}: ${e.cues.filter(c => !/^active:/.test(c)).join('; ')}.${parts.length ? ` Parts worth noting: ${parts.join(', ')}.` : ''}${learned.length ? ` What I’ve learned: ${learned.join('; ')}.` : ''}`, 'note');
+  log(`Looked closely at the ${e.name}: ${cues.filter(c => !/^active:/.test(c)).join('; ') || 'nothing in leaf, flower or fruit to go by'}.${parts.length ? ` Parts worth noting: ${parts.join(', ')}.` : ''}${learned.length ? ` What I’ve learned: ${learned.join('; ')}.` : ''}`, 'note');
 }
 
 // The character's educated guess from what's visible plus anything already learned. Costs focus.
@@ -2216,7 +2237,7 @@ function seenPieces(kind) {
     for (let k = 0; k < g.length; k++) for (const [dx, dy] of NB8) { const x = (g[k] % GN) + dx, y = Math.floor(g[k] / GN) + dy, n = cellOf(x, y); if (x >= 0 && y >= 0 && x < GN && y < GN && !done[n] && test(n) && (S.seenLand[n] ?? 0) >= SEEN && (kind === 'lake' || esc[n] === esc[c0])) { done[n] = 1; g.push(n); } }
     if (kind === 'cliff' && g.length < 3) continue; // fewer cells than that reads as a blot, not a line: the landmark ring stands for it
     const cells = g.map(c => ({ x: c % GN, y: Math.floor(c / GN) })), key = kind === 'lake' ? waterKeyAt(S.L, cells[0].x, cells[0].y) : `cliff-${esc[c0]}`;
-    pieces.push({ id: `${kind}:${cells[0].x}_${cells[0].y}`, kind, key, cells, name: (kind === 'lake' ? S.waterNames[key] : S.cliffNames?.[key]) ?? `the ${kind}`, x: cells.reduce((a, q) => a + q.x, 0) / cells.length, y: cells.reduce((a, q) => a + q.y, 0) / cells.length });
+    pieces.push({ id: `${kind}:${cells[0].x}_${cells[0].y}`, kind, key, cells, name: (kind === 'lake' ? S.waterNames[key] : S.cliffNames?.[key]) ?? generic(kind), x: cells.reduce((a, q) => a + q.x, 0) / cells.length, y: cells.reduce((a, q) => a + q.y, 0) / cells.length });
   }
   (S.pieceMemo ??= {})[kind] = { key: memo, pieces };
   return pieces;
@@ -2399,8 +2420,8 @@ function mapHTML() {
   items.sort((a, b) => a.rank - b.rank || (b.weight ?? 0) - (a.weight ?? 0));
   for (const t of items) {
     if (t.pin) { t.text = pinSay; t.at = { x: pin.x, y: pin.y - u(10) }; t.r = u(9); t.h = fs; }
-    else if (t.feature) { const q = t.feature; t.text = typo(q.name.replace(/^the /, '')); t.at = q.kind === 'cliff' ? q.line.pts[Math.floor(q.line.pts.length / 2)] : { x: q.x, y: q.y }; t.r = fs * 0.3; t.h = fs * 0.9; }
-    else { const v = M.nodes[t.i]; t.text = `${typo(v.name.replace(/^the /, ''))}${v.certainty === 'unknown' ? '?' : ''}`; t.at = v; t.r = radius(t.i); t.h = fs; }
+    else if (t.feature) { const q = t.feature; t.text = typo(q.name.replace(/^(the|an?) /, '')); t.at = q.kind === 'cliff' ? q.line.pts[Math.floor(q.line.pts.length / 2)] : { x: q.x, y: q.y }; t.r = fs * 0.3; t.h = fs * 0.9; }
+    else { const v = M.nodes[t.i]; t.text = `${typo(v.name.replace(/^(the|an?) /, ''))}${v.certainty === 'unknown' ? '?' : ''}`; t.at = v; t.r = radius(t.i); t.h = fs; }
   }
   const follows = followOptions().concat(shoreOptions());
   const segs = trees.flatMap(t => t.segs).concat(routes ? M.edges.map(e => [M.nodes[e.a], M.nodes[e.b]]) : [])
@@ -2792,7 +2813,7 @@ if (typeof document !== 'undefined') {
 // Everything that happens follows from the world seed and the player's choices, so a record of the
 // seed and each choice reproduces a game exactly. Each action is the data of what was tapped (or
 // the value chosen); `act` applies one, and replaying a record runs them in order on a fresh game.
-const BUILD = 'hk-2026-10-27a'; // game logic version: a record replays faithfully only on the build that made it
+const BUILD = 'hk-2026-10-27b'; // game logic version: a record replays faithfully only on the build that made it
 function record(d) {
   S.record ??= [];
   S.record.push({ day: S.day, t: Math.round(S.t * 100) / 100, d });
@@ -2905,9 +2926,9 @@ function showCheck() {
     checked = { seed, preset, ...checkWorld(seed, preset) };
     const { world, outlook: o } = checked;
     const e = world.environment;
-    const odds = `For a beginner, roughly: ${o.text.water}, ${o.text.food}, ${o.text.fire}.`;
+    const odds = `Near where I’d wake, averaged over a year: ${o.text.water}; ${o.text.food}; ${o.text.fire}.`;
     out.innerHTML = `<p><strong>${esc(typo(cap(e.biome)))}</strong> on ${esc(e.bedrockLabel)}. ${e.meanTempC < 10 ? 'Cold nights.' : e.meanTempC > 18 ? 'Hot days.' : 'Mild weather.'}</p>
-      <p>${esc(typo(odds))}</p><p class="hint">Indicative: a few quick trial runs of a sensible start, not a promise.</p>
+      <p>${esc(typo(odds))}</p><p class="hint">From what’s there, not a promise: the walk to the nearest water; the best food a bare-handed beginner can take, per hour spent foraging for it; the days a beginner takes to make fire. “Seasonal” where the months differ widely.</p>
       <div class="row"><button id="begin">Begin here</button><button class="ghost" id="reroll">Try another world</button></div>`;
   }, 20);
 }

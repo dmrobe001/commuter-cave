@@ -16,10 +16,11 @@ import { clamp } from './rng.js';
 import { knapFlakes, notchHearth, refineNotch, carveSpindle, makeTinder, splinterBone, handDrill, lightFire } from './craft.js';
 import { hazard as harmBand, animalNow } from './life.js';
 import { expose, nutrients, harm, textureWords, COMPOUNDS, PREP } from './food.js';
-import { plantNow } from './phenology.js';
+import { plantNow, fruitShows } from './phenology.js';
 import { namingSentences, noteTrail } from './notes.js';
 import { moonWords } from './sky.js';
 import { sleepHour } from './body.js';
+import { populationAt, densityAt } from './population.js';
 
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 // A chance taken, and noted as a draw (spread.js): what it was about, its chance, and whether it came off.
@@ -61,24 +62,8 @@ export function mix(items, body, k = 0.4, hands = true) {
 
 // ------------------------------------------------------------ what lives in a place
 
-// How many of each thing live at a site: for each stone, plant and invertebrate whose habitat includes
-// this microhabitat, a count from its usual abundance there, the site's fertility, and the place's own
-// luck (dice.place, keyed by thing and site: the same site always holds the same). Present when that
-// count clears a chance; as { e, n }.
-export function populationAt(world, micro, siteKey, factors, place, note = null) {
-  const out = [];
-  for (const e of [...world.stones, ...world.plants, ...world.animals]) {
-    const h = e.habitats.find(x => x.micro === micro);
-    if (!h || (e.kind === 'animal' && e.cls !== 'invertebrate')) continue;
-    const ar = place(`abund/${e.id}/${siteKey}`);
-    const count = (h.perInstance ?? h.pieces) * Math.exp((e.kind === 'stone' ? 0 : 0.35 * factors.fertility) + 0.5 * ar.normal());
-    const p = 1 - Math.exp(-count / 2), here = ar.chance(p);
-    note?.('lives here', e.id, { name: e.name, count, p, observed: here });
-    if (!here) continue;
-    out.push({ e, n: count });
-  }
-  return out;
-}
+// How many of each thing live at a site, with things that go together turning up together (population.js).
+export { populationAt };
 export const POPULATION = {
   id: 'population', name: 'What lives here',
   reads: ['site.key', 'site.micro', 'here.factors', 'world'], writes: [],
@@ -99,12 +84,13 @@ export const POPULATION = {
 const BONE_VIS = { glade: 1.3, outcrop: 1.3, scree: 1.3, streambed: 1.2, edge: 1, claybank: 1, streambank: 0.8, pond: 0.8, spring: 0.8, woodland: 0.6, deadfall: 0.6 };
 const isFineBoned = a => /bird|soarer|fish|frog|lizard/.test(a.traits.key ?? '') || (a.traits.mass ?? 0) < 3;
 // effort: 1 = half an hour looking for nothing else. Adds what's found to the site's bones (at most 4 fine, 3 big).
-export function findBones(world, site, effort, rng, note = null) {
+// place: the place's dice, for each animal's density near here (population.js); without, its usual density.
+export function findBones(world, site, effort, rng, note = null, place = null) {
   const vis = BONE_VIS[site.micro] ?? 1;
   const found = { fine: 0, big: 0 };
   for (const a of world.animals) {
     if (a.cls === 'invertebrate' || !a.habitats.some(h => h.micro === site.micro)) continue;
-    const mu = effort * vis * (a.perKm2 ?? 0) * (a.traits.mass ?? 0) / 600; // expected finds; 600 kg/km² per find is tuning
+    const mu = effort * vis * (place ? densityAt(a, site.key, place) : a.perKm2 ?? 0) * (a.traits.mass ?? 0) / 600; // expected finds; 600 kg/km² per find is tuning
     let n = 0, L = Math.exp(-mu), p = 1; // Poisson draw
     do { n++; p *= rng.next(); } while (p > L && n < 20);
     found[isFineBoned(a) ? 'fine' : 'big'] += n - 1;
@@ -125,19 +111,21 @@ export const boneLines = f => [
 const memKeyE = e => e.lookalike?.mimics ?? e.id;
 export function noteKnown(site, mem, e) { site.known.add(e.id); (mem.entities[memKeyE(e)] ??= { seen: 0, traits: {} }).seen++; }
 
-// What the nose picks up close by.
+// What the nose picks up close by: only from what's there and active now (no ripe fruit out of
+// season, no bees or flies in the winter, no fresh scent mark from an animal that's away).
 function smellsHere(v, here, rng) {
-  const out = [], mem = v.mem;
+  const out = [], mem = v.mem, cond = v.here.cond, g = cond.g;
   const nm = e => (mem.entities[memKeyE(e)] ? ` (${e.name})` : '');
-  const find = f => here.find(e => e.kind === 'plant' && f(e.traits ?? {}));
+  const find = f => here.find(e => e.kind === 'plant' && f(e.traits ?? {}, e));
+  const about = e => animalNow(e, cond).here;
   const resin = find(t => t.resin > 0.5); if (resin) out.push(`resin${nm(resin)}`);
-  const onion = find(t => t.defense === 'sulfur'); if (onion) out.push(`onion, underfoot${nm(onion)}`);
-  const mint = find(t => t.defense === 'aromatic'); if (mint) out.push(`something sharp and minty${nm(mint)}`);
-  const fruit = find(t => ['berry', 'drupe'].includes(t.fruit)); if (fruit) out.push(`ripe fruit${nm(fruit)}`);
-  if (here.some(e => e.form === 'mushroom')) out.push('damp, mushroomy earth');
-  if (here.some(e => e.traits?.key === 'bee')) out.push('a waxy sweetness where bees are working');
-  if (here.some(e => e.traits?.key === 'fly') && rng.chance(0.4)) out.push('droppings somewhere close, by the flies');
-  if (v.world.animals.some(a => a.traits.key === 'predator' && a.habitats.some(h => h.micro === v.site.micro)) && rng.chance(0.3)) out.push('a musky reek where something has marked its ground');
+  const onion = find((t, e) => t.defense === 'sulfur' && plantNow(v.world, e, g).leaf >= 0.3); if (onion) out.push(`onion, underfoot${nm(onion)}`); // the leaves crushed underfoot
+  const mint = find((t, e) => t.defense === 'aromatic' && plantNow(v.world, e, g).leaf >= 0.3); if (mint) out.push(`something sharp and minty${nm(mint)}`);
+  const fruit = find((t, e) => ['berry', 'drupe'].includes(t.fruit) && fruitShows(v.world, e, g)); if (fruit) out.push(`ripe fruit${nm(fruit)}`);
+  if (here.some(e => e.form === 'mushroom' && plantNow(v.world, e, g).notice >= 0.3)) out.push('damp, mushroomy earth');
+  if (here.some(e => e.traits?.key === 'bee' && about(e))) out.push('a waxy sweetness where bees are working');
+  if (here.some(e => e.traits?.key === 'fly' && about(e)) && rng.chance(0.4)) out.push('droppings somewhere close, by the flies');
+  if (v.world.animals.some(a => a.traits.key === 'predator' && about(a) && a.habitats.some(h => h.micro === v.site.micro)) && rng.chance(0.3)) out.push('a musky reek where something has marked its ground');
   if (v.site.micro === 'pond' && v.here.marsh) out.push('stagnant water and rotting reeds');
   return out;
 }
@@ -170,19 +158,19 @@ export const SURVEY = {
     }
     // animal sign: what's been left behind, not the animals themselves
     for (const a of v.world.animals.filter(a => a.cls !== 'invertebrate' && a.signs && a.habitats.some(h => h.micro === v.site.micro))) {
-      if (!animalNow(a, cond).here || !roll(d, 'sign', a.id, (1 - Math.exp(-a.perKm2 * 0.3)) * cond.light * (cond.snowCm > 2 ? 1.5 : 1 - 0.6 * cond.litter), { name: `sign of ${a.name}` })) continue; // fresh sign shows in snow, hides under leaves
+      if (!animalNow(a, cond).here || !roll(d, 'sign', a.id, (1 - Math.exp(-densityAt(a, v.site.key, d.place) * 0.3)) * cond.light * (cond.snowCm > 2 ? 1.5 : 1 - 0.6 * cond.litter), { name: `sign of ${a.name}` })) continue; // fresh sign shows in snow, hides under leaves
       const known = v.mem.entities[memKeyE(a)];
       const sign = a.signs.damage ?? (a.signs.track ? `sets of ${a.signs.track.type}` : a.signs.den);
       if (!sign) continue;
       rows.push({ n: 0.5, text: `${/^sets/.test(sign) ? 'a few' : '1'} ${sign.replace(/^(the|a) /, '')}${known ? ` (${a.name})` : ', left by some animal'}` });
       seen[`sign of ${a.name}`] = 1;
     }
-    const bones = findBones(v.world, v.site, 0.35, rng, d.note);
+    const bones = findBones(v.world, v.site, 0.35, rng, d.note, d.place);
     for (const t of boneLines(bones)) rows.push({ n: 0.4, text: t });
     rows.sort((a, b) => b.n - a.n);
     const water = v.world.water.find(w => w.micro === (v.site.micro === 'streambed' ? 'streambank' : v.site.micro));
     const sm = smellsHere(v, present.map(r => r.e), rng);
-    const lines = [...(water ? [v.here.water ? `water: ${water.name}` : 'water: none now; the bed is dry'] : []), ...rows.map(r => r.text), ...(sm.length ? [`smells: ${sm.join('; ')}`] : []), ...namingSentences(fresh, v.mem, v.site.key, entityIn(v.world), rng)];
+    const lines = [...(water ? [v.here.water ? `water: ${water.name}` : 'water: none now; the bed is dry'] : []), ...rows.map(r => r.text), ...(sm.length ? [`smells: ${sm.join('; ')}`] : []), ...namingSentences(fresh, v.mem, v.site.key, entityIn(v.world), rng, { world: v.world, g: cond.g })];
     return {
       say: [...(v.here.seeing ? [[v.here.seeing, 'thought']] : []), [`Surveying what I can see from here:\n${lines.join('\n')}`, 'survey']],
       report: { seen, bones, smells: sm },

@@ -158,7 +158,7 @@ export function hear(L, pos, { time = 'day', boost = 1 } = {}) {
   let closeKey = null;
   for (const a of A) {
     if (a.birds && time === 'night') continue;
-    const R = a.range * quiet * boost * (1 - 0.35 * vegHere) * (a.birds ? (time === 'day' ? 0.45 : 1) : L.dyn?.sound(a) ?? 1);
+    const R = a.range * quiet * boost * (1 - 0.35 * vegHere) * (a.birds ? (time === 'day' ? 0.45 : 1) * (L.dyn?.birds?.(a) ?? 1) : L.dyn?.sound(a) ?? 1);
     if (!R) continue; // a dry bed makes no sound
     const d = Math.max(30, distM(pos, a));
     if (d > 3 * R) continue; // under a ninth of threshold: negligible even when summed

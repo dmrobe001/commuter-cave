@@ -98,7 +98,7 @@ function explore(want, focus = '') {
   return strikeOut(w, d, ['north', 'east', 'south', 'west', 'northeast', 'southwest', 'southeast', 'northwest'][(dirTurn++ * 3) % 8]); // about 1 km
 }
 
-const WATER = /water|river|stream|brook|lake|falls|cascade|tree line/;
+const WATER = /water|river|stream|brook|lake|falls|waterfall|cascade|tree line/;
 let refinesSinceDrill = 0;
 const triedBones = new Set(), triedSharp = new Set();
 const where = () => d.querySelector('#where').textContent;
@@ -109,7 +109,7 @@ function step() {
   // water
   if (/(^| )(Thirsty|Very thirsty|Parched)/.test(b)) {
     if (click('[data-here="drink"]')) return true;
-    const known = btn('[data-hike]', /brook|stream|lake|river|falls|cascade|spring/);
+    const known = btn('[data-hike]', /brook|stream|lake|river|falls|waterfall|cascade|spring/);
     if (known) { known.dispatchEvent(new w.MouseEvent('click', { bubbles: true })); return true; }
     if (click('[data-here="lookout"]')) return true;
     return explore(WATER, 'water') || explore(/hill/, 'water');

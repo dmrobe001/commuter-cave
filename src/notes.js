@@ -19,7 +19,8 @@ import { makeRng, clamp } from './rng.js';
 import { samplePatch } from './generator.js';
 import { siteFactors } from './variation.js';
 import { animalNow } from './life.js';
-import { plantNow } from './phenology.js';
+import { plantNow, cuesNow, fruitShows } from './phenology.js';
+import { populationAt, densityAt } from './population.js';
 
 export function newMemory() {
   return { visits: 0, factors: {}, entities: {}, micro: {}, water: {}, signs: {}, recent: [], last: null, names: {} };
@@ -176,7 +177,9 @@ const DESCRIPTOR = {
   lizard: 'scaly basker', frog: 'smooth-skinned hopper', groundbird: 'plump ground bird', songbird: 'small songbird', fish: 'fish',
   browser: 'long-legged hoofed animal', rooter: 'stocky, bristled animal with tusks', soarer: 'big soaring bird',
 };
-function firstCue(e) {
+// season: { world, g } (ground.js state for the day), or null: then every feature counts as showing.
+// Only what shows now describes a plant: no berries in winter, no leaves on a bare tree.
+function firstCue(e, season = null) {
   if (e.kind === 'animal') {
     const t = e.traits;
     const base = t.key === 'predator' ? (t.pack ? 'big doglike hunter' : 'big catlike hunter') : DESCRIPTOR[t.key];
@@ -184,17 +187,18 @@ function firstCue(e) {
     const core = m ? `${m[1]} ${t.color} ${m[2]}` : `${t.color} ${base}`;
     return `${core}${t.hairy ? ', covered in bristly hairs' : ''}`;
   }
+  const cues = season?.g && e.kind === 'plant' ? cuesNow(season.world, e, season.g) : e.cues;
   for (const re of CUE_PRIORITY) {
-    const c = e.cues.find(x => re.test(x));
+    const c = cues.find(x => re.test(x));
     if (c) return c;
   }
-  return e.cues[0];
+  return cues[0] ?? (['herb', 'grass'].includes(e.form) ? 'dead, brown stems' : 'nothing much to tell it by');
 }
 const COUNTABLE = e => e.kind === 'animal' || (e.kind === 'plant' && ['tree', 'shrub', 'mushroom'].includes(e.form));
 const article = w => (/^[aeiou]/i.test(w) ? 'an' : 'a');
 const withArticle = (e, n) => (COUNTABLE(e) ? `${article(n)} ${n}` : n);
-function nounPhrase(e) {
-  const cue = firstCue(e);
+function nounPhrase(e, season = null) {
+  const cue = firstCue(e, season);
   if (e.kind === 'animal') return `${article(cue)} ${cue}`;
   if (e.kind === 'stone') return `some ${cue}`;
   const k = KIND_NOUN(e);
@@ -257,9 +261,10 @@ export function noteTrail(memory, site) {
 const recentSites = memory => (memory.trail ?? []).slice(-2);
 export const kindOf = e => (e.kind === 'animal' ? `a:${e.traits.key}` : `${e.kind}:${e.nameBase ?? e.name}`);
 const kindNoun = e => (e.kind === 'animal' ? e.traits.noun : e.nameBase ?? e.name);
-const shortCue = e => firstCue(e).replace(/^(a|an|some) /, '');
-function compare(e, prev) {
+const shortCue = (e, season) => firstCue(e, season).replace(/^(a|an|some) /, '');
+function compare(e, prev, season = null) {
   if (!prev) return null;
+  const fruitBoth = !season?.g || (fruitShows(season.world, e, season.g) && fruitShows(season.world, prev, season.g));
   const t = e.traits ?? {}, p = prev.traits ?? {};
   if (e.kind === 'animal') {
     const rel = (t.mass && p.mass) ? t.mass / p.mass : (t.sizeFactor ?? 1) / (p.sizeFactor ?? 1);
@@ -267,7 +272,7 @@ function compare(e, prev) {
     if (rel < 0.83) return 'a bit smaller';
     if (t.color !== p.color) return t.color;
   } else if (e.kind === 'plant') {
-    if (t.fruitColor && p.fruitColor && t.fruitColor !== p.fruitColor) return `${t.fruitColor}-fruited`;
+    if (fruitBoth && t.fruitColor && p.fruitColor && t.fruitColor !== p.fruitColor) return `${t.fruitColor}-fruited`;
     if (t.color && p.color && t.color !== p.color) return t.color;
     if ((t.pace ?? 0) - (p.pace ?? 0) > 0.3) return 'a bit softer-leaved';
     if ((p.pace ?? 0) - (t.pace ?? 0) > 0.3) return 'a bit tougher-leaved';
@@ -275,7 +280,8 @@ function compare(e, prev) {
   return 'a little different';
 }
 // es: entities new to me, found together at `site`. Returns sentences; records what was named where.
-export function namingSentences(es, memory, site, byId, r) {
+// season: { world, g }, so a plant is described only by what shows now (see firstCue).
+export function namingSentences(es, memory, site, byId, r, season = null) {
   const out = [];
   memory.namedAt ??= {};
   const groups = new Map(), seen = new Set();
@@ -290,11 +296,11 @@ export function namingSentences(es, memory, site, byId, r) {
     const prev = before.length ? byId?.(before[before.length - 1].id) : null;
     const names = g.map(e => nameOf(memory, e));
     if (g.length > 1) {
-      const cues = g.map(shortCue), says = cues.every((c, i) => new RegExp(`\\b${names[i].split(' ').pop()}s?\\b`, 'i').test(c));
+      const cues = g.map(e => shortCue(e, season)), says = cues.every((c, i) => new RegExp(`\\b${names[i].split(' ').pop()}s?\\b`, 'i').test(c));
       out.push(`${g.length === 2 ? 'A couple of' : 'A few'} different kinds of ${prev ? 'other ' : ''}${kindNoun(g[0])}${says ? '' : `: ${joinList(cues)}`}. I'll call them ${joinList(names)}.`);
     } else {
-      const e = g[0], n = names[0], np = nounPhrase(e);
-      if (prev) { const c = compare(e, prev); out.push(c === 'a little different' ? `Another ${kindNoun(e)}, much like the one before. I'll call this one ${n}.` : `Another ${kindNoun(e)}; this one is ${c}. I'll call this one ${n}.`); }
+      const e = g[0], n = names[0], np = nounPhrase(e, season);
+      if (prev) { const c = compare(e, prev, season); out.push(c === 'a little different' ? `Another ${kindNoun(e)}, much like the one before. I'll call this one ${n}.` : `Another ${kindNoun(e)}; this one is ${c}. I'll call this one ${n}.`); }
       else if (new RegExp(`\\b${n.split(' ').pop()}s?\\b`, 'i').test(np)) out.push(`${cap(np)}.`); // the description already says what it is
       else if (e.coined) out.push(`${cap(np)}. I'll call it ${n}.`);
       else {
@@ -320,6 +326,8 @@ export function namingSentences(es, memory, site, byId, r) {
 export function observeSite(world, memory, { site, micro, skill = 0.5, time = 'day', cond = null }) {
   const light = cond?.light ?? 1, hearing = cond?.hearing ?? 1, snow = cond?.snowCm ?? 0, litter = cond?.litter ?? 0;
   const lowCover = (1 - Math.min(1, snow / 20)) * (1 - 0.5 * litter); // what's left showing of things on the ground
+  const season = cond?.g ? { world, g: cond.g } : null;
+  const place = key => makeRng(`${world.seed}/${key}`); // the place's dice, as the game's (realPlace)
   const env = world.environment;
   const all = [...world.stones, ...world.plants, ...world.animals];
   const byId = id => all.find(x => x.id === id);
@@ -360,11 +368,8 @@ export function observeSite(world, memory, { site, micro, skill = 0.5, time = 'd
 
   // ---- sessile things and invertebrates: seen directly
   // (cryptic things, under stones and logs or in the litter, only turn up when poking around)
-  for (const e of all.filter(x => !x.cryptic && x.habitats.some(h => h.micro === micro) && !(x.kind === 'animal' && x.cls !== 'invertebrate'))) {
-    const h = e.habitats.find(x => x.micro === micro);
-    const ar = makeRng(`${world.seed}/abund/${e.id}/${site}`);
-    const count = (h.perInstance ?? h.pieces) * Math.exp((e.kind === 'stone' ? 0 : 0.35 * f.fertility) + 0.5 * ar.normal());
-    if (!ar.chance(1 - Math.exp(-count / 2))) continue;
+  // (what lives here is the same draw the survey makes: population.js, on the place's own dice)
+  for (const { e, n: count } of populationAt(world, micro, site, f, place).filter(({ e }) => !e.cryptic)) {
     const now = e.kind === 'animal' && cond ? animalNow(e, cond) : null;
     if (now && !now.here) continue; // overwintering out of sight
     const low = ['herb', 'grass', 'moss', 'lichen', 'mushroom'].includes(e.form) || e.kind === 'stone' || e.kind === 'animal';
@@ -381,8 +386,9 @@ export function observeSite(world, memory, { site, micro, skill = 0.5, time = 'd
     const now = cond ? animalNow(e, cond) : null;
     if (now && !now.here) continue; // away for the winter, or asleep through it
     const active = activeAt(e, time);
-    const here = 1 - Math.exp(-e.perKm2 * 0.08);   // present right now
-    const recent = 1 - Math.exp(-e.perKm2 * 0.3);  // passed through in the last few days
+    const dens = densityAt(e, site, place);         // near here (population.js): more where its guild is thick
+    const here = 1 - Math.exp(-dens * 0.08);   // present right now
+    const recent = 1 - Math.exp(-dens * 0.3);  // passed through in the last few days
     const presentNow = r.chance(here);
     if (s.distant) {
       if (presentNow && r.chance(clamp(0.5 + 0.5 * f.exposure, 0, 1) * (active ? 1 : 0.2) * (now?.seen ?? 1) * Math.min(1, 2 * light))) sightings.push({ e, distant: true });
@@ -412,7 +418,8 @@ export function observeSite(world, memory, { site, micro, skill = 0.5, time = 'd
     sgt.traits = {};
     if (!sgt.distant) {
       const patch = samplePatch(world, e.id, site, micro).traits;
-      for (const t of e.varying.filter(v => v.kind === 'visible')) {
+      const shows = id => !season || e.kind !== 'plant' || (/^fruit/.test(id) ? fruitShows(world, e, season.g) : /^(leafSize|hairiness)$/.test(id) ? plantNow(world, e, season.g).leaf >= 0.3 : true); // no sizing up fruit that isn't there
+      for (const t of e.varying.filter(v => v.kind === 'visible' && shows(v.id))) {
         sgt.traits[t.id] = { latent: t.scale === 'log' ? Math.log(patch[t.id]) + r.normal(0, 0.1) : patch[t.id] + r.normal(0, 0.05), scale: t.scale };
       }
     }
@@ -464,7 +471,7 @@ export function observeSite(world, memory, { site, micro, skill = 0.5, time = 'd
     }
     // Unresolved.
     if (!sig) items.push({ score: channel === 'call' ? 2.3 : channel === 'track' ? 2.4 : 1.8, type: `${channel}New`, desc, cm: so.cm, key, channel });
-    else usual.push({ text: channel === 'call' ? `${desc} again` : `more ${desc}` });
+    else usual.push({ text: channel === 'call' ? `${desc} again` : /^an? /.test(desc) ? `another ${desc.replace(/^an? /, '')}` : `more ${desc}` }); // "another nest scraped in the ground", not "more a nest"
   }
   if (bolted) {
     const slow = knownAnimals.filter(a => !a.signs.distant && a.signs.speed < bolted.signs.speed - 0.15 && a.cls === 'large');
@@ -519,7 +526,7 @@ export function observeSite(world, memory, { site, micro, skill = 0.5, time = 'd
   let namedYet = false;
   for (const it of chosen) {
     if (it.type !== 'new') { out.push(realize(it)); continue; }
-    if (!namedYet) { out.push(...namingSentences(fresh.map(x => x.e), memory, site, byId, r)); namedYet = true; }
+    if (!namedYet) { out.push(...namingSentences(fresh.map(x => x.e), memory, site, byId, r, season)); namedYet = true; }
   }
   const chosenEntities = new Set(chosen.map(x => x.e).filter(Boolean));
   const usualItems = usual.filter(u => (!u.e || u.e.kind !== 'stone') && !chosenEntities.has(u.e)).filter((u, i, all) => all.findIndex(v => v.text === u.text) === i).slice(0, 3);
@@ -534,7 +541,7 @@ export function observeSite(world, memory, { site, micro, skill = 0.5, time = 'd
       case 'water': memory.water[it.w.id] = true; return tpl(memory, r, 'water')(it.w.cues.join(', '));
       case 'new': {
         const n = nameOf(memory, e);
-        const np = nounPhrase(e);
+        const np = nounPhrase(e, season);
         // when the plain description already says what it is ("a red ant"), no resemblance is needed
         if (new RegExp(`\\b${n.split(' ').pop()}s?\\b`, 'i').test(np)) return `${cap(np)}.`;
         const key = aware && r.chance(0.35) ? 'newName' : 'name';
