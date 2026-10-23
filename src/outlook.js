@@ -1,116 +1,151 @@
-// outlook.js — the start screen's survivability blurb: water in x hours, food in x hours, fire in x days.
+// outlook.js — the start screen's blurb on water, food and fire near where I wake.
 //
-// These are indicative, not rigorous. Each is a plausible outcome for a sensible beginner, from a cheap
-// stand-in for play that reuses the game's own perception and walking models:
-//   water  a handful of quick trial runs of the opening: scan; walk toward the loudest or nearest water
-//          cue; failing that climb to the lookout and look; failing that strike out in a random direction.
-//          Report the median.
-//   food   a back-of-envelope: each attempt is a short walk, a survey and a gathering, at a site drawn from
-//          the microhabitats around the spawn; it succeeds if a meal-sized food that is safe raw is there
-//          and the beginner happens to try it rather than an unsafe one. Report the median wait.
-//   fire   the closed-form fire estimate (craft.js `estimateFire`), median day.
+// Each is the best source within reach, averaged over the year (the middle day of each month), and
+// marked "seasonal" when the months differ widely. These are rates and distances from what's there,
+// not a simulation of a beginner finding it:
+//   water  the walk to the nearest water that's running (or standing) that month, from the spawn: the
+//          straight line, at 3 km/h, with 40% added for the way round. Brooks and streams that dry up
+//          don't count while they're dry; ice does (it can be broken). Seasonal when the worst month
+//          is over twice the best and a quarter-hour more, or has no water within 3 km.
+//   food   for each food a bare-handed beginner can take (a plant part gathered by hand, a slow
+//          creature caught by hand), in each microhabitat it lives in near the spawn (within 1.5 km):
+//            kcal per hour = how often a stop finds it  ×  kcal from gathering it there
+//                            ÷  hours per stop (the walk to the next patch of that ground, a survey, a
+//                               half hour's gathering)
+//          where a stop finds it with the game's own presence chance at its usual abundance, and its
+//          kcal is the net energy of a half hour's gathering eaten raw (food.js). That month's rate
+//          is the year's rate times how much of it there is (phenology.js; animals: about or not).
+//          The best yearly average among those safe to eat raw, and the best overall, if better
+//          but only once cooked. Seasonal when the swing between months is bigger than the average.
+//   fire   the closed-form fire estimate (craft.js estimateFire), its median day, with each month's
+//          dampness (wood left out takes the air's dampness: the climate's usual, moved by how much
+//          wetter or drier the month's weather runs than the year's, as the game reckons dampness);
+//          the year's average over the months it can be done at all. Seasonal when the
+//          worst month is over twice the best, or out of reach.
 
-import { makeRng } from './rng.js';
-import { perceive, suspicionFrom, walk, isLookout } from './geo.js';
-import { N, CELL } from './landscape.js';
-import { nutrients, harm, expose, PREP } from './food.js';
+import { CELL, N } from './landscape.js';
+import { nutrients, harm } from './food.js';
+import { groundAt, waterAt } from './ground.js';
+import { partNow } from './phenology.js';
+import { animalNow } from './life.js';
+import { estimateFire } from './craft.js';
+import { clamp } from './rng.js';
+import { skyAt } from './sky.js';
 
 const idx = (x, y) => y * N + x;
-const WATER = ['falls', 'cascade', 'rapids', 'river', 'stream', 'brook', 'river trace', 'lake', 'waterfowl'];
-const BUDGET = 12; // hours; past this the answer is just "a long time"
+const MONTHS = Array.from({ length: 12 }, (_, m) => Math.round(15 + m * 30.42)); // the middle day of each month
+const mean = xs => xs.reduce((a, b) => a + b, 0) / xs.length;
 
-// Water within ~200 m is noticed on arrival (as in the game's `arrive`). Returns metres, or null.
-function waterNear(L, p) {
-  let best = null;
-  for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
-    const x = p.x + dx, y = p.y + dy;
-    if (x < 0 || y < 0 || x >= N || y >= N) continue;
-    const c = idx(x, y);
-    if ((L.chan[c] || L.lake[c]) && (best === null || Math.hypot(dx, dy) < best)) best = Math.hypot(dx, dy);
-  }
-  return best === null ? null : best * CELL;
-}
+// ------------------------------------------------------------ water
 
-function waterTrial(L, spawn, rng) {
-  let p = { x: spawn.x, y: spawn.y }, hours = 0, lookedOut = false;
-  const reached = () => { const m = waterNear(L, p); return m === null ? null : hours + m / 3000; }; // last stretch at 3 km/h
-  for (let leg = 0; leg < 8 && hours < BUDGET; leg++) {
-    if (leg > 0) { const done = reached(); if (done !== null) return done; } // on waking, nothing is noticed for free
-    const atLookout = isLookout(L, p.x, p.y);
-    hours += 0.5; // scan, or look out from high ground
-    const cues = perceive(L, p, { time: hours < 1.5 ? 'dawn' : 'day', lookout: atLookout, boost: atLookout ? 1 : 1.6 }).filter(c => WATER.includes(c.kind));
-    let target = null, resense = null;
-    if (cues.length) {
-      const c = cues.reduce((a, b) => (b.strength > a.strength ? b : a));
-      target = suspicionFrom(c, p, rng).est;
-      let n = 0;
-      resense = q => { if (++n % 6) return null; const k = perceive(L, q, {}).find(x => x.key === c.key); return k ? suspicionFrom(k, q, rng).est : null; };
-    } else if (spawn.lookout && !lookedOut) { target = spawn.lookout; lookedOut = true; }
-    else { // strike out in some direction, about 1.5 km
-      const a = rng.uniform(0, 2 * Math.PI);
-      target = { x: Math.max(0, Math.min(N - 1, Math.round(p.x + 20 * Math.sin(a)))), y: Math.max(0, Math.min(N - 1, Math.round(p.y - 20 * Math.cos(a)))) };
-    }
-    const trip = walk(L, p, target, { rng, maxHours: 3, resense, stopAtWater: true });
-    hours += trip.hours;
-    p = trip.end;
-    if (trip.crossings.length) return hours;
-  }
-  return reached() ?? Infinity;
-}
-
-export function estimateWater(L, spawn, seed, trials = 9) {
-  const rng = makeRng(`${seed}/outlook/water`);
-  const t = Array.from({ length: trials }, () => waterTrial(L, spawn, rng)).sort((a, b) => a - b);
-  return { hours: t[Math.floor(trials / 2)], trials: t };
-}
-
-const MEAL = 250; // kcal: worth calling food
-const ATTEMPT = 1.75; // hours: short walk, survey, gather
-
-export function estimateFood(world, L, spawn) {
-  // what can be had with bare hands, and whether it is safe raw (no fire yet)
-  // net energy of half an hour's gathering, eaten raw (no fire yet), from each food's make-up
-  const raw = chem => ({ kcal: nutrients(chem, chem.gather).net, safe: harm(chem) < 0.12 && !(chem.compounds.parasites > 0.3) });
-  const options = [
-    ...world.plants.flatMap(p => p.parts.filter(x => x.food && x.chem && !/cutting edge|digging stick/.test(x.collect ?? '')).map(x => ({ ...raw(x.chem), habitats: p.habitats }))),
-    ...world.animals.filter(a => a.cls === 'invertebrate' && a.chem && /^easy/.test(a.catch ?? '')).map(a => ({ ...raw(a.chem), habitats: a.habitats })),
-  ].filter(o => o.kcal >= MEAL);
-  // microhabitats within ~1.5 km of the spawn
-  const share = {}; let n = 0;
-  for (let dy = -19; dy <= 19; dy++) for (let dx = -19; dx <= 19; dx++) {
+const WATER_R = 38; // cells: about 3 km
+export function estimateWater(world, L, spawn) {
+  const lakes = [], chans = [];
+  for (let dy = -WATER_R; dy <= WATER_R; dy++) for (let dx = -WATER_R; dx <= WATER_R; dx++) {
     const x = spawn.x + dx, y = spawn.y + dy;
-    if (x < 0 || y < 0 || x >= N || y >= N || dx * dx + dy * dy > 361) continue;
+    if (x < 0 || y < 0 || x >= N || y >= N) continue;
+    const c = idx(x, y), d = Math.hypot(dx, dy);
+    if (L.lake[c]) lakes.push(d); else if (L.chan[c]) chans.push({ c, d });
+  }
+  const nearLake = lakes.length ? Math.min(...lakes) : Infinity;
+  const months = MONTHS.map(day => {
+    const g = groundAt(world, day);
+    let d = nearLake;
+    for (const { c, d: dc } of chans) if (dc < d && !waterAt(L, g, c).dry) d = dc;
+    return Number.isFinite(d) ? (d * CELL / 1000 / 3) * 1.4 : Infinity; // hours
+  });
+  const finite = months.filter(Number.isFinite), best = Math.min(...months), worst = Math.max(...months);
+  return { hours: finite.length ? mean(finite) : Infinity, months, seasonal: worst === Infinity ? finite.length > 0 : worst > 2 * best + 0.25 };
+}
+
+// ------------------------------------------------------------ food
+
+const NEAR = 19; // cells: about 1.5 km
+const WALK_KMH = 2.5, SURVEY = 0.75, GATHER = 0.5; // a forager's pace between patches; hours to look over a patch and to gather
+export function estimateFood(world, L, spawn) {
+  // the ground around the spawn: each microhabitat's share of it
+  const share = {}; let n = 0;
+  for (let dy = -NEAR; dy <= NEAR; dy++) for (let dx = -NEAR; dx <= NEAR; dx++) {
+    const x = spawn.x + dx, y = spawn.y + dy;
+    if (x < 0 || y < 0 || x >= N || y >= N || dx * dx + dy * dy > NEAR * NEAR) continue;
     const m = L.micro[idx(x, y)] === 'lake' ? 'pond' : L.micro[idx(x, y)];
     share[m] = (share[m] ?? 0) + 1; n++;
   }
-  let q = 0, cookedOnly = false;
-  for (const [m, k] of Object.entries(share)) {
-    let pNone = 1, safeW = 0, allW = 0;
-    for (const o of options) {
-      const h = o.habitats.find(z => z.micro === m); if (!h) continue;
-      const occ = 1 - Math.exp(-(h.perInstance ?? h.pieces ?? 0) / 2); // as in the game's presence rule, at median abundance
-      allW += occ; if (o.safe) { safeW += occ; pNone *= 1 - occ; } else cookedOnly = true;
+  // foods a beginner can take bare-handed: { name, kind, chem, habitats, now(g) → 0..1 }
+  const sources = [
+    ...world.plants.flatMap(p => p.parts.filter(x => x.food && x.chem && /^hands/.test(x.collect ?? '')).map(x => ({ name: `${p.name} ${x.part}`, kind: x.chem.cls, chem: x.chem, habitats: p.habitats, now: g => partNow(world, p, x.part, g) }))),
+    ...world.animals.filter(a => a.cls === 'invertebrate' && a.chem && /^easy/.test(a.catch ?? '')).map(a => ({ name: a.name, kind: 'small creatures', chem: a.chem, habitats: a.habitats, now: g => animalNow(a, { doy: g.doy, meanC: g.meanC, weather: 'cloudy', wet: false }).here })),
+  ];
+  const grounds = MONTHS.map(day => groundAt(world, day));
+  const rated = [];
+  for (const s of sources) {
+    const kcal = nutrients(s.chem, s.chem.gather).net, safe = harm(s.chem) < 0.12 && !(s.chem.compounds.parasites > 0.3);
+    if (kcal <= 0) continue;
+    let rate = 0; // kcal per hour, at full season, in the best ground for it near here
+    for (const h of s.habitats) {
+      const f = (share[h.micro] ?? 0) / n;
+      if (!f) continue;
+      const found = 1 - Math.exp(-(h.perInstance ?? h.pieces ?? 0) / 2); // the game's presence chance, at its usual abundance
+      const walk = (CELL / Math.sqrt(f)) / 1000 / WALK_KMH; // patches of this ground lie about 1/√share cells apart
+      rate = Math.max(rate, found * kcal / (walk + SURVEY + GATHER));
     }
-    if (allW) q += (k / n) * (1 - pNone) * (safeW / allW); // present, and the one tried is the safe one
+    if (!rate) continue;
+    const months = grounds.map(g => rate * clamp(s.now(g)));
+    rated.push({ name: s.name, kind: s.kind, safe, kcal, months, perHour: mean(months) });
   }
-  if (q <= 0) return { hours: Infinity, cookedOnly };
-  const attempts = Math.max(1, Math.ceil(Math.log(0.5) / Math.log(1 - Math.min(q, 0.999))));
-  return { hours: attempts * ATTEMPT, q, cookedOnly };
+  const best = list => list.sort((a, b) => b.perHour - a.perHour)[0] ?? null;
+  const raw = best(rated.filter(r => r.safe)), any = best([...rated]);
+  const pick = raw ?? any, seasonalOf = r => r && Math.max(...r.months) - Math.min(...r.months) > r.perHour;
+  return {
+    perHour: raw?.perHour ?? 0, source: raw, seasonal: seasonalOf(raw),
+    cooked: any && any !== raw && any.perHour > 1.3 * (raw?.perHour ?? 0) ? { perHour: any.perHour, source: any, seasonal: seasonalOf(any) } : null,
+    best: pick,
+  };
 }
 
-export const hoursWords = h => (!Number.isFinite(h) || h > BUDGET * 2 ? 'more than a day'
-  : h < 0.75 ? 'under an hour' : h < 1.5 ? 'about an hour' : h < 10 ? `about ${Math.round(h)} hours` : `about ${Math.round(h / 2) * 2} hours`);
+// ------------------------------------------------------------ fire
+
+// How damp wood left out gets, as the game has it (game.js ambient): the climate's usual, wetter in
+// rain, snow and fog, drier on a clear afternoon. The fire estimate was fitted (against simulated play)
+// at the climate's usual, so a month is that plus how much wetter or drier its weather runs than the
+// year's: the year's average stays where the fit was made, and the months swing about it.
+const WEATHER_DAMP = { rain: 0.15, storm: 0.25, fog: 0.12, snow: 0.08, blizzard: 0.12 };
+export function estimateFireYear(world) {
+  const base = clamp(0.05 + 0.07 * world.environment.water, 0.05, 0.35);
+  const damp = MONTHS.map(day => {
+    let sum = 0, n = 0;
+    for (let k = -14; k <= 15; k++) for (const t of [1.5, 7.5, 13.5, 19.5]) {
+      const w = skyAt(world, day + k, t);
+      sum += WEATHER_DAMP[w.weather] ?? (w.weather === 'clear' && w.sunAlt > 20 ? -0.03 : 0); n++;
+    }
+    return sum / n;
+  });
+  const year = mean(damp), ambient = damp.map(d => clamp(base + d - year, 0.05, 0.45));
+  const months = ambient.map(a => { const est = estimateFire(world, { ambient: a }); return est.blocked ? null : est.median; }); // null: not within the month
+  const days = months.filter(d => d != null), best = Math.min(...days), any = days.length;
+  return { median: any ? mean(days) : null, months, ambient, seasonal: any > 0 && (any < 12 || Math.max(...days) > 2 * best) };
+}
+
+// ------------------------------------------------------------ words
+
+const minutesWords = h => (!Number.isFinite(h) ? 'none within 3 km' : h < 0.2 ? 'close by' : h < 0.75 ? `about ${Math.max(5, Math.round(h * 12) * 5)} min away` : h < 1.25 ? 'about an hour away' : `about ${Math.round(h * 2) / 2} h away`);
+const kcalWords = k => `about ${k < 100 ? Math.max(10, Math.round(k / 10) * 10) : Math.round(k / 50) * 50} kcal an hour of foraging`;
+const KIND = { fruit: 'fruit', nut: 'nuts', seed: 'seeds', grain: 'grain', pod: 'pods', storage: 'roots and tubers', root: 'roots', leaf: 'greens', stem: 'greens', flower: 'flowers', innerBark: 'inner bark', mushroom: 'mushrooms', lichen: 'lichen' };
 export const daysWords = d => (d == null ? 'more than a month' : d <= 1 ? 'about a day' : `about ${Math.round(d)} days`);
+const seasonalWord = x => (x ? ' (seasonal)' : '');
 
 export function outlook(world, L, spawn, fireEst, seed) {
-  const water = estimateWater(L, spawn, seed);
-  const food = estimateFood(world, L, spawn);
+  const water = estimateWater(world, L, spawn), food = estimateFood(world, L, spawn), fire = estimateFireYear(world);
+  const kindOf = r => KIND[r.kind] ?? r.kind;
+  const foodText = food.source && food.perHour >= 10
+    ? `food ${kcalWords(food.perHour)} (${kindOf(food.source)})${seasonalWord(food.seasonal)}${food.cooked ? `, more once cooked (${kindOf(food.cooked.source)})` : ''}`
+    : food.cooked ? `food mostly needs cooking: ${kcalWords(food.cooked.perHour)} (${kindOf(food.cooked.source)})${seasonalWord(food.cooked.seasonal)}` : 'little food to be had';
   return {
-    water, food, fire: fireEst,
+    water, food, fire, fireNow: fireEst, seed,
     text: {
-      water: `water in ${water.hours > BUDGET ? 'more than half a day' : hoursWords(water.hours)}`,
-      food: Number.isFinite(food.hours) ? `food in ${hoursWords(food.hours)}` : food.cookedOnly ? 'food only once you have fire' : 'little food to be had',
-      fire: fireEst.blocked ? `fire looks out of reach (${fireEst.blocked})` : `fire in ${daysWords(fireEst.median)}`,
+      water: `water ${minutesWords(water.hours)}${seasonalWord(water.seasonal)}`,
+      food: foodText,
+      fire: fireEst.blocked ? `fire looks out of reach (${fireEst.blocked})` : `fire in ${daysWords(fire.median)}${seasonalWord(fire.seasonal)}`,
     },
   };
 }

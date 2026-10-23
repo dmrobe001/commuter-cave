@@ -3,10 +3,12 @@
 // thrown errors and the regressions that have bitten before, not balance or prose.
 // Usage: node tests/ui/quick.cjs
 const { JSDOM } = require('jsdom');
+const { openPage } = require('./page.cjs');
+const { strikeOut } = require('./tap-map.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
 const errors = [];
 function page() {
-  const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
+  const dom = openPage();
   dom.window.addEventListener('error', e => errors.push(e.message));
   return { w: dom.window, d: dom.window.document };
 }
@@ -34,20 +36,26 @@ setTimeout(() => {
 
   // 2. the map: hike to a landmark and to unexplored ground; time labels lie along their lines
   const before = S().t;
-  tap(P, '[data-hike]', /Head for the (?!unknown)/);
-  tap(P, '[data-hike]', /unknown/);
+  tap(P, '[data-hike]', /Head for the /);
+  strikeOut(P.w, P.d, 'east');
+  tap(P, '[data-maproutes]'); // routes are hidden until asked for
   check(S().t > before, 'hikes take time');
   check(S().sites.length >= 2, 'hikes make places');
   const labels = [...P.d.querySelectorAll('.etime')];
   check(labels.length && labels.every(t => /rotate/.test(t.getAttribute('transform'))), 'edge times are rotated');
+  const landButton = () => P.d.querySelector('[data-mapland]')?.textContent ?? '';
+  const landModes = [landButton()]; for (let k = 0; k < 3; k++) { tap(P, '[data-mapland]'); landModes.push(landButton()); }
+  check(/seen/.test(landModes[0]) && /whole map/.test(landModes[1]) && /none/.test(landModes[2]) && landModes[3] === landModes[0], 'the land button cycles seen, whole map, none');
 
   // 3. the water milestone lands on reaching a heard stream (seed wgxdd, first suspect)
   P.d.querySelector('#replay-text').value = JSON.stringify({ game: 'hands-and-knowledge', seed: 'wgxdd', preset: '', actions: [{ d: { hike: 'u1' } }] });
   P.d.querySelector('#replay').click();
-  const L = log(P), i = L.findIndex(t => /^Found water\./.test(t)), j = L.findIndex(t => /There’s water|Stream bank/.test(t));
+  const L = log(P), i = L.findIndex(t => /^Found water\./.test(t)), j = L.findIndex(t => /There’s water|Stream bank|Gravel bar/.test(t));
   check(i >= 0 && i <= j, 'water found on reaching the stream');
 
   // 3b. food: gather, pound, soak or leach, taste, eat; the exact-properties view
+  // (back in the wood where I woke, which has berries; the stream bed has nothing to eat)
+  tap(P, '[data-hike]', /where I woke/);
   const foodBefore = S().inv.filter(i => i.kind === 'food').length;
   tap(P, '[data-here="collect"]'); if (tap(P, '[data-pk="part"]', /to eat/)) tap(P, '.picker [data-gather]'); tap(P, '[data-pk="close"]');
   tap(P, '[data-here="collect"]'); if (tap(P, '[data-pk="part"]', /stone/i)) tap(P, '.picker [data-gather]'); tap(P, '[data-pk="close"]');
@@ -61,11 +69,11 @@ setTimeout(() => {
     tap(P, '[data-test]', /Staged taste/);
     const cb = P.d.querySelector('[data-toggle="props"]'); cb.checked = true; cb.dispatchEvent(new P.w.Event('change', { bubbles: true }));
     check(P.d.querySelectorAll('ul.exact li').length > 0 && /net -?\d+ kcal/.test(P.d.querySelector('ul.exact').textContent), 'exact properties shown');
-    check(typeof food.props.germs === 'number' && typeof S().ch.germs === 'number', 'germ loads tracked');
+    check(typeof food.props.germs === 'number' && typeof S().body.germs === 'number', 'germ loads tracked');
     if (tap(P, '[data-here="make"]')) { tap(P, '[data-craft="wash"]'); tap(P, '[data-pk="close"]'); }
     tap(P, '[data-here="washhands"]');
-    const e0 = S().energy; tap(P, `[data-eat="${food.uid}"]`);
-    check(S().energy !== e0 || S().gut > 0, 'eating digests');
+    const e0 = S().body.energy; tap(P, `[data-eat="${food.uid}"]`);
+    check(S().body.energy !== e0 || S().body.gut > 0, 'eating digests');
   }
 
   // 4. a short replay reproduces a game

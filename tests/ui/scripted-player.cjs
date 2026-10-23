@@ -10,12 +10,14 @@
 //   then the fire plan: edges → hearth board → spindle → tinder → spare wood → test, choose, drill.
 
 const { JSDOM } = require('jsdom');
+const { openPage } = require('./page.cjs');
+const { strikeOut } = require('./tap-map.cjs');
 const path = require('path');
 const html = require('fs').readFileSync(path.join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
 const [seed = 'pig-rock', preset = '', maxStepsArg] = process.argv.slice(2);
 const MAX_STEPS = Number(maxStepsArg ?? 600);
 
-const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
+const dom = openPage();
 const w = dom.window, d = w.document, errors = [];
 w.addEventListener('error', e => errors.push(e.message));
 
@@ -93,33 +95,30 @@ let dirTurn = 0;
 function explore(want, focus = '') {
   closePicker();
   if (want && click('[data-hike]', want)) return true;
-  const out = all('[data-hike]').filter(b => !b.disabled && /unknown/.test(b.getAttribute('aria-label') ?? ''));
-  if (!out.length) return false;
-  out[(dirTurn++ * 3) % out.length].dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
-  return true;
+  return strikeOut(w, d, ['north', 'east', 'south', 'west', 'northeast', 'southwest', 'southeast', 'northwest'][(dirTurn++ * 3) % 8]); // about 1 km
 }
 
-const WATER = /water|river|stream|brook|lake|falls|cascade|tree line/;
+const WATER = /water|river|stream|brook|lake|falls|waterfall|cascade|tree line/;
 let refinesSinceDrill = 0;
 const triedBones = new Set(), triedSharp = new Set();
 const where = () => d.querySelector('#where').textContent;
 
 function step() {
-  if (hour() >= 21 || hour() < 5) { closePicker(); click('[data-here="rest"]'); return click('[data-rest="morning"]'); }
+  if (/, night/.test(d.querySelector('#when').textContent)) { closePicker(); click('[data-here="rest"]'); return click('[data-rest="morning"]'); } // night, as the header says
   const b = body();
   // water
   if (/(^| )(Thirsty|Very thirsty|Parched)/.test(b)) {
     if (click('[data-here="drink"]')) return true;
-    const known = btn('[data-hike]', /brook|stream|lake|river|falls|cascade|spring/);
+    const known = btn('[data-hike]', /brook|stream|lake|river|falls|waterfall|cascade|spring/);
     if (known) { known.dispatchEvent(new w.MouseEvent('click', { bubbles: true })); return true; }
     if (click('[data-here="lookout"]')) return true;
     return explore(WATER, 'water') || explore(/hill/, 'water');
   }
   // food
-  if (/Very hungry|Starving/.test(b)) {
+  if (/Very hungry|Starving/.test(b) && !/Full\./.test(b)) { // hungry for days still, but a full stomach can't take more now
     const safe = items().find(i => i.el.querySelector('[data-eat]') && !/sick/.test(i.imp));
     if (safe) { safe.el.querySelector('[data-eat]').click(); return true; }
-    if (collect(/^(Nuts|Fruits|Berries|Pods|Seed heads|Small creatures|Tubers|Bulbs|Corms|Taproots)/, t => !/sick/.test(t))) return true;
+    for (const re of [/^(Eggs|Small creatures|Nuts|Fruits|Berries|Pods|Seed heads|Tubers|Bulbs|Corms|Taproots)/, /^(Flowers|Stems|Leaves)/]) if (collect(re, t => !/sick/.test(t))) return true; // the calorie-dense first; greens only if that's all (in spring there may be nothing ripe)
   }
   // light work when hands or body need a rest
   if (/raw|Exhausted/.test(b)) {
@@ -192,6 +191,7 @@ setTimeout(() => {
       if (journal().length + d.querySelector('#when').textContent === before) stalls++; else stalls = 0;
       if (stalls > 25) { console.log('(stalled: no action changed anything)'); break; }
     }
+    if (process.env.DUMP) console.log(journal().join('\n')); // DUMP=1: the whole journal, for diagnosing
     const J = journal();
     const drills = J.filter(t => /at the drill/.test(t));
     const attempts = drills.reduce((s, t) => s + Number((t.replace(/^\d\d:\d\d/, '').match(/^(\d+) attempts/) || [0, 1])[1]), 0);

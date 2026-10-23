@@ -1,10 +1,12 @@
 const STEPS = Number(process.env.SMOKE_STEPS ?? 100); // random clicks per world (was 250; set SMOKE_STEPS for a longer soak)
 const { JSDOM } = require('jsdom');
+const { openPage } = require('./page.cjs');
+const { strikeOut, DIRS } = require('./tap-map.cjs');
 const fs = require('fs');
 const html = fs.readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
 for (const seed of ['pig-rock', 'a', 'i', 'h']) {
   const errors = [];
-  const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
+  const dom = openPage();
   const w = dom.window;
   w.addEventListener('error', e => errors.push(e.message));
   w.Element.prototype.scrollIntoView = () => {};
@@ -25,6 +27,8 @@ for (const seed of ['pig-rock', 'a', 'i', 'h']) {
       // mostly explore the list in priority-weighted random order
       const b = opts[rand(Math.min(opts.length, 8 + rand(opts.length)))];
       try { b.dispatchEvent(new w.MouseEvent('click', { bubbles: true })); } catch (e) { errors.push(`${b.outerHTML.slice(0, 60)}: ${e.message}`); }
+      // now and then pick a spot on the map and go there (drop a pin, tap it)
+      if (step % 10 === 9) try { strikeOut(w, d, Object.keys(DIRS)[rand(8)], 6 + rand(14)); } catch (e) { errors.push(`picking a spot: ${e.message}`); }
       // occasionally change a slot selection
       const sels = [...d.querySelectorAll('select[data-slot]')];
       if (sels.length && rand(5) === 0) { const s = sels[rand(sels.length)]; if (s.options.length) { s.selectedIndex = rand(s.options.length); s.dispatchEvent(new w.Event('change', { bubbles: true })); } }

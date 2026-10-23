@@ -1,8 +1,10 @@
 // Poking around: what a survey misses, then the same with a digging stick, then fire-hardening it.
 // Usage: node tests/ui/poke-around.cjs [seed]
 const { JSDOM } = require('jsdom');
+const { openPage } = require('./page.cjs');
+const { strikeOut } = require('./tap-map.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
-const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
+const dom = openPage();
 const w = dom.window, d = w.document, errors = [];
 w.addEventListener('error', e => errors.push(e.message));
 const seed = process.argv[2] ?? 'c';
@@ -17,7 +19,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   d.querySelector('#begin').click();
   const S = w.__hk.state();
   // go somewhere wooded, if we know of anywhere
-  if (!click('[data-hike]', /wood|thicket/)) click('[data-hike]', /unknown north/);
+  if (!click('[data-hike]', /wood|thicket/)) strikeOut(w, d, 'north');
   let n0 = entries().length;
   click('[data-here="survey"]');
   click('[data-here="poke"]');
@@ -39,7 +41,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     click('[data-pk="close"]');
     click('[data-here="poke"]'); click('[data-here="poke"]');
     console.log('POKE WITH THE STICK:\n' + entries().slice(n0).join('\n'));
-    S.sites[S.here].fireUntil = (S.day - 1) * 24 + S.t + 5; // pretend a fire is burning here
+    S.sites[S.at].fireUntil = (S.day - 1) * 24 + S.t + 5; // pretend a fire is burning here
     click('[data-here="make"]'); click('[data-craft="harden"][data-mode="careful"]');
     console.log(`after careful fire-hardening: hardness ${stick.props.hardness.toFixed(2)}; ${entries().slice(-1)[0]}`);
   }

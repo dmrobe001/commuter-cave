@@ -132,6 +132,19 @@ export function generateLandscape(world) {
       while (st.length) { const k = st.pop(); g.push(k); for (const [dx, dy] of NB) { const nx = (k % N) + dx, ny = ((k / N) | 0) + dy; if (nx < 0 || ny < 0 || nx >= N || ny >= N) continue; const n = idx(nx, ny); if (!seen[n] && lake[n]) { seen[n] = 1; st.push(n); } } }
       if (g.length >= 10) for (const k of g) keep[k] = 1; } }
   lake.set(keep);
+  // Water that leaves a lake and runs back into a lake on the same water level, within half a metre
+  // (another lobe of one sheet of water, or a lake brimming over a sill into its neighbour), is crossing
+  // a neck too shallow to have counted as lake: fill the neck, so the lobes are one lake and no stream
+  // runs between them.
+  const neck = [];
+  for (let c = 0; c < N * N; c++) {
+    if (!lake[c]) continue;
+    const path = [];
+    let n = down[c];
+    while (n >= 0 && !lake[n] && Math.abs(filled[n] - filled[c]) < 0.5 && path.length < 40) { path.push(n); n = down[n]; }
+    if (path.length && n >= 0 && lake[n] && Math.abs(filled[n] - filled[c]) < 0.5) neck.push(...path);
+  }
+  for (const k of neck) lake[k] = 1;
 
   // channels: upslope area over a threshold set by the water balance
   const Acrit = 160 / clamp(env.water, 0.3, 2); // ~1 km² of catchment in a temperate climate
@@ -172,7 +185,7 @@ export function generateLandscape(world) {
     if (chan[c] && down[c] >= 0 && chan[c] >= 2 && elev[c] - elev[down[c]] > 8) steep[c] = 1; // a steep drop along the channel
     if (chan[c]) { // spring heads: channel cells with no channel draining into them, on sloping ground
       const cx = c % N, cy = (c / N) | 0;
-      const fed = NB.some(([dx, dy]) => { const nx = cx + dx, ny = cy + dy; return nx >= 0 && ny >= 0 && nx < N && ny < N && down[idx(nx, ny)] === c && chan[idx(nx, ny)]; });
+      const fed = NB.some(([dx, dy]) => { const nx = cx + dx, ny = cy + dy; return nx >= 0 && ny >= 0 && nx < N && ny < N && down[idx(nx, ny)] === c && (chan[idx(nx, ny)] || lake[idx(nx, ny)]); }); // fed by a stream, or by a lake (an outlet, not a spring)
       if (!fed && slope[c] > 0.04) features.springs.push({ x: cx, y: cy });
     }
   }
@@ -183,6 +196,23 @@ export function generateLandscape(world) {
     const top = drops.reduce((a, b) => (b.drop > a.drop ? b : a));
     return { x: top.x, y: top.y, drop: Math.round(top.drop * 10) / 10, totalDrop: Math.round(drops.reduce((a, b) => a + b.drop, 0)), cells: g.length, size: top.size, kind: top.drop > 20 ? 'falls' : 'cascade' };
   });
+  // Crossings: places a stream of some size can be got over without wading: a ford (wide and shallow,
+  // on gentle ground), a deadfall (a tree down across it, in woods) or a rockfall (boulders, on steep
+  // ground). About one in fifteen stream and river cells, never two within five cells of each other.
+  const crossing = new Uint8Array(N * N); // 0 none, 1 ford, 2 deadfall, 3 rockfall
+  features.crossings = [];
+  { const xr = rng.fork('crossings'), falls = new Set(features.waterfalls.map(f => idx(f.x, f.y)));
+    for (let c = 0; c < N * N; c++) {
+      if (chan[c] < 2 || lake[c] || falls.has(c) || !xr.chance(1 / 15)) continue;
+      const x = c % N, y = (c / N) | 0;
+      if (features.crossings.some(q => Math.max(Math.abs(q.x - x), Math.abs(q.y - y)) < 5)) continue;
+      const kind = slope[c] > 0.15 ? 'rockfall' : veg[c] > 0.55 ? 'deadfall' : 'ford';
+      crossing[c] = { ford: 1, deadfall: 2, rockfall: 3 }[kind];
+      features.crossings.push({ x, y, kind, size: chan[c] });
+    }
+    // how high above the stream bed a way over stands: a log 0.5–1.1 m, boulders 0.3–0.7 m; a ford is on the bed
+    const hr = rng.fork('crossing-heights');
+    for (const q of features.crossings) q.height = Math.round((q.kind === 'deadfall' ? hr.uniform(0.5, 1.1) : q.kind === 'rockfall' ? hr.uniform(0.3, 0.7) : 0) * 100) / 100; }
   features.lakes = components(c => lake[c] === 1).filter(g => g.length >= 3).map(g => ({ cells: g.length, x: avg(g, 'x'), y: avg(g, 'y'), areaHa: Math.round(g.length * CELL * CELL / 1e4) }));
   features.escarpments = components(c => slope[c] > 0.35).filter(g => g.length >= 6).map(g => ({ cells: g.length, x: avg(g, 'x'), y: avg(g, 'y') }));
 
@@ -220,7 +250,7 @@ export function generateLandscape(world) {
     if (score < bestScore) { bestScore = score; spawn = { x, y, waterM: Math.round(dW) }; }
   }
 
-  return { N, CELL, A, elev, filled, acc, down, slope, chan, lake, wet, veg, micro, features, spawn, waterDist };
+  return { N, CELL, A, elev, filled, acc, down, slope, chan, lake, crossing, wet, veg, micro, features, spawn, waterDist };
 
   // --- helpers (closures over the grids above)
   function distanceField(isSource) { // breadth-first distance in cells

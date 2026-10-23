@@ -1,6 +1,7 @@
 const { JSDOM } = require('jsdom');
+const { openPage } = require('./page.cjs');
 const html = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'dist', 'commuter-cave.html'), 'utf8');
-const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true });
+const dom = openPage();
 const w = dom.window, d = w.document;
 setTimeout(() => {
   d.querySelector('#seed').value = process.argv[2]; d.querySelector('#preset').value = '';

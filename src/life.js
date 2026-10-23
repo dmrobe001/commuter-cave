@@ -433,8 +433,8 @@ export function generatePlants(rng, env, seed, namer, mc) {
   const seenLook = new Set();
   for (const form of ['mushroom', 'moss', 'lichen']) {
     for (let i = 0; i < fcounts[form]; i++) {
-      const id = `F${i + 1}${form[0]}`;
-      const t = fungusArchetype(fr.fork(id), form, env);
+      const key = `F${i + 1}${form[0]}`, id = form === 'moss' ? `F${i + 1}o` : key; // mushrooms and mosses both begin with m: ids must differ (the key keeps the draws as they were)
+      const t = fungusArchetype(fr.fork(key), form, env);
       const pool = { mushroom: CAP_COLORS[t.nameKey] ?? [t.color], moss: ['bright green', 'dark green', 'golden', 'pale green'], lichen: ['grey-green', 'pale grey', 'yellow-green', 'orange'] }[form];
       for (let k = 0; k < pool.length && seenLook.has(`${t.sub}:${t.color}`); k++) t.color = pool[k]; // two alike look different
       seenLook.add(`${t.sub}:${t.color}`);
@@ -573,7 +573,7 @@ const ANIMALS = {
   stinker:     { cls: 'small', noun: 'musk animal', mass: 1.5, micro: ['woodland', 'edge', 'glade'], colors: ['black-and-white striped', 'dark brown'], diet: 'omnivore', catch: 'leave it alone: it sprays a stinking, blinding musk', defense: 'sprays musk', parasite: 0.3, nutrition: 'lean meat, if you can stand it', products: ['meat', 'pelt'], signs: ['a rank, musky stink', 'small pits dug in the soil'], activity: 'night', season: 'year-round', smell: 'a rank, burnt-rubber musk' },
   rodent:      { cls: 'small', noun: 'rodent', mass: 0.15, micro: ['glade', 'edge', 'woodland'], colors: ['brown', 'grey', 'sandy'], diet: 'plant', catch: 'hard by hand; easy with deadfall traps or snares', parasite: 0.2, nutrition: 'lean meat, organs', products: ['meat', 'organs', 'small hide'], signs: ['burrow holes', 'gnawed seeds and nuts', 'droppings'], activity: 'night', season: 'year-round' },
   hare:        { cls: 'small', noun: 'hare', mass: 2.5, micro: ['glade', 'edge'], colors: ['brown', 'grey'], diet: 'plant', lean: true, catch: 'not by hand; snares on runs', parasite: 0.25, nutrition: 'very lean meat', products: ['meat', 'organs', 'hide', 'sinew'], signs: ['runs through grass', 'round droppings', 'resting hollows in grass'], activity: 'dawn and dusk', season: 'year-round' },
-  lizard:      { cls: 'small', noun: 'lizard', mass: 0.05, micro: ['outcrop', 'scree', 'glade'], colors: ['brown', 'green', 'grey'], diet: 'insect', minTemp: 8, catch: 'moderate (easy in cool mornings before they warm up)', parasite: 0.25, nutrition: 'lean meat', products: ['meat'], signs: ['basking on warm rocks', 'tracks with a tail drag in dust'], activity: 'day (basking)', season: 'warm season' },
+  lizard:      { cls: 'small', noun: 'lizard', mass: 0.05, micro: ['outcrop', 'scree', 'glade'], colors: ['brown', 'green', 'grey'], diet: 'insect', minTemp: 8, catch: 'moderate (easy in cool mornings before they warm up)', parasite: 0.25, nutrition: 'lean meat', products: ['meat', 'eggs (seasonal)'], signs: ['basking on warm rocks', 'tracks with a tail drag in dust'], activity: 'day (basking)', season: 'warm season' },
   frog:        { cls: 'small', noun: 'frog', mass: 0.04, micro: ['pond', 'streambank'], colors: ['green', 'brown'], aposematic: 0.25, diet: 'insect', catch: 'easy at night', parasite: 0.35, nutrition: 'lean meat (legs)', products: ['legs'], signs: ['calling at night', 'splashes at the water edge'], activity: 'night', season: 'growing season' },
   groundbird:  { cls: 'small', noun: 'ground bird', mass: 0.8, micro: ['glade', 'edge'], colors: ['speckled brown', 'grey'], diet: 'omnivore', catch: 'adults hard by hand; eggs easy in nesting season', parasite: 0.2, nutrition: 'meat; eggs rich in fat and protein', products: ['meat', 'eggs (seasonal)', 'feathers', 'bones'], signs: ['dust-bathing hollows', 'alarm calls when flushed', 'nests on the ground'], activity: 'day', season: 'eggs early in the growing season' },
   fish:        { cls: 'small', noun: 'fish', mass: 0.2, micro: ['streambed', 'pond'], colors: ['silver', 'olive', 'spotted'], diet: 'insect', catch: 'moderate in shallow pools; easy with weirs or traps', parasite: 0.3, nutrition: 'protein and fat', products: ['meat', 'oil', 'bones'], signs: ['rises at dusk', 'shadows in pools'], activity: 'day', season: 'year-round' },
@@ -635,6 +635,57 @@ const ANIMAL_VARYING = [
   { id: 'toxin', label: 'toxicity', kind: 'useful', scale: '01', sd: 0.5, when: t => t.aposematic, prior: {}, median: t => t.toxin },
 ];
 
+// How each kind lives through the year and the weather (a northern temperate calendar, in days of the
+// year; in monsoon climates birds and frogs breed with the rains instead). breed: the breeding season,
+// when birds sing, frogs chorus, stags roar and wolves howl: calls more often, and a call of the season
+// (a song, a rut roar) that is a new sound to someone who only knows the everyday call. dormant: below
+// this daily mean temperature (°C) it's inactive (hibernating, brumating, overwintering as eggs or
+// grubs); hibernator: the chance a world's species of this kind does that at all. migrant: the chance
+// it leaves for the cold months (gone below 8 °C). shy: quiet and hidden in rain. rainCaller: calls more
+// in rain. basker: needs sun (lizards on rocks, soaring birds on thermals), so is little seen under cloud.
+const BEHAVIOUR = {
+  songbird: { breed: [85, 175], migrant: 0.6, shy: true, song: 'bird' },
+  groundbird: { breed: [75, 160], shy: true, song: 'bird' },
+  frog: { breed: [60, 130], dormant: 6, rainCaller: true, song: 'frog' },
+  lizard: { breed: [100, 170], dormant: 10, basker: true },
+  browser: { breed: [265, 315], song: 'deer', rut: true },
+  rooter: { breed: [320, 365], song: 'grunter' },
+  predator: { breed: [20, 70], song: t => (t.pack ? 'canid' : 'felid') },
+  hare: { breed: [40, 200] },
+  rodent: { dormant: 3, hibernator: 0.4 },
+  stinker: { dormant: -4 },
+  soarer: { migrant: 0.3, basker: true },
+  fish: {},
+  ant: { dormant: 5 }, grasshopper: { dormant: 10 }, caterpillar: { dormant: 8 }, beetle: { dormant: 6 }, snail: { dormant: 5 }, crayfish: { dormant: 3 },
+  worm: { dormant: 2 }, woodlouse: { dormant: 1 }, cricket: { dormant: 10 }, termite: { dormant: 12 }, bee: { dormant: 9 }, wasp: { dormant: 9 },
+  mosquito: { dormant: 10 }, gnat: { dormant: 8 }, fly: { dormant: 8 }, grub: {}, mussel: {},
+};
+const inWindow = (doy, [a, b]) => { const d = ((doy % 365) + 365) % 365; return a <= b ? d >= a && d <= b : d >= a || d <= b; };
+const CLOUDY = ['overcast', 'rain', 'storm', 'fog', 'snow', 'blizzard'];
+// What an animal is up to now. cond: { doy, meanC (today's mean temperature), weather, wet }. Returns
+// here (0 gone or dormant, 1 about), calls and seen (multipliers on how often it's heard and seen), and
+// callNow(r): which of its calls it gives this time (the season's call, when breeding, most of the time).
+export function animalNow(a, cond) {
+  const b = a.behaviour ?? {};
+  const away = !!b.migrant && cond.meanC < 8, dormant = b.dormant != null && cond.meanC < b.dormant;
+  const breeding = !!b.breed && inWindow(cond.doy, b.breed);
+  let calls = 1, seen = 1;
+  if (breeding && b.breedCall) calls *= 2.5;
+  if (cond.wet) {
+    if (b.shy) { calls *= 0.15; seen *= 0.5; }
+    if (b.rainCaller) calls *= breeding ? 2 : 1.3;
+    if (a.cls === 'invertebrate') seen *= 0.5;
+  }
+  if (b.basker && CLOUDY.includes(cond.weather)) seen *= 0.3;
+  return { here: away || dormant ? 0 : 1, away, dormant, breeding, calls, seen, callNow: r => (breeding && b.breedCall && r.chance(0.7) ? b.breedCall : a.signs?.call ?? null) };
+}
+
+// Egg-layers whose clutches can be found and eaten: kg in a find, and where the clutch is.
+const EGGS = {
+  groundbird: { kg: 0.25, nest: 'a clutch in a scrape on the ground' },
+  songbird: { kg: 0.03, nest: 'a few small eggs in a cup nest' },
+  lizard: { kg: 0.02, nest: 'a clutch of leathery eggs under a stone' },
+};
 const parasiteLabel = p => (p < 0.12 ? 'safe' : p < 0.3 ? 'some parasite risk' : 'high parasite risk');
 
 function animalArchetype(r, key, env) {
@@ -704,6 +755,8 @@ function buildAnimal(seed, id, t, env, namer, mc, callsUsed) {
   const chemCls = ['grub', 'termite', 'wasp'].includes(t.key) ? 'fattyGrub' : ['mussel', 'crayfish', 'snail'].includes(t.key) ? 'shellfish' : 'invertebrate';
   const chem = food && !vertebrate ? sampleComposition(cr, chemCls, { extraCompounds: [{ kind: 'parasites', p: 1, dose: [t.parasite * 0.8, t.parasite * 1.4] }, ...(t.biotoxin ? [{ kind: 'biotoxin', p: 0.5, dose: [0.1, 0.4] }] : []), ...(t.toxin > 0 ? [{ kind: 'alkaloid', p: 1, dose: [t.toxin / 1.3, t.toxin / 1.3] }] : [])] }) : null;
   const honeyChem = t.key === 'bee' ? sampleComposition(cr.fork('honey'), 'honey') : null;
+  // eggs: shell-borne germs (killed by cooking) at about half the adults' parasite load
+  const eggs = EGGS[t.key] ? { chem: { ...sampleComposition(cr.fork('egg'), 'egg', { extraCompounds: [{ kind: 'parasites', p: 1, dose: [t.parasite * 0.35, t.parasite * 0.6] }] }), gather: EGGS[t.key].kg }, food: { raw: parasiteLabel(t.parasite * 0.5), cooked: 'safe' }, nest: EGGS[t.key].nest } : null;
 
   const deliberate = [];
   if (food) deliberate.push(['Eat raw / cooked, wait a few days', `${raw} / ${cooked}`]);
@@ -744,13 +797,20 @@ function buildAnimal(seed, id, t, env, namer, mc, callsUsed) {
       speed: prof.speed, group: val(prof.group), distant: !!prof.distant,
     };
   }
+  const br = makeRng(`${seed}/behaviour/${id}`), B = BEHAVIOUR[t.key] ?? {};
+  const behaviour = {
+    breed: B.breed ? (env.leanSeason === 'dry season' && ['songbird', 'groundbird', 'frog', 'lizard'].includes(t.key) ? [150, 240] : B.breed) : null,
+    dormant: B.dormant != null && (B.hibernator == null || br.chance(B.hibernator)) ? B.dormant : null,
+    migrant: !!B.migrant && env.meanTempC < 15 && br.chance(B.migrant),
+    shy: !!B.shy, rainCaller: !!B.rainCaller, basker: !!B.basker, rut: !!B.rut, songFamily: B.song ? (typeof B.song === 'function' ? B.song(t) : B.song) : null, breedCall: null,
+  };
   return {
-    id, kind: 'animal', cls: t.cls, cryptic: !!T.cryptic,
+    id, kind: 'animal', cls: t.cls, cryptic: !!T.cryptic, behaviour,
     name: namer.animal(t, habitats[0]?.micro),
     unit: T.unit, traits: t, habitats, perKm2,
     varying: t.varying, variation: summarize(seed, id, t.varying, sites, env, mc), signs,
     cues, fieldTests, deliberate, food,
-    catch: T.catch, products: T.products, nutrition: T.nutrition, season: T.season, smell: T.smell ?? null, chem, honeyChem,
+    catch: T.catch, products: T.products, nutrition: T.nutrition, season: T.season, smell: T.smell ?? null, chem, honeyChem, eggs,
     defense: T.defense ?? null, danger: T.danger ?? null,
   };
 }
@@ -778,6 +838,8 @@ export function generateAnimals(rng, env, seed, namer, mc) {
     const id = `A${i + 1}`;
     return buildAnimal(seed, id, animalArchetype(rng.fork(id), key, env), env, namer, mc, callsUsed);
   });
+  // the season's calls, made after every everyday call so those stay as they were (a song, a roar)
+  for (const a of out) if (a.behaviour.breed && a.behaviour.songFamily && a.signs) a.behaviour.breedCall = makeCall(makeRng(`${seed}/song/${a.id}`), a.behaviour.songFamily, callsUsed);
   // Two species of one kind (two ants): neither keeps the bare name; each gets its look ("red ant", "big ant").
   for (const a of out) {
     const kin = out.filter(b => b !== a && b.traits.key === a.traits.key);

@@ -119,26 +119,59 @@ section + section { margin-top: 1.5rem; }
 .tests { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .35rem; }
 .test { font-size: .78rem; padding: .2rem .45rem; }
 
-.mapsvg { width: 100%; height: auto; max-height: 26rem; aspect-ratio: 1; display: block; font-family: var(--sans); touch-action: none; cursor: grab; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+/* --u: one map label size, in the map's own units (set by mapHTML), so dashes and halos scale with the text */
+.mapsvg { --u: 1px; width: 100%; height: auto; max-height: min(36rem, 75vh); aspect-ratio: 1; display: block; font-family: var(--sans); touch-action: none; cursor: grab; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
 .mapsvg:active { cursor: grabbing; }
-.mapsvg .node.frontier circle { fill: none; stroke: var(--muted); stroke-dasharray: .15 .15; }
+.mapsvg .node.frontier circle { fill: none; stroke: var(--muted); stroke-dasharray: calc(.15 * var(--u)) calc(.15 * var(--u)); }
 .mapsvg .node.frontier text { fill: var(--muted); font-style: italic; }
 .map-tools { display: flex; gap: .4rem; align-items: center; margin: .3rem 0; }
 button.looking { border-color: var(--ochre); color: var(--ochre); font-weight: 600; }
 .mapsvg .edge { stroke: var(--muted); stroke-linecap: round; }
-.mapsvg .edge.guess { stroke-dasharray: .5 .4; }
-.mapsvg .edge.unknown { stroke-dasharray: .15 .5; opacity: .7; }
+.mapsvg .edge.guess { stroke-dasharray: calc(.5 * var(--u)) calc(.4 * var(--u)); }
+.mapsvg .edge.unknown { stroke-dasharray: calc(.15 * var(--u)) calc(.5 * var(--u)); opacity: .7; }
+.mapsvg .edge.stub { stroke-dasharray: calc(.15 * var(--u)) calc(.3 * var(--u)); opacity: .6; }
 .mapsvg .edge.route { stroke: var(--ochre); }
 .mapsvg .etime { fill: var(--muted); }
-.mapsvg .xing { fill: var(--water); }
-.mapsvg .xing:not(.walked) { fill: none; stroke: var(--water); stroke-width: .12; }
+.mapsvg .stream { cursor: pointer; }
+.mapsvg .stream .flow { fill: none; stroke: var(--water); stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: calc(.6 * var(--u)) calc(.35 * var(--u)); }
+.mapsvg .stream .flow.lone { stroke-dasharray: none; }
+.mapsvg .pin { cursor: pointer; }
+.mapsvg .pin path { fill: var(--ochre); stroke: var(--bg); }
+.mapsvg .pin text { fill: var(--ochre); font-weight: 600; paint-order: stroke; stroke: var(--bg); stroke-width: calc(.25 * var(--u)); }
+.mapsvg .pin .hit { fill: transparent; }
+.scalebar { display: inline-flex; align-items: center; gap: .4rem; font-size: .8rem; color: var(--muted); margin-right: auto; }
+.scalebar i { display: inline-block; height: .35rem; border: 1.5px solid var(--muted); border-top: 0; }
+.mapsvg .stream .flow.known { stroke-dasharray: none; }
+.mapsvg .feature { cursor: pointer; }
+.mapsvg .feature.lake { opacity: .5; } /* the whole lake faded at once, so overlapping circles don't darken */
+.mapsvg .feature.lake circle { fill: var(--water); }
+.mapsvg .feature.cliff .face, .mapsvg .feature.cliff .tick { stroke: var(--ink); fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
+.mapsvg .feature .hit { stroke: transparent; fill: none; pointer-events: stroke; }
+.mapsvg .flabel { fill: var(--muted); font-style: italic; paint-order: stroke; stroke: var(--bg); stroke-width: calc(.25 * var(--u)); pointer-events: none; }
+.mapsvg .flabel.lake, .mapsvg .flabel.stream { fill: var(--water); }
+.mapsvg .crossing { cursor: pointer; }
+.mapsvg .crossing line { stroke: var(--ink); stroke-linecap: round; }
+.mapsvg .crossing .hit { fill: transparent; stroke: none; }
+.mapsvg .crossed { cursor: pointer; }
+.mapsvg .crossed circle:not(.hit) { fill: var(--bg); stroke: var(--water); }
+.mapsvg .crossed .hit { fill: transparent; stroke: none; }
+.mapsvg .node.site.spring circle:not(.hit) { fill: var(--water); stroke: var(--water); }
+.mapsvg .follow { cursor: pointer; }
+.mapsvg .follow .edge-of > *, .mapsvg .follow .face > * { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.mapsvg .follow .edge-of > * { stroke: var(--ink); opacity: .45; }
+.mapsvg .follow .face > * { stroke: #fff; }
+.mapsvg .follow .hit { stroke: transparent; pointer-events: stroke; }
+.mapsvg .stream .chev { fill: none; stroke: var(--water); stroke-linecap: round; stroke-linejoin: round; }
+.mapsvg .stream .hit { fill: none; stroke: transparent; pointer-events: stroke; }
 .mapsvg .node { cursor: pointer; }
 .mapsvg .node circle { fill: var(--surface); stroke: var(--ochre); }
 .mapsvg .node.site circle { fill: var(--ink); stroke: var(--ink); }
-.mapsvg .node.unknown circle { stroke-dasharray: .2 .2; }
+.mapsvg .node.unknown circle { stroke-dasharray: calc(.2 * var(--u)) calc(.2 * var(--u)); }
 .mapsvg .node.here circle { fill: var(--ochre); stroke: var(--ochre); }
 .mapsvg .node.sel text { font-weight: 600; fill: var(--ochre); }
-.mapsvg .node text { fill: var(--ink); paint-order: stroke; stroke: var(--bg); stroke-width: .25; }
+.mapsvg .node text { fill: var(--ink); paint-order: stroke; stroke: var(--bg); stroke-width: calc(.25 * var(--u)); }
+.mapsvg .node circle.hit { fill: transparent; stroke: none; }
+.mapsvg .land { opacity: .65; pointer-events: none; }
 .map-list li { padding: .45rem 0; border-top: 1px solid var(--rule); }
 .map-list li.sel { background: var(--ochre-wash); }
 .map-list .place-head { display: flex; gap: .4rem; align-items: baseline; flex-wrap: wrap; }
@@ -166,6 +199,12 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   .tabs button[aria-pressed="true"] { color: var(--ochre); font-weight: 600; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+  .spread { margin-top: .6em; border-top: 1px solid var(--line, #ccc); padding-top: .4em; font-size: .92em; }
+  .spread h3 { font-size: 1em; margin: .2em 0; }
+  .spread ul.tree, .spread ul.tree ul { list-style: none; margin: 0; padding-left: 1em; }
+  .spread .path { opacity: .8; }
+  .spread .odd { color: #b3541e; font-weight: 600; }
+  .spread details > summary { cursor: pointer; }
 </style>
 </head>
 <body>

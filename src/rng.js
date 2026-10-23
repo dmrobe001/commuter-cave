@@ -54,6 +54,8 @@ export function makeRng(seed) {
       return arr;
     },
     fork: sub => makeRng(`${label}/${sub}`),
+    copy() { const r = makeRng(label); r.restore(state); return r; }, // the same stream from here on: draws exactly as this one would
+    restore(s) { state = s; },
   };
   return rng;
 }

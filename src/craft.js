@@ -416,8 +416,9 @@ export function fireQuest(world, { skills = {}, hearthChoice = 'best', maxDays =
 // Ignores learning (small for novices over these timescales) and fatigue.
 // `efficiency` (fitted against simulations) absorbs frictions the estimate ignores:
 // a damp first board, fatigue, embers dying in tinder, time spent re-knapping.
-export function estimateFire(world, { skill = 0.06, hearthChoice = 'best', maxDays = 30, efficiency = 0.5 } = {}) {
-  const ambient = clamp(0.05 + 0.07 * world.environment.water, 0.05, 0.35);
+// ambient: how damp wood left out gets (0–1); by default the climate's usual, all year.
+export function estimateFire(world, { skill = 0.06, hearthChoice = 'best', maxDays = 30, efficiency = 0.5, ambient: amb = null } = {}) {
+  const ambient = amb ?? clamp(0.05 + 0.07 * world.environment.water, 0.05, 0.35);
   const m = pickMaterials(world, hearthChoice, ambient);
   if (!m) return { blocked: 'a fire-chain material is missing entirely' };
   // Gate: can a novice get a cutting edge at all? (one bipolar round yields a flake if z > −1.2)
