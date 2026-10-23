@@ -19,7 +19,7 @@ import { trailGraph, firstClear, placeLabels, suspectedCrossings, timeWords, awa
 import { materialsOf, expandGoal, thought, ITEMS, lookHint, PROCESSES } from './process.js';
 import { pack, unpack } from './pack.js';
 import { spread, reproduces } from './spread.js';
-import { viewOf as viewFor, rehearse, apply, stateOver, hoursOf, kcalOf, readyFor } from './act.js';
+import { attempt, peek, stateOver, hoursOf, kcalOf, readyFor, readable } from './act.js';
 import { TICKS, SLEEP_HOUR, CRAFTS, DRILL_ATTEMPT, EMBER, HANDLE, REST, DRINK, WASH_HANDS, MAKE_BED, BUILD_HUT, FEED_FIRE, KNAP, PREPARE, EAT, SURVEY, GUT_KG, loreKey, populationAt, findBones, boneLines, noteKnown as knowIt, pluralize, lineFor, mix } from './acts.js';
 import { newCharacter, dry, ROLES, searchNaturalEdge, estimateFire } from './craft.js';
 
@@ -503,7 +503,7 @@ function stepGrid() {
 function routeField(from) {
   const key = `${from.x},${from.y}/${S.seenVer ?? 0}/${S.day}`; // the water changes by the day
   if (S.routeMemo?.key === key) return S.routeMemo.D;
-  const esc = cliffIndex(), seen = S.seenLand, lake = S.L.lake, steps = stepGrid(), known = c => (seen?.[c] ?? 0) >= SEEN;
+  const esc = cliffIndex(), seen = readable(S.seenLand), lake = S.L.lake, steps = stepGrid(), known = c => (seen?.[c] ?? 0) >= SEEN;
   const blocked = c => known(c) && !!lake[c];
   const D = new Float64Array(GN * GN).fill(Infinity), start = cellOf(from.x, from.y);
   // a binary heap of (time, cell) in two typed arrays
@@ -1185,30 +1185,40 @@ const LIVE = new Set(['world', 'L', 'seed', 'preset', 'mats', 'ambient', '_sky',
 // starting empty, so nothing from its copy is kept; its key tells the game's when it's out of date.
 const MEMOS = new Set(['treeMemo']);
 // A process whose run needs the game's own helpers (the mental map, streams, perception, the journal):
-// while it runs, the game's state is its view, so the helpers read and change the copy, within its
-// contract. Its run must look everything up afresh (site(), not a place captured beforehand).
-const hosted = fn => Object.assign((v, d) => { const real = S; S = v; try { return fn(v, d) ?? {}; } finally { S = real; } }, { hosted: true });
+// while it runs, the game's state is its view, so the helpers read and write through the transaction,
+// within its contract; and they note their draws with note(). Its run must look everything up afresh
+// (site(), not a place captured beforehand).
+let noteSink = null;
+const note = (kind, id, fields) => noteSink?.(kind, id, fields); // a draw, for the range of outcomes (spread.js)
+const withState = (v, d, f) => { const real = S, sink = noteSink; S = v; noteSink = d?.note ?? sink; try { return f(); } finally { S = real; noteSink = sink; } };
+const hosted = fn => Object.assign((v, d) => withState(v, d, () => fn(v, d) ?? {}), { hosted: true });
+// The machinery's own part of every action, in the action's transaction: take what it used up, add
+// what it made, say what it has to say.
+const finishFor = quiet => (v, fx) => withState(v, null, () => {
+  for (const it of fx.use) remove(S.inv.find(i => i.uid === it.uid));
+  for (const m of fx.make) addItem(m.name, m.kind, m.props, m.from, m.extra);
+  if (!quiet) for (const [text, kind] of fx.say) log(text, kind);
+});
 // Do a process: check it can be done, let its time pass (as of when it's done, the state it reads),
-// run it on a copy of what it reads, put back what it changed, take what it used up, add what it made,
-// and say what it has to say. The last one done is kept (S.lastAct) for looking into.
+// run it in a transaction (act.js), and commit what it changed, used up, made and said. The last one
+// done is kept (S.lastAct) with its transaction and its dice, for looking into: undone, it can be run
+// again with other dice, and done again after. A draw noted by a process run inside another (a tick
+// during a walk) is the outer one's too.
 let depth = 0;
 function perform(proc, binding = {}, { quiet = false, refusal = false } = {}) {
-  let v = viewFor(proc, stateFor(binding));
-  const ok = readyFor(proc, v);
+  const ok = peek(proc, stateFor(binding), v => readyFor(proc, v));
   if (ok !== true) { if (refusal) return { refused: ok }; log(ok, 'warn'); return null; }
-  const hours = hoursOf(proc, v);
-  if (hours > 0) { pass(hours, kcalOf(proc, v)); v = viewFor(proc, stateFor(binding)); }
-  const real = S, d = dice(), memo = {};
+  const [hours, kcal] = peek(proc, stateFor(binding), v => [hoursOf(proc, v), kcalOf(proc, v)]);
+  if (hours > 0) pass(hours, kcal);
+  const real = S, outer = noteSink, d = { ...dice(), note: outer ? (kind, id, f) => outer(kind, `${proc.id}/${id}`, f) : null }, memo = {};
   const live = { has: k => k === 'rng' || LIVE.has(k) || MEMOS.has(k), get: k => (k === 'rng' ? d.act : MEMOS.has(k) ? memo[k] : real[k]), set: (k, x) => { if (MEMOS.has(k)) memo[k] = x; else real[k] = x; } };
   const actAt = !depth && !quiet ? d.act.copy() : null; // the dice as they stood, so the range can hold them
   depth++;
   let fx;
-  try { fx = rehearse(proc, v, d, { live }); } catch (e) { if (/without declaring/.test(e.message) && !depth) console.error(`contract: ${e.message}`); throw e; } finally { depth--; }
-  apply(fx, stateFor(binding));
-  for (const it of fx.use) remove(S.inv.find(i => i.uid === it.uid));
-  fx.made = fx.make.map(m => addItem(m.name, m.kind, m.props, m.from, m.extra));
-  if (!quiet) for (const [text, kind] of fx.say) log(text, kind);
-  if (!quiet && !depth && !TICKS.includes(proc)) S.lastAct = { id: proc.id, proc, binding: Object.keys(binding), view: v, fx, actAt, trip: proc === GAME.hike ? S.lastTrip : null };
+  try { fx = attempt(proc, stateFor(binding), d, { live, finish: finishFor(quiet) }); } catch (e) { if (/without declaring/.test(e.message) && depth === 1) console.error(`contract: ${e.message}`); throw e; } finally { depth--; }
+  if (outer) for (const x of fx.draws) outer(x.kind, `${proc.id}/${x.id}`, x); // inside another action: its draws are that one's too
+  fx.tx.commit();
+  if (!quiet && !depth && !TICKS.includes(proc)) S.lastAct = { id: proc.id, proc, binding, fx, actAt, trip: proc === GAME.hike ? S.lastTrip : null };
   return fx;
 }
 
@@ -1223,12 +1233,18 @@ function liveForSpread(d) {
   return { has: k => k === 'rng' || LIVE.has(k) || MEMOS.has(k), get: k => (k === 'rng' ? d.act : k in scratch ? scratch[k] : MEMOS.has(k) ? undefined : real[k]), set: (k, x) => { scratch[k] = x; } };
 }
 const aroundSpread = (i, f, d) => { const was = placeDice; placeDice = d.place; try { return f(); } finally { placeDice = was; } };
+// The state is put back as it was when the action ran (its transaction undone), the runs are made and
+// thrown away, and the action is done again: looking changes nothing.
 function spreadLast(vary = 'act', n = null) {
   const a = S.lastAct;
   if (!a?.proc) return null;
-  const hostedRun = !!a.proc.run.hosted, opts = { live: hostedRun ? liveForSpread : null, around: aroundSpread };
-  const r = spread(a.proc, a.view, { n: n ?? (hostedRun ? 30 : 200), vary, actAt: a.actAt, place: realPlace, actual: a.fx, seed: `${S.seed}/spread/${S.day}/${S.t}`, ...opts });
-  r.reproduces = a.actAt ? reproduces(a.proc, a.view, a.actAt, realPlace, a.fx, opts) : null;
+  const hostedRun = !!a.proc.run.hosted, opts = { live: liveForSpread, around: aroundSpread }, stateFn = () => stateFor(a.binding);
+  a.fx.tx.revert();
+  let r;
+  try {
+    r = spread(a.proc, stateFn, { n: n ?? (hostedRun ? 30 : 200), vary, actAt: a.actAt, place: realPlace, actual: a.fx, seed: `${S.seed}/spread/${S.day}/${S.t}`, ...opts });
+    r.reproduces = a.actAt ? reproduces(a.proc, stateFn, a.actAt, realPlace, a.fx, opts) : null;
+  } finally { a.fx.tx.reapply(); }
   if (a.trip?.steps?.length) r.walk = walkOdds(S.L, a.trip, 100, `${S.seed}/odds/${S.day}/${S.t}`);
   return r;
 }

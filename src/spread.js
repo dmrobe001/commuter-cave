@@ -1,46 +1,50 @@
 // spread.js — the range of a process's outcomes, alongside the one that happened.
 //
-// A process (act.js) runs on a view of what it reads and on dice. Run it again on the same view with
-// other dice, n times, and every outcome it can have shows up with about its share. Which dice change
-// is a choice, and it decides what the range means:
-//   'act'   this attempt's own luck (the knap's blow, the drink's dose, the step's drift), the place as it is;
+// A process (act.js) runs on the state it reads and on dice. Run it again in a fresh transaction with
+// other dice, n times, each thrown away after, and every outcome it can have shows up with about its
+// share. Which dice change is a choice, and it decides what the range means:
+//   'act'   this attempt's own luck (the knap's blow, the drink's dose, a bearing's error), the place as it is;
 //   'place' the place's luck (what lives at a site: cells like this one), this attempt's luck as it fell;
 //   'both'  both.
 // actAt, if given, is the attempt's dice as they stood when it was done (rng.copy()), so 'place' holds
-// them fixed, and varying nothing reproduces what happened (spread checks that it does).
+// them fixed, and varying nothing reproduces what happened (reproduces checks that it does).
 //
-// Every outcome is taken apart into leaves, by path:
-//   state:   each changed path's value after (unchanged runs count as the value before; a thing changed
-//            whole is taken apart into its own leaves); what was added to a list ('path+' items and
-//            'path +n', how many);
-//   made:    'made (count)', and each thing made by kind ('made.edge.sharpness'), pooled over all made;
-//   used:    'used (count)';
-//   report:  'report.…', whatever the process reports beyond the state (what was counted, a quality).
-// A reported leaf may be there in some runs and not others (a thing seen, or not): present is the share
-// of runs it's in, and its summary is over those. Each leaf is summarised: numbers by quantiles (5, 25, 50, 75, 95%), mean, min and max, and how often
-// the value is what it was before; anything else by how often each value comes up. The leaf as it
-// happened (actual) gets its rank among the runs: the share below it, plus half the share equal to it
-// (0.5: typical; near 0 or 1: unusual luck). The leaves are arranged as a tree by path.
-import { rehearse } from './act.js';
+// Two accounts of the outcomes:
+// - Draws, by observable. A run notes the numbers its luck produced (dice.note(kind, id, fields)):
+//   for a search, one record per thing that could have been noticed (observed or not, with what was
+//   perceived of it: the exact bearing and distance, not the words); for a craft, the attempt's margin
+//   and what it made; for a walk, where it ended and what befell it. Grouped by kind and id over the
+//   runs: how often each is observed at all, and, when it is, every field summarised (numbers by
+//   quantiles, mean and range; bearings as angles, by their circular mean and spread; anything else by
+//   how often each value comes up); a field with a true value beside it (bearing and trueBearing) also
+//   gets its error (degrees off, or the ratio to the truth). These are the numbers the journal's words
+//   are made from; the words themselves are left out.
+// - State, by path: each changed path's value after (unchanged runs count as the value before), things
+//   added to lists ('path+' items, 'path +n' how many), things made and used, what the process
+//   reported; the journal is left out (its numbers are in the draws).
+// What happened is ranked among the runs: the share below it plus half the share equal to it (0.5:
+// typical; near 0 or 1: unusual luck).
+import { attempt } from './act.js';
 import { makeRng } from './rng.js';
 
-const get = (o, ks) => ks.reduce((a, k) => (a == null ? undefined : a[k]), o);
 const isState = p => !/^(made|used|report)\b/.test(p) && !/[+]|\[\]/.test(p);
+const isAngle = f => /(^|[a-z])(bearing|Bearing|dir|heading)$/.test(f) || f === 'bearing';
+const wrapDeg = a => ((a % 360) + 540) % 360 - 180; // −180..180
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 
 // The primitive leaves of x under path, into out (path → values).
 function leaves(x, path, out) {
   if (x === null || x === undefined || typeof x !== 'object') { (out[path] ??= []).push(x); return; }
-  if (ArrayBuffer.isView(x)) { (out[`${path} (cells set)`] ??= []).push(x.reduce((a, v) => a + (v ? 1 : 0), 0)); return; }
-  if (x instanceof Set) { (out[`${path} (count)`] ??= []).push(x.size); return; }
-  if (x instanceof Map) { (out[`${path} (count)`] ??= []).push(x.size); return; }
   if (Array.isArray(x)) { (out[`${path}.length`] ??= []).push(x.length); for (const y of x) leaves(y, `${path}[]`, out); return; }
   for (const [k, y] of Object.entries(x)) leaves(y, path ? `${path}.${k}` : k, out);
 }
-// One outcome as leaves.
+// One outcome's state changes as leaves (the journal left out).
 export function outcomeLeaves(fx) {
   const out = {};
   for (const c of fx.changes) {
+    if (/^log\b/.test(c.path)) continue;
     if ('to' in c) leaves(c.to, c.path, out);
+    else if ('cells' in c) (out[`${c.path} (cells changed)`] ??= []).push(c.cells);
     else { (out[`${c.path} +n`] ??= []).push(c.added.length); for (const y of c.added) leaves(y, `${c.path}+`, out); if (c.removed?.length) (out[`${c.path} -n`] ??= []).push(c.removed.length); }
   }
   (out['made (count)'] ??= []).push(fx.make.length);
@@ -51,9 +55,15 @@ export function outcomeLeaves(fx) {
 }
 
 const q = (xs, p) => xs[Math.min(xs.length - 1, Math.max(0, Math.round(p * (xs.length - 1))))];
-export function summarise(values, before) {
+export function summarise(values, before, angle = false) {
   const nums = values.filter(v => typeof v === 'number' && Number.isFinite(v));
   if (values.length && nums.length === values.length) {
+    if (angle) { // circular: the mean direction, and how widely they spread about it
+      const s = nums.reduce((a, x) => a + Math.sin(x * Math.PI / 180), 0) / nums.length, c = nums.reduce((a, x) => a + Math.cos(x * Math.PI / 180), 0) / nums.length;
+      const mean = (Math.atan2(s, c) * 180 / Math.PI + 360) % 360, R = Math.hypot(s, c);
+      const dev = nums.map(x => wrapDeg(x - mean)).sort((a, b) => a - b);
+      return { kind: 'angle', n: nums.length, mean, sd: R >= 1 ? 0 : Math.sqrt(-2 * Math.log(Math.max(R, 1e-9))) * 180 / Math.PI, q: [0.05, 0.25, 0.5, 0.75, 0.95].map(p => (mean + q(dev, p) + 360) % 360) };
+    }
     const xs = [...nums].sort((a, b) => a - b), mean = xs.reduce((a, b) => a + b, 0) / xs.length;
     return { kind: 'num', n: xs.length, mean, min: xs[0], max: xs[xs.length - 1], q: [0.05, 0.25, 0.5, 0.75, 0.95].map(p => q(xs, p)), same: before === undefined ? null : xs.filter(x => x === before).length / xs.length };
   }
@@ -63,11 +73,13 @@ export function summarise(values, before) {
   return { kind: 'cat', n: values.length, counts };
 }
 export function rankOf(s, values, a) {
-  if (a === undefined) return null;
+  if (a === undefined || a === null) return null;
+  if (s.kind === 'angle') { const d = x => wrapDeg(x - s.mean), da = d(a); return (values.filter(v => d(v) < da).length + 0.5 * values.filter(v => d(v) === da).length) / values.length; }
   if (s.kind === 'num') { const below = values.filter(v => v < a).length, eq = values.filter(v => v === a).length; return (below + 0.5 * eq) / values.length; }
-  return s.counts[a === undefined ? '(none)' : String(a)] ?? 0; // for a category: how often what happened comes up
+  return s.counts[String(a)] ?? 0; // for a category: how often what happened comes up
 }
-// A tree of leaves by path: { name, path, leaf?, children }.
+const unusualRank = (s, r) => r != null && s.kind !== 'cat' && (r < 0.1 || r > 0.9);
+// A tree of entries by path: { name, path, leaf?, children }.
 function treeOf(entries) {
   const root = { name: '', path: '', children: [] };
   for (const e of entries) {
@@ -84,47 +96,90 @@ function treeOf(entries) {
   return root;
 }
 
-// The range of outcomes: proc run n times on v0. live(d) gives the live keys for a run with dice d (for
-// processes that need them, see game.js); around(i, run) wraps each run (the game uses it to swap in
-// the place's dice for its own helpers). actual: the outcome that happened.
-export function spread(proc, v0, { n = 200, vary = 'act', seed = 'spread', actAt = null, place = null, live = null, around = (i, f) => f(), actual = null } = {}) {
-  const samples = [], errors = [];
+// The draws of n runs, by observable: for each kind and id, how often it's observed, and its fields.
+export function byObservable(runs, actual) {
+  const groups = new Map(), n = runs.length;
+  const add = (d, i) => {
+    const key = `${d.kind}\u0000${d.id}`;
+    let g = groups.get(key);
+    if (!g) groups.set(key, g = { kind: d.kind, id: d.id, name: d.name ?? d.id, runs: Array.from({ length: n }, () => []) });
+    g.runs[i].push(d);
+  };
+  runs.forEach((draws, i) => draws.forEach(d => add(d, i)));
+  for (const d of actual ?? []) if (!groups.has(`${d.kind}\u0000${d.id}`)) groups.set(`${d.kind}\u0000${d.id}`, { kind: d.kind, id: d.id, name: d.name ?? d.id, runs: Array.from({ length: n }, () => []) });
+  const out = [];
+  for (const g of groups.values()) {
+    const all = g.runs.flat(), seen = all.filter(d => d.observed !== false), here = (actual ?? []).filter(d => d.kind === g.kind && d.id === g.id);
+    const happened = here.find(d => d.observed !== false) ?? null;
+    const fields = [...new Set(all.flatMap(d => Object.keys(d)))].filter(f => !['kind', 'id', 'name', 'observed'].includes(f));
+    const stats = [];
+    for (const f of fields) {
+      const pool = f === 'p' ? all : seen; // a chance of being observed is there whether it was or not
+      const values = pool.map(d => d[f]).filter(v => v !== undefined);
+      if (!values.length) continue;
+      const s = summarise(values, undefined, isAngle(f)), a = (f === 'p' ? here[0] : happened)?.[f];
+      stats.push({ field: f, summary: s, actual: a, rank: rankOf(s, values, a) });
+      const tf = `true${cap(f)}`;
+      if (fields.includes(tf)) { // how far off the perception was
+        const errs = seen.filter(d => typeof d[f] === 'number' && typeof d[tf] === 'number').map(d => (isAngle(f) ? wrapDeg(d[f] - d[tf]) : d[tf] ? d[f] / d[tf] : NaN)).filter(Number.isFinite);
+        if (errs.length) { const es = summarise(errs), ea = happened && typeof happened[f] === 'number' ? (isAngle(f) ? wrapDeg(happened[f] - happened[tf]) : happened[f] / happened[tf]) : undefined; stats.push({ field: isAngle(f) ? `${f} error (°)` : `${f} / true`, summary: es, actual: ea, rank: rankOf(es, errs, ea) }); }
+      }
+    }
+    out.push({ kind: g.kind, id: g.id, name: g.name, observed: g.runs.filter(rs => rs.some(d => d.observed !== false)).length / n, records: all.length, happened: !!happened, fields: stats });
+  }
+  return out.sort((a, b) => a.kind.localeCompare(b.kind) || b.observed - a.observed || String(a.name).localeCompare(String(b.name)));
+}
+
+// The range of outcomes: proc run n times on the state as stateFn() gives it. live(d) gives the live
+// keys for a run with dice d; around(i, run, d) wraps each run (the game swaps in the place's dice for
+// its own helpers there). actual: the outcome that happened.
+export function spread(proc, stateFn, { n = 200, vary = 'act', seed = 'spread', actAt = null, place = null, live = null, around = (i, f) => f(), actual = null } = {}) {
+  const leafRuns = [], drawRuns = [], errors = [];
   const diceFor = i => ({
     act: vary === 'place' && actAt ? actAt.copy() : makeRng(`${seed}/act/${i}`),
     place: vary === 'act' && place ? place : key => makeRng(`${seed}/place/${i}/${key}`),
   });
   for (let i = 0; i < n; i++) {
     const d = diceFor(i);
-    try { samples.push(outcomeLeaves(around(i, () => rehearse(proc, v0, d, { live: live?.(d) }), d))); } catch (e) { errors.push(e.message); }
+    try {
+      const fx = around(i, () => attempt(proc, stateFn(), d, { live: live?.(d) }), d);
+      fx.tx.discard();
+      leafRuns.push(outcomeLeaves(fx)); drawRuns.push(fx.draws);
+    } catch (e) { errors.push(e.message); }
   }
-  const paths = new Set(samples.flatMap(s => Object.keys(s)));
-  const happened = actual ? outcomeLeaves(actual) : null;
-  if (happened) for (const p of Object.keys(happened)) paths.add(p);
+  const happened = actual ? outcomeLeaves(actual) : null, paths = new Set([...leafRuns.flatMap(s => Object.keys(s)), ...Object.keys(happened ?? {})]);
+  const beforeOf = path => { // the value before, from the change that covers this path (the path itself, or a thing changed whole that holds it)
+    const c = actual?.changes.find(x => 'to' in x && (path === x.path || path.startsWith(`${x.path}.`)));
+    return c ? path.slice(c.path.length).split('.').filter(Boolean).reduce((o, k) => (o == null ? undefined : o[k]), c.from) : undefined;
+  };
   const entries = [];
   for (const path of paths) {
-    const before = isState(path) ? get(v0, path.split('.')) : undefined;
-    const values = samples.flatMap(s => s[path] ?? (isState(path) ? [before] : / [+-]n$|\(count\)$/.test(path) ? [0] : []));
+    const before = isState(path) ? beforeOf(path) : undefined;
+    const fill = s => s[path] ?? (isState(path) ? [before] : / [+-]n$|\(count\)$|\(cells changed\)$/.test(path) ? [0] : []);
+    const values = leafRuns.flatMap(fill);
     if (!values.length) continue;
-    const s = summarise(values, before), a = happened ? (happened[path] ?? (isState(path) ? [before] : / [+-]n$|\(count\)$/.test(path) ? [0] : []))[0] : undefined;
-    // how often it's there at all, for what a run may or may not report (a thing seen, or not)
-    const present = isState(path) || / [+-]n$|\(count\)$|\[\]|[+]|^made\./.test(path) ? 1 : samples.filter(x => path in x).length / samples.length;
+    const s = summarise(values, before), a = happened ? fill(happened)[0] : undefined;
+    const present = isState(path) || / [+-]n$|\(count\)$|\[\]|[+]|^made\.|\(cells changed\)$/.test(path) ? 1 : leafRuns.filter(x => path in x).length / leafRuns.length;
     entries.push({ path, before, summary: s, actual: a, present, rank: rankOf(s, values, a), varies: present < 1 || (s.kind === 'num' ? s.min !== s.max : Object.keys(s.counts).length > 1) });
   }
   entries.sort((a, b) => a.path.localeCompare(b.path));
-  const ins = {};
-  for (const [k, x] of Object.entries(v0)) if (k !== 'world' && k !== 'L') leaves(x, k, ins);
-  const inputs = Object.entries(ins).map(([path, vs]) => ({ path, value: vs.length === 1 ? vs[0] : `${vs.length} values` }));
+  const inputs = actual ? [...actual.reads].map(([path, value]) => ({ path, value })) : [];
+  const observables = byObservable(drawRuns, actual?.draws);
   return {
-    id: proc.id, name: proc.name ?? proc.id, n: samples.length, vary, errors: [...new Set(errors)],
-    outcome: treeOf(entries), leaves: entries, inputs: treeOf(inputs), inputList: inputs,
-    unusual: entries.filter(e => e.summary.kind === 'num' && e.varies && e.rank != null && (e.rank < 0.1 || e.rank > 0.9)),
+    id: proc.id, name: proc.name ?? proc.id, n: leafRuns.length, vary, errors: [...new Set(errors)],
+    observables, outcome: treeOf(entries), leaves: entries, inputs: treeOf(inputs), inputList: inputs,
+    unusual: [
+      ...observables.flatMap(o => o.fields.filter(f => unusualRank(f.summary, f.rank)).map(f => ({ path: `${o.kind} ${o.name}: ${f.field}`, actual: f.actual, rank: f.rank }))),
+      ...entries.filter(e => e.summary.kind === 'num' && e.varies && unusualRank(e.summary, e.rank)),
+    ],
   };
 }
 
-// The same step again: does varying nothing give back what happened? (A check that the view and the
-// dice really are all a run depends on.)
-export function reproduces(proc, v0, actAt, place, actual, { live = null, around = (i, f) => f() } = {}) {
+// Run again with the very dice it had: does it come out as it did? (A check that the state it read
+// and its dice really are all it depends on.)
+export function reproduces(proc, stateFn, actAt, place, actual, { live = null, around = (i, f) => f() } = {}) {
   const d = { act: actAt.copy(), place };
-  const fx = around(0, () => rehearse(proc, v0, d, { live: live?.(d) }), d);
-  return JSON.stringify(outcomeLeaves(fx)) === JSON.stringify(outcomeLeaves(actual));
+  const fx = around(0, () => attempt(proc, stateFn(), d, { live: live?.(d) }), d);
+  fx.tx.discard();
+  return JSON.stringify([outcomeLeaves(fx), fx.draws]) === JSON.stringify([outcomeLeaves(actual), actual.draws]);
 }

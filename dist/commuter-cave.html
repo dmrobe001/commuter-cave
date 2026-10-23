@@ -761,9 +761,9 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const q2 = 0.6 + 0.4 * quality;
     let crushedThenReleased = false;
     const breakUp = (amount, rupture) => {
-      const before = s.surface;
+      const before2 = s.surface;
       s.surface = Math.min(1, s.surface + amount * q2);
-      const gain = s.surface - before;
+      const gain = s.surface - before2;
       s.access.fat += (1 - s.access.fat) * 0.6 * gain * rupture;
       s.access.protein += (1 - s.access.protein) * 0.3 * gain * rupture;
       s.access.starch += (1 - s.access.starch) * 0.15 * gain * rupture;
@@ -2563,8 +2563,8 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     }
     const recent = recentSites(memory);
     for (const [k, g] of groups) {
-      const before = (memory.namedAt[k] ?? []).filter((x) => recent.includes(x.site) && !g.some((e) => e.id === x.id));
-      const prev = before.length ? byId?.(before[before.length - 1].id) : null;
+      const before2 = (memory.namedAt[k] ?? []).filter((x) => recent.includes(x.site) && !g.some((e) => e.id === x.id));
+      const prev = before2.length ? byId?.(before2[before2.length - 1].id) : null;
       const names = g.map((e) => nameOf(memory, e));
       if (g.length > 1) {
         const cues = g.map(shortCue), says = cues.every((c, i) => new RegExp(`\\b${names[i].split(" ").pop()}s?\\b`, "i").test(c));
@@ -5824,277 +5824,487 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   }
 
   // src/act.js
-  var isPlain = (x) => x !== null && typeof x === "object" && Object.getPrototypeOf(x) === Object.prototype;
-  function copyWith(x, memo) {
-    if (x === null || typeof x !== "object")
-      return x;
-    if (memo.has(x))
-      return memo.get(x);
-    let c;
-    if (ArrayBuffer.isView(x)) {
-      c = x.slice();
-      memo.set(x, c);
-      return c;
-    }
-    if (Array.isArray(x)) {
-      c = [];
-      memo.set(x, c);
-      for (const y of x)
-        c.push(copyWith(y, memo));
-      return c;
-    }
-    if (x instanceof Set) {
-      c = /* @__PURE__ */ new Set();
-      memo.set(x, c);
-      for (const y of x)
-        c.add(copyWith(y, memo));
-      return c;
-    }
-    if (x instanceof Map) {
-      c = /* @__PURE__ */ new Map();
-      memo.set(x, c);
-      for (const [k, y] of x)
-        c.set(k, copyWith(y, memo));
-      return c;
-    }
-    c = {};
-    memo.set(x, c);
-    for (const k of Object.keys(x))
-      c[k] = copyWith(x[k], memo);
-    return c;
-  }
-  var ORIGINALS = /* @__PURE__ */ new WeakMap();
-  var keysOf = (p) => p.split(".");
-  var get = (o, ks) => ks.reduce((a, k) => a == null ? void 0 : a[k], o);
-  function put(o, ks, value) {
-    let a = o;
-    for (const k of ks.slice(0, -1))
-      a = a[k] ?? (a[k] = {});
-    a[ks[ks.length - 1]] = value;
-  }
-  var valueOf = (x, v) => typeof x === "function" ? x(v) : x ?? 0;
+  var DELETED = Symbol("deleted");
   var CONSTANT = /* @__PURE__ */ new Set(["world", "L"]);
   var isConstant = (p) => CONSTANT.has(p.split(".")[0]);
   var bare = (p) => p.replace(/^\+/, "");
+  var own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  var isPlain = (x) => x !== null && typeof x === "object" && (Array.isArray(x) || Object.getPrototypeOf(x) === Object.prototype || Object.getPrototypeOf(x) === null);
+  var MUTATING = { Set: /* @__PURE__ */ new Set(["add", "delete", "clear"]), Map: /* @__PURE__ */ new Set(["set", "delete", "clear"]), Grid: /* @__PURE__ */ new Set(["set", "fill", "copyWithin", "sort", "reverse"]) };
+  var valueOf = (x, v) => typeof x === "function" ? x(v) : x ?? 0;
+  var isIndex = (k) => typeof k === "string" && k.length > 0 && k.charCodeAt(0) >= 48 && k.charCodeAt(0) <= 57;
+  var BACKING = /* @__PURE__ */ new WeakMap();
+  var readable = (x) => x && BACKING.has(x) ? BACKING.get(x)() : x;
   function pathsOf(proc) {
     const all = [...new Set([...proc.reads ?? [], ...proc.writes ?? []].map(bare))].sort((a, b) => a.length - b.length);
     return all.filter((p, i) => !all.slice(0, i).some((q2) => p.startsWith(`${q2}.`)));
   }
-  var appendOnly = (proc) => new Set([...proc.writes ?? []].filter((p) => p.startsWith("+")).map(bare));
-  var declared = (proc, path) => (proc.writes ?? []).map(bare).some((w) => path === w || path.startsWith(`${w}.`) || w.startsWith(`${path}.`));
-  function viewOf(proc, state) {
-    const v = {}, adds = appendOnly(proc), memo = /* @__PURE__ */ new Map();
-    for (const p of pathsOf(proc))
-      put(v, keysOf(p), adds.has(p) ? [] : isConstant(p) ? state.get(p) : copyWith(state.get(p), memo));
-    ORIGINALS.set(v, memo);
-    return v;
+  function stateOver(namespaces, derived = {}, base = null) {
+    return {
+      base,
+      isBase: (k) => !(k in namespaces) && !(k in derived) && !!base,
+      has: (k) => k in namespaces || k in derived || !!base && k in base,
+      root(k) {
+        if (k in derived) {
+          const o = {};
+          for (const [key, f] of Object.entries(derived[k]))
+            Object.defineProperty(o, key, { get() {
+              const x = f();
+              Object.defineProperty(o, key, { value: x, enumerable: true });
+              return x;
+            }, enumerable: true, configurable: true });
+          return o;
+        }
+        if (k in namespaces)
+          return typeof namespaces[k] === "function" ? namespaces[k]() : namespaces[k];
+        return base?.[k];
+      },
+      get(path) {
+        const [k, ...ks] = path.split(".");
+        return ks.reduce((a, x) => a == null ? void 0 : a[x], this.root(k));
+      }
+    };
   }
-  function diff(a, b, path = "", out = []) {
-    if (Object.is(a, b))
-      return out;
-    if (ArrayBuffer.isView(a) && ArrayBuffer.isView(b)) {
-      if (a.length !== b.length || a.some((x, i) => x !== b[i]))
-        out.push({ path, from: a, to: b });
-      return out;
+  function snap(x, tx, depth2 = 0, seen = /* @__PURE__ */ new Map()) {
+    if (x === null || typeof x !== "object")
+      return x;
+    if (tx.targetOf.has(x))
+      return snap(tx.targetOf.get(x), tx, depth2, seen);
+    if (seen.has(x))
+      return seen.get(x);
+    if (ArrayBuffer.isView(x))
+      return `(${x.length} cells)`;
+    if (depth2 > 6)
+      return "\u2026";
+    const e = tx.over.get(x), back = e?.clone ?? x;
+    if (back instanceof Set)
+      return [...back].map((y) => snap(y, tx, depth2 + 1, seen));
+    if (back instanceof Map)
+      return Object.fromEntries([...back].map(([k, y]) => [k, snap(y, tx, depth2 + 1, seen)]));
+    if (Array.isArray(x)) {
+      const out2 = [];
+      seen.set(x, out2);
+      const n = tx.read(x, "length");
+      for (let i = 0; i < n; i++)
+        out2.push(snap(tx.read(x, String(i)), tx, depth2 + 1, seen));
+      return out2;
     }
-    if (a instanceof Set && b instanceof Set) {
-      const added = [...b].filter((x) => !a.has(x)), removed = [...a].filter((x) => !b.has(x));
-      if (added.length || removed.length)
-        out.push({ path, added, removed });
-      return out;
-    }
-    if (Array.isArray(a) && Array.isArray(b)) {
-      if (a.length === b.length)
-        a.forEach((x, i) => diff(x, b[i], `${path}.${i}`, out));
-      else if (b.length > a.length && a.every((x, i) => !diff(x, b[i]).length))
-        out.push({ path, added: b.slice(a.length), removed: [] });
-      else
-        out.push({ path, from: a, to: b });
-      return out;
-    }
-    if (isPlain(a) && isPlain(b)) {
-      for (const k of /* @__PURE__ */ new Set([...Object.keys(a), ...Object.keys(b)]))
-        if (!isConstant(path ? `${path}.${k}` : k))
-          diff(a[k], b[k], path ? `${path}.${k}` : k, out);
-      return out;
-    }
-    out.push({ path, from: a, to: b });
+    const out = {};
+    seen.set(x, out);
+    for (const k of tx.keysOf(x))
+      out[k] = snap(tx.read(x, k), tx, depth2 + 1, seen);
     return out;
   }
-  function guard(node, path, paths, partial, id, live) {
-    const seen = /* @__PURE__ */ new Map();
-    const how = (k) => {
-      let h = seen.get(k);
-      if (h)
-        return h;
-      const full = path ? `${path}.${k}` : k;
-      h = !path && live?.has(k) ? "live" : paths.has(full) || isConstant(full) ? "own" : partial.has(full) ? "deeper" : "none";
-      seen.set(k, h);
-      return h;
-    };
-    return new Proxy(node, {
-      get(o, k) {
-        if (typeof k === "symbol" || k === "toJSON")
-          return o[k];
-        const h = how(k);
-        if (h === "own")
-          return o[k];
-        if (h === "live")
-          return live.get(k);
-        if (h === "deeper")
-          return o[k] && typeof o[k] === "object" ? guard(o[k], path ? `${path}.${k}` : k, paths, partial, id) : o[k];
-        throw new Error(`${id} read ${path ? `${path}.${k}` : k} without declaring it`);
-      },
-      set(o, k, x) {
-        if (typeof k !== "symbol" && how(k) === "live")
-          live.set(k, x);
-        else
-          o[k] = x;
-        return true;
+  var before = (tx) => ({ targetOf: tx.targetOf, over: /* @__PURE__ */ new Map(), read: (o, k) => o[k], keysOf: (o) => Object.keys(o) });
+  function begin(proc, state, { live = null } = {}) {
+    const declared = pathsOf(proc), writable = (proc.writes ?? []).map(bare), system = { on: false };
+    const okRead = /* @__PURE__ */ new Map(), okWrite = /* @__PURE__ */ new Map();
+    const mayRead = (full) => {
+      let r = okRead.get(full);
+      if (r === void 0) {
+        r = isConstant(full) || declared.some((p) => full === p || full.startsWith(`${p}.`) || p.startsWith(`${full}.`));
+        okRead.set(full, r);
       }
-    });
-  }
-  function rehearse(proc, v0, dice2, { live = null } = {}) {
-    const v = {}, memo = /* @__PURE__ */ new Map();
-    for (const [k, x] of Object.entries(v0))
-      v[k] = isConstant(k) ? x : copyWith(x, memo);
-    const back = /* @__PURE__ */ new Map();
-    for (const [orig, c0] of ORIGINALS.get(v0) ?? [])
-      if (memo.has(c0))
-        back.set(memo.get(c0), orig);
-    const paths = pathsOf(proc), partial = new Set(paths.flatMap((p) => keysOf(p).slice(0, -1).map((_, i, ks) => ks.slice(0, i + 1).join("."))));
-    const out = proc.run(guard(v, "", new Set(paths), partial, proc.id, live), dice2) ?? {};
-    const changes = diff(v0, v);
-    const stray = changes.filter((c) => !declared(proc, c.path));
-    if (stray.length)
-      throw new Error(`${proc.id} changed ${stray.map((c) => c.path).join(", ")} without declaring it`);
-    const say = (out.say ?? []).map((l) => Array.isArray(l) ? l : [l, "act"]);
-    return { id: proc.id, changes, make: out.make ?? [], use: out.use ?? [], say, report: out.report ?? null, after: v, back, writes: (proc.writes ?? []).map(bare), adds: appendOnly(proc) };
-  }
-  function apply(fx, state) {
-    const done = /* @__PURE__ */ new Map();
-    const own = (x) => {
+      return r;
+    };
+    const mayWrite = (full) => {
+      let r = okWrite.get(full);
+      if (r === void 0) {
+        r = writable.some((w) => full === w || full.startsWith(`${w}.`));
+        okWrite.set(full, r);
+      }
+      return r;
+    };
+    const id = proc.id;
+    const tx = {
+      over: /* @__PURE__ */ new Map(),
+      // the state's object → { path, keys: Map(key → value | DELETED), clone (a set, map or grid changed whole) }
+      proxies: /* @__PURE__ */ new Map(),
+      // the state's object → Map(path → its proxy)
+      targetOf: /* @__PURE__ */ new WeakMap(),
+      // proxy → the state's object
+      reads: /* @__PURE__ */ new Map(),
+      // path → plain value read (the first time)
+      fresh: /* @__PURE__ */ new WeakSet(),
+      // things made in this run and put into the state: the run's own, never wrapped (so they stay themselves)
+      state,
+      closed: false,
+      system,
+      undo: null
+    };
+    const entry = (t, path) => {
+      let e = tx.over.get(t);
+      if (!e)
+        tx.over.set(t, e = { path, keys: /* @__PURE__ */ new Map(), clone: null });
+      return e;
+    };
+    tx.read = (t, k) => {
+      const e = tx.over.get(t);
+      if (e?.keys.has(k)) {
+        const x = e.keys.get(k);
+        return x === DELETED ? void 0 : x;
+      }
+      return t[k];
+    };
+    tx.has = (t, k) => {
+      const e = tx.over.get(t);
+      if (e?.keys.has(k))
+        return e.keys.get(k) !== DELETED;
+      return k in t;
+    };
+    tx.keysOf = (t) => {
+      const e = tx.over.get(t);
+      if (Array.isArray(t)) {
+        const n = tx.read(t, "length");
+        return Array.from({ length: n }, (_, i) => String(i)).filter((i) => tx.has(t, i));
+      }
+      const ks = Object.keys(t).filter((k) => !(e?.keys.get(k) === DELETED));
+      if (e) {
+        for (const [k, x] of e.keys)
+          if (x !== DELETED && !own(t, k) && typeof k === "string")
+            ks.push(k);
+      }
+      return ks;
+    };
+    const unwrap = (x) => {
       if (x === null || typeof x !== "object")
         return x;
-      if (done.has(x))
-        return done.get(x);
-      const r = fx.back.get(x);
-      if (ArrayBuffer.isView(x)) {
-        const t2 = r && r.length === x.length ? r : x.slice();
-        if (t2 === r)
-          t2.set(x);
-        done.set(x, t2);
-        return t2;
-      }
-      if (Array.isArray(x)) {
-        const t2 = r ?? [];
-        done.set(x, t2);
-        const items2 = x.map(own);
-        t2.length = 0;
-        t2.push(...items2);
-        return t2;
-      }
-      if (x instanceof Set) {
-        const t2 = r ?? /* @__PURE__ */ new Set();
-        done.set(x, t2);
-        const items2 = [...x].map(own);
-        t2.clear();
-        for (const y of items2)
-          t2.add(y);
-        return t2;
-      }
-      if (x instanceof Map) {
-        const t2 = r ?? /* @__PURE__ */ new Map();
-        done.set(x, t2);
-        const items2 = [...x].map(([k, y]) => [k, own(y)]);
-        t2.clear();
-        for (const [k, y] of items2)
-          t2.set(k, y);
-        return t2;
-      }
-      const t = r ?? {};
-      done.set(x, t);
-      const items = Object.keys(x).map((k) => [k, own(x[k])]);
-      for (const k of Object.keys(t))
-        if (!(k in x))
-          delete t[k];
-      for (const [k, y] of items)
-        t[k] = y;
-      return t;
+      if (tx.targetOf.has(x))
+        return tx.targetOf.get(x);
+      if (!tx.proxies.has(x) && !tx.over.has(x))
+        tx.fresh.add(x);
+      return x;
     };
-    const touched = (w) => fx.changes.some((c) => c.path === w || c.path.startsWith(`${w}.`) || w.startsWith(`${c.path}.`));
-    for (const w of fx.writes) {
-      if (!touched(w))
-        continue;
-      const x = get(fx.after, keysOf(w));
-      if (fx.adds.has(w)) {
-        const cur = state.get(w);
-        for (const y of x)
-          cur.push(own(y));
-        continue;
-      }
-      state.set(w, own(x));
+    const check = (ok, full, what) => {
+      if (!system.on && !tx.closed && !ok(full))
+        throw new Error(`${id} ${what} ${full} without declaring it`);
+    };
+    const logRead = (full, x) => {
+      if (tx.reads.size < 4e3 && !tx.reads.has(full) && (x === null || typeof x !== "object"))
+        tx.reads.set(full, x);
+    };
+    function wrap2(x, path) {
+      if (x === null || typeof x !== "object" || tx.targetOf.has(x) || tx.fresh.has(x) || isConstant(path))
+        return x;
+      let byPath = tx.proxies.get(x);
+      if (!byPath)
+        tx.proxies.set(x, byPath = /* @__PURE__ */ new Map());
+      let p = byPath.get(path);
+      if (p)
+        return p;
+      const collection = x instanceof Set || x instanceof Map || ArrayBuffer.isView(x);
+      p = new Proxy(x, collection ? whole(x, path) : layered(path));
+      if (collection)
+        BACKING.set(p, () => tx.closed ? x : tx.over.get(x)?.clone ?? x);
+      byPath.set(path, p);
+      tx.targetOf.set(p, x);
+      return p;
     }
+    function layered(path) {
+      const at = (k) => path ? `${path}.${String(k)}` : String(k);
+      return {
+        get(t, k, recv) {
+          if (typeof k === "symbol")
+            return Reflect.get(t, k, recv);
+          if (tx.closed)
+            return t[k];
+          const mine = tx.over.get(t)?.keys.has(k) || own(t, k);
+          if (!mine && (k in Object.prototype || Array.isArray(t) && k in Array.prototype))
+            return Reflect.get(t, k, recv);
+          const full = at(k);
+          check(mayRead, full, "read");
+          const x = tx.read(t, k);
+          if (typeof x === "function")
+            return x;
+          logRead(full, x);
+          return wrap2(x, full);
+        },
+        set(t, k, x) {
+          if (tx.closed) {
+            t[k] = unwrap(x);
+            return true;
+          }
+          const full = at(k);
+          if (typeof k !== "symbol")
+            check(mayWrite, full, "changed");
+          const e = entry(t, path);
+          e.keys.set(k, unwrap(x));
+          if (Array.isArray(t) && isIndex(k) && Number(k) >= tx.read(t, "length"))
+            e.keys.set("length", Number(k) + 1);
+          return true;
+        },
+        deleteProperty(t, k) {
+          if (tx.closed) {
+            delete t[k];
+            return true;
+          }
+          check(mayWrite, at(k), "changed");
+          entry(t, path).keys.set(k, DELETED);
+          return true;
+        },
+        has: (t, k) => tx.closed || typeof k === "symbol" ? k in t : tx.has(t, k),
+        ownKeys(t) {
+          return tx.closed ? Reflect.ownKeys(t) : Array.isArray(t) ? [...tx.keysOf(t), "length"] : tx.keysOf(t);
+        },
+        getOwnPropertyDescriptor(t, k) {
+          if (tx.closed)
+            return Reflect.getOwnPropertyDescriptor(t, k);
+          const d = Reflect.getOwnPropertyDescriptor(t, k), e = tx.over.get(t);
+          if (!e?.keys.has(k))
+            return d;
+          const x = e.keys.get(k);
+          if (x === DELETED)
+            return void 0;
+          if (d)
+            return { ...d, value: x };
+          return { value: x, writable: true, enumerable: true, configurable: true };
+        },
+        defineProperty(t, k, desc) {
+          return this.set(t, k, desc.value);
+        }
+      };
+    }
+    function whole(x, path) {
+      const kind = x instanceof Set ? "Set" : x instanceof Map ? "Map" : "Grid";
+      const back = (t) => tx.closed ? t : tx.over.get(t)?.clone ?? t;
+      const mine = (t) => {
+        const e = entry(t, path);
+        if (!e.clone)
+          e.clone = kind === "Set" ? new Set(t) : kind === "Map" ? new Map(t) : t.slice();
+        return e.clone;
+      };
+      return {
+        get(t, k) {
+          if (k === "size" || k === "length")
+            return back(t)[k];
+          if (isIndex(k))
+            return back(t)[k];
+          const f = back(t)[k];
+          if (typeof f !== "function")
+            return f;
+          if (MUTATING[kind].has(k) && !tx.closed)
+            return (...a) => {
+              check(mayWrite, path, "changed");
+              return mine(t)[k](...a.map(unwrap));
+            };
+          return f.bind(back(t));
+        },
+        set(t, k, v) {
+          if (tx.closed) {
+            t[k] = v;
+            return true;
+          }
+          check(mayWrite, path, "changed");
+          mine(t)[k] = v;
+          return true;
+        },
+        has: (t, k) => k in back(t)
+      };
+    }
+    const roots = /* @__PURE__ */ new Map();
+    tx.v = new Proxy({}, {
+      get(_, k) {
+        if (typeof k === "symbol")
+          return void 0;
+        if (live?.has(k))
+          return live.get(k);
+        if (isConstant(k))
+          return state.root(k);
+        check(mayRead, k, "read");
+        if (state.isBase(k)) {
+          const x2 = tx.read(state.base, k);
+          logRead(k, x2);
+          return wrap2(x2, k);
+        }
+        if (!roots.has(k))
+          roots.set(k, state.root(k));
+        const x = roots.get(k);
+        logRead(k, x);
+        return wrap2(x, k);
+      },
+      set(_, k, x) {
+        if (live?.has(k)) {
+          live.set(k, x);
+          return true;
+        }
+        if (!state.isBase(k))
+          throw new Error(`${id} can't replace the whole of ${k}`);
+        check(mayWrite, k, "changed");
+        entry(state.base, "").keys.set(k, unwrap(x));
+        return true;
+      },
+      has: (_, k) => !!live?.has(k) || state.has(k)
+    });
+    const settle = (x, seen = /* @__PURE__ */ new Set(), depth2 = 0) => {
+      if (x === null || typeof x !== "object")
+        return x;
+      if (tx.targetOf.has(x))
+        return tx.targetOf.get(x);
+      if (depth2 > 6 || seen.has(x) || tx.over.has(x) || tx.proxies.has(x) || !isPlain(x))
+        return x;
+      seen.add(x);
+      for (const k of Object.keys(x)) {
+        const y = settle(x[k], seen, depth2 + 1);
+        if (y !== x[k])
+          x[k] = y;
+      }
+      return x;
+    };
+    const put = (t, values, clone) => {
+      if (clone) {
+        if (t instanceof Set) {
+          t.clear();
+          for (const y of clone)
+            t.add(settle(y));
+        } else if (t instanceof Map) {
+          t.clear();
+          for (const [k, y] of clone)
+            t.set(k, settle(y));
+        } else
+          t.set(clone);
+        return;
+      }
+      let len;
+      for (const [k, y] of values) {
+        if (Array.isArray(t) && k === "length") {
+          len = y;
+          continue;
+        }
+        if (y === DELETED)
+          delete t[k];
+        else
+          t[k] = settle(y);
+      }
+      if (len !== void 0)
+        t.length = len === DELETED ? 0 : len;
+    };
+    tx.commit = () => {
+      if (tx.closed)
+        throw new Error(`${id}: transaction already over`);
+      tx.undo = [...tx.over].map(([t, e]) => ({
+        t,
+        e,
+        was: e.clone ? t instanceof Set ? new Set(t) : t instanceof Map ? new Map(t) : t.slice() : new Map([...e.keys.keys()].map((k) => [k, own(t, k) ? t[k] : DELETED]))
+      }));
+      tx.closed = true;
+      for (const { t, e } of tx.undo)
+        put(t, e.keys, e.clone);
+      return tx;
+    };
+    tx.discard = () => {
+      tx.closed = true;
+      return tx;
+    };
+    tx.revert = () => {
+      for (const { t, e, was } of [...tx.undo].reverse())
+        put(t, e.clone ? null : was, e.clone ? was : null);
+      return tx;
+    };
+    tx.reapply = () => {
+      for (const { t, e } of tx.undo)
+        put(t, e.keys, e.clone);
+      return tx;
+    };
+    tx.system = (f) => {
+      const was = system.on;
+      system.on = true;
+      try {
+        return f();
+      } finally {
+        system.on = was;
+      }
+    };
+    tx.changes = () => {
+      const out = [], old = before(tx);
+      for (const [t, e] of tx.over) {
+        const at = (k) => e.path ? `${e.path}.${k}` : k;
+        if (e.clone) {
+          if (t instanceof Set) {
+            const added = [...e.clone].filter((y) => !t.has(y)), removed = [...t].filter((y) => !e.clone.has(y));
+            if (added.length || removed.length)
+              out.push({ path: e.path, added: added.map((y) => snap(y, tx)), removed: removed.map((y) => snap(y, tx)) });
+          } else if (t instanceof Map)
+            out.push({ path: e.path, from: t.size, to: e.clone.size });
+          else {
+            let n = 0;
+            for (let i = 0; i < t.length; i++)
+              if (t[i] !== e.clone[i])
+                n++;
+            if (n)
+              out.push({ path: e.path, cells: n });
+          }
+          continue;
+        }
+        if (Array.isArray(t)) {
+          const n = tx.read(t, "length"), now2 = Array.from({ length: n }, (_, i) => tx.read(t, String(i)));
+          if (n >= t.length && t.every((y, i) => y === now2[i])) {
+            if (n > t.length)
+              out.push({ path: e.path, added: now2.slice(t.length).map((y) => snap(y, tx)), removed: [] });
+          } else if (n === t.length)
+            now2.forEach((y, i) => {
+              if (y !== t[i])
+                out.push({ path: at(i), from: snap(t[i], old), to: snap(y, tx) });
+            });
+          else
+            out.push({ path: e.path, from: snap(t, old), to: snap(now2, tx) });
+          continue;
+        }
+        for (const [k, y] of e.keys) {
+          if (typeof k === "symbol")
+            continue;
+          const was = own(t, k) ? t[k] : void 0, is = y === DELETED ? void 0 : y;
+          if (was !== is)
+            out.push({ path: at(k), from: snap(was, old), to: snap(is, tx) });
+        }
+      }
+      return out;
+    };
+    return tx;
+  }
+  function attempt(proc, state, dice2, { live = null, finish = null } = {}) {
+    const tx = begin(proc, state, { live }), draws = [];
+    const d = { ...dice2, note: (kind, id, fields = {}) => {
+      draws.push({ kind, id: String(id), ...fields });
+    } };
+    let out;
+    try {
+      out = proc.run(tx.v, d) ?? {};
+    } catch (e) {
+      tx.discard();
+      throw e;
+    }
+    const say = (out.say ?? []).map((l) => Array.isArray(l) ? l : [l, "act"]);
+    const fx = { id: proc.id, make: out.make ?? [], use: out.use ?? [], say, report: out.report ?? null, draws, tx, reads: tx.reads };
+    fx.changes = tx.changes();
+    if (finish)
+      tx.system(() => finish(tx.v, fx));
+    return fx;
   }
   var hoursOf = (proc, v) => valueOf(proc.hours, v);
   var kcalOf = (proc, v) => valueOf(proc.kcal, v) || 150;
   var readyFor = (proc, v) => proc.ready ? proc.ready(v) : true;
-  function stateOver(namespaces, derived = {}, base = null) {
-    const root = (ns) => ns in namespaces ? typeof namespaces[ns] === "function" ? namespaces[ns]() : namespaces[ns] : base?.[ns];
-    return {
-      get(path) {
-        const [ns, ...ks] = keysOf(path);
-        if (derived[ns]) {
-          if (!ks.length)
-            return Object.fromEntries(Object.entries(derived[ns]).map(([k, f2]) => [k, f2()]));
-          const f = derived[ns][ks[0]];
-          return get(f?.(), ks.slice(1));
-        }
-        return ks.length ? get(root(ns), ks) : root(ns);
-      },
-      set(path, value) {
-        const [ns, ...ks] = keysOf(path);
-        if (derived[ns])
-          throw new Error(`${path} is worked out from other state; it can't be set`);
-        if (!ks.length) {
-          if (root(ns) === value)
-            return;
-          if (base && !(ns in namespaces))
-            base[ns] = value;
-          else if (typeof namespaces[ns] !== "function")
-            namespaces[ns] = value;
-          else
-            throw new Error(`can't replace the whole of ${ns}`);
-          return;
-        }
-        put(root(ns), ks, value);
-      }
-    };
+  function peek(proc, state, f) {
+    const tx = begin(proc, state);
+    try {
+      return f(tx.v);
+    } finally {
+      tx.discard();
+    }
   }
 
   // src/spread.js
-  var get2 = (o, ks) => ks.reduce((a, k) => a == null ? void 0 : a[k], o);
   var isState = (p) => !/^(made|used|report)\b/.test(p) && !/[+]|\[\]/.test(p);
+  var isAngle = (f) => /(^|[a-z])(bearing|Bearing|dir|heading)$/.test(f) || f === "bearing";
+  var wrapDeg = (a) => (a % 360 + 540) % 360 - 180;
+  var cap3 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   function leaves(x, path, out) {
-    var _a, _b, _c, _d;
+    var _a;
     if (x === null || x === void 0 || typeof x !== "object") {
       (out[path] ?? (out[path] = [])).push(x);
       return;
     }
-    if (ArrayBuffer.isView(x)) {
-      (out[_a = `${path} (cells set)`] ?? (out[_a] = [])).push(x.reduce((a, v) => a + (v ? 1 : 0), 0));
-      return;
-    }
-    if (x instanceof Set) {
-      (out[_b = `${path} (count)`] ?? (out[_b] = [])).push(x.size);
-      return;
-    }
-    if (x instanceof Map) {
-      (out[_c = `${path} (count)`] ?? (out[_c] = [])).push(x.size);
-      return;
-    }
     if (Array.isArray(x)) {
-      (out[_d = `${path}.length`] ?? (out[_d] = [])).push(x.length);
+      (out[_a = `${path}.length`] ?? (out[_a] = [])).push(x.length);
       for (const y of x)
         leaves(y, `${path}[]`, out);
       return;
@@ -6103,17 +6313,21 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
       leaves(y, path ? `${path}.${k}` : k, out);
   }
   function outcomeLeaves(fx) {
-    var _a, _b;
+    var _a, _b, _c;
     const out = {};
     for (const c of fx.changes) {
+      if (/^log\b/.test(c.path))
+        continue;
       if ("to" in c)
         leaves(c.to, c.path, out);
+      else if ("cells" in c)
+        (out[_a = `${c.path} (cells changed)`] ?? (out[_a] = [])).push(c.cells);
       else {
-        (out[_a = `${c.path} +n`] ?? (out[_a] = [])).push(c.added.length);
+        (out[_b = `${c.path} +n`] ?? (out[_b] = [])).push(c.added.length);
         for (const y of c.added)
           leaves(y, `${c.path}+`, out);
         if (c.removed?.length)
-          (out[_b = `${c.path} -n`] ?? (out[_b] = [])).push(c.removed.length);
+          (out[_c = `${c.path} -n`] ?? (out[_c] = [])).push(c.removed.length);
       }
     }
     (out["made (count)"] ?? (out["made (count)"] = [])).push(fx.make.length);
@@ -6127,11 +6341,17 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     return out;
   }
   var q = (xs, p) => xs[Math.min(xs.length - 1, Math.max(0, Math.round(p * (xs.length - 1))))];
-  function summarise(values, before) {
+  function summarise(values, before2, angle = false) {
     const nums = values.filter((v) => typeof v === "number" && Number.isFinite(v));
     if (values.length && nums.length === values.length) {
+      if (angle) {
+        const s = nums.reduce((a, x) => a + Math.sin(x * Math.PI / 180), 0) / nums.length, c = nums.reduce((a, x) => a + Math.cos(x * Math.PI / 180), 0) / nums.length;
+        const mean2 = (Math.atan2(s, c) * 180 / Math.PI + 360) % 360, R2 = Math.hypot(s, c);
+        const dev = nums.map((x) => wrapDeg(x - mean2)).sort((a, b) => a - b);
+        return { kind: "angle", n: nums.length, mean: mean2, sd: R2 >= 1 ? 0 : Math.sqrt(-2 * Math.log(Math.max(R2, 1e-9))) * 180 / Math.PI, q: [0.05, 0.25, 0.5, 0.75, 0.95].map((p) => (mean2 + q(dev, p) + 360) % 360) };
+      }
       const xs = [...nums].sort((a, b) => a - b), mean = xs.reduce((a, b) => a + b, 0) / xs.length;
-      return { kind: "num", n: xs.length, mean, min: xs[0], max: xs[xs.length - 1], q: [0.05, 0.25, 0.5, 0.75, 0.95].map((p) => q(xs, p)), same: before === void 0 ? null : xs.filter((x) => x === before).length / xs.length };
+      return { kind: "num", n: xs.length, mean, min: xs[0], max: xs[xs.length - 1], q: [0.05, 0.25, 0.5, 0.75, 0.95].map((p) => q(xs, p)), same: before2 === void 0 ? null : xs.filter((x) => x === before2).length / xs.length };
     }
     const counts = {};
     for (const v of values) {
@@ -6143,14 +6363,19 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     return { kind: "cat", n: values.length, counts };
   }
   function rankOf(s, values, a) {
-    if (a === void 0)
+    if (a === void 0 || a === null)
       return null;
+    if (s.kind === "angle") {
+      const d = (x) => wrapDeg(x - s.mean), da = d(a);
+      return (values.filter((v) => d(v) < da).length + 0.5 * values.filter((v) => d(v) === da).length) / values.length;
+    }
     if (s.kind === "num") {
       const below = values.filter((v) => v < a).length, eq = values.filter((v) => v === a).length;
       return (below + 0.5 * eq) / values.length;
     }
-    return s.counts[a === void 0 ? "(none)" : String(a)] ?? 0;
+    return s.counts[String(a)] ?? 0;
   }
+  var unusualRank = (s, r) => r != null && s.kind !== "cat" && (r < 0.1 || r > 0.9);
   function treeOf(entries) {
     const root = { name: "", path: "", children: [] };
     for (const e of entries) {
@@ -6169,8 +6394,47 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     }
     return root;
   }
-  function spread(proc, v0, { n = 200, vary = "act", seed = "spread", actAt = null, place = null, live = null, around = (i, f) => f(), actual = null } = {}) {
-    const samples = [], errors = [];
+  function byObservable(runs, actual) {
+    const groups = /* @__PURE__ */ new Map(), n = runs.length;
+    const add = (d, i) => {
+      const key = `${d.kind}\0${d.id}`;
+      let g = groups.get(key);
+      if (!g)
+        groups.set(key, g = { kind: d.kind, id: d.id, name: d.name ?? d.id, runs: Array.from({ length: n }, () => []) });
+      g.runs[i].push(d);
+    };
+    runs.forEach((draws, i) => draws.forEach((d) => add(d, i)));
+    for (const d of actual ?? [])
+      if (!groups.has(`${d.kind}\0${d.id}`))
+        groups.set(`${d.kind}\0${d.id}`, { kind: d.kind, id: d.id, name: d.name ?? d.id, runs: Array.from({ length: n }, () => []) });
+    const out = [];
+    for (const g of groups.values()) {
+      const all = g.runs.flat(), seen = all.filter((d) => d.observed !== false), here = (actual ?? []).filter((d) => d.kind === g.kind && d.id === g.id);
+      const happened = here.find((d) => d.observed !== false) ?? null;
+      const fields = [...new Set(all.flatMap((d) => Object.keys(d)))].filter((f) => !["kind", "id", "name", "observed"].includes(f));
+      const stats = [];
+      for (const f of fields) {
+        const pool = f === "p" ? all : seen;
+        const values = pool.map((d) => d[f]).filter((v) => v !== void 0);
+        if (!values.length)
+          continue;
+        const s = summarise(values, void 0, isAngle(f)), a = (f === "p" ? here[0] : happened)?.[f];
+        stats.push({ field: f, summary: s, actual: a, rank: rankOf(s, values, a) });
+        const tf = `true${cap3(f)}`;
+        if (fields.includes(tf)) {
+          const errs = seen.filter((d) => typeof d[f] === "number" && typeof d[tf] === "number").map((d) => isAngle(f) ? wrapDeg(d[f] - d[tf]) : d[tf] ? d[f] / d[tf] : NaN).filter(Number.isFinite);
+          if (errs.length) {
+            const es = summarise(errs), ea = happened && typeof happened[f] === "number" ? isAngle(f) ? wrapDeg(happened[f] - happened[tf]) : happened[f] / happened[tf] : void 0;
+            stats.push({ field: isAngle(f) ? `${f} error (\xB0)` : `${f} / true`, summary: es, actual: ea, rank: rankOf(es, errs, ea) });
+          }
+        }
+      }
+      out.push({ kind: g.kind, id: g.id, name: g.name, observed: g.runs.filter((rs) => rs.some((d) => d.observed !== false)).length / n, records: all.length, happened: !!happened, fields: stats });
+    }
+    return out.sort((a, b) => a.kind.localeCompare(b.kind) || b.observed - a.observed || String(a.name).localeCompare(String(b.name)));
+  }
+  function spread(proc, stateFn, { n = 200, vary = "act", seed = "spread", actAt = null, place = null, live = null, around = (i, f) => f(), actual = null } = {}) {
+    const leafRuns = [], drawRuns = [], errors = [];
     const diceFor = (i) => ({
       act: vary === "place" && actAt ? actAt.copy() : makeRng(`${seed}/act/${i}`),
       place: vary === "act" && place ? place : (key) => makeRng(`${seed}/place/${i}/${key}`)
@@ -6178,49 +6442,55 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     for (let i = 0; i < n; i++) {
       const d = diceFor(i);
       try {
-        samples.push(outcomeLeaves(around(i, () => rehearse(proc, v0, d, { live: live?.(d) }), d)));
+        const fx = around(i, () => attempt(proc, stateFn(), d, { live: live?.(d) }), d);
+        fx.tx.discard();
+        leafRuns.push(outcomeLeaves(fx));
+        drawRuns.push(fx.draws);
       } catch (e) {
         errors.push(e.message);
       }
     }
-    const paths = new Set(samples.flatMap((s) => Object.keys(s)));
-    const happened = actual ? outcomeLeaves(actual) : null;
-    if (happened)
-      for (const p of Object.keys(happened))
-        paths.add(p);
+    const happened = actual ? outcomeLeaves(actual) : null, paths = /* @__PURE__ */ new Set([...leafRuns.flatMap((s) => Object.keys(s)), ...Object.keys(happened ?? {})]);
+    const beforeOf = (path) => {
+      const c = actual?.changes.find((x) => "to" in x && (path === x.path || path.startsWith(`${x.path}.`)));
+      return c ? path.slice(c.path.length).split(".").filter(Boolean).reduce((o, k) => o == null ? void 0 : o[k], c.from) : void 0;
+    };
     const entries = [];
     for (const path of paths) {
-      const before = isState(path) ? get2(v0, path.split(".")) : void 0;
-      const values = samples.flatMap((s2) => s2[path] ?? (isState(path) ? [before] : / [+-]n$|\(count\)$/.test(path) ? [0] : []));
+      const before2 = isState(path) ? beforeOf(path) : void 0;
+      const fill = (s2) => s2[path] ?? (isState(path) ? [before2] : / [+-]n$|\(count\)$|\(cells changed\)$/.test(path) ? [0] : []);
+      const values = leafRuns.flatMap(fill);
       if (!values.length)
         continue;
-      const s = summarise(values, before), a = happened ? (happened[path] ?? (isState(path) ? [before] : / [+-]n$|\(count\)$/.test(path) ? [0] : []))[0] : void 0;
-      const present = isState(path) || / [+-]n$|\(count\)$|\[\]|[+]|^made\./.test(path) ? 1 : samples.filter((x) => path in x).length / samples.length;
-      entries.push({ path, before, summary: s, actual: a, present, rank: rankOf(s, values, a), varies: present < 1 || (s.kind === "num" ? s.min !== s.max : Object.keys(s.counts).length > 1) });
+      const s = summarise(values, before2), a = happened ? fill(happened)[0] : void 0;
+      const present = isState(path) || / [+-]n$|\(count\)$|\[\]|[+]|^made\.|\(cells changed\)$/.test(path) ? 1 : leafRuns.filter((x) => path in x).length / leafRuns.length;
+      entries.push({ path, before: before2, summary: s, actual: a, present, rank: rankOf(s, values, a), varies: present < 1 || (s.kind === "num" ? s.min !== s.max : Object.keys(s.counts).length > 1) });
     }
     entries.sort((a, b) => a.path.localeCompare(b.path));
-    const ins = {};
-    for (const [k, x] of Object.entries(v0))
-      if (k !== "world" && k !== "L")
-        leaves(x, k, ins);
-    const inputs = Object.entries(ins).map(([path, vs]) => ({ path, value: vs.length === 1 ? vs[0] : `${vs.length} values` }));
+    const inputs = actual ? [...actual.reads].map(([path, value]) => ({ path, value })) : [];
+    const observables = byObservable(drawRuns, actual?.draws);
     return {
       id: proc.id,
       name: proc.name ?? proc.id,
-      n: samples.length,
+      n: leafRuns.length,
       vary,
       errors: [...new Set(errors)],
+      observables,
       outcome: treeOf(entries),
       leaves: entries,
       inputs: treeOf(inputs),
       inputList: inputs,
-      unusual: entries.filter((e) => e.summary.kind === "num" && e.varies && e.rank != null && (e.rank < 0.1 || e.rank > 0.9))
+      unusual: [
+        ...observables.flatMap((o) => o.fields.filter((f) => unusualRank(f.summary, f.rank)).map((f) => ({ path: `${o.kind} ${o.name}: ${f.field}`, actual: f.actual, rank: f.rank }))),
+        ...entries.filter((e) => e.summary.kind === "num" && e.varies && unusualRank(e.summary, e.rank))
+      ]
     };
   }
-  function reproduces(proc, v0, actAt, place, actual, { live = null, around = (i, f) => f() } = {}) {
+  function reproduces(proc, stateFn, actAt, place, actual, { live = null, around = (i, f) => f() } = {}) {
     const d = { act: actAt.copy(), place };
-    const fx = around(0, () => rehearse(proc, v0, d, { live: live?.(d) }), d);
-    return JSON.stringify(outcomeLeaves(fx)) === JSON.stringify(outcomeLeaves(actual));
+    const fx = around(0, () => attempt(proc, stateFn(), d, { live: live?.(d) }), d);
+    fx.tx.discard();
+    return JSON.stringify([outcomeLeaves(fx), fx.draws]) === JSON.stringify([outcomeLeaves(actual), actual.draws]);
   }
 
   // src/craft.js
@@ -6254,7 +6524,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
     return x > 0 ? 1 - p : p;
   }
-  function attempt(r, ch, spec, terms, hours = spec.median) {
+  function attempt2(r, ch, spec, terms, hours = spec.median) {
     const se = effSkill(ch, spec.skill, spec.handLoad);
     const mean = terms.reduce((s, [w, x]) => s + w * Math.log(Math.max(x, 1e-3)), 0) + spec.kSkill * se + spec.kEffort * Math.log(hours / spec.median);
     const sd = 1 - 0.7 * ch.skills[spec.skill];
@@ -6276,7 +6546,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   var nextId = 1;
   var item = (name, props, provenance) => ({ id: nextId++, name, props, provenance });
   function knapFlakes(r, ch, stone, hammer, anvil) {
-    const res = attempt(
+    const res = attempt2(
       r,
       ch,
       { skill: "knapping", kSkill: 3, theta: -0.5, kEffort: 0.5, median: 0.25, learn: 0.08, handLoad: 1.5, kcal: 200 },
@@ -6296,23 +6566,23 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   }
   var NOTCH = { skill: "woodwork", kSkill: 2.5, theta: -0.4, kEffort: 0.6, median: 0.4, learn: 0.06, handLoad: 1, kcal: 160 };
   function notchHearth(r, ch, wood, cutter, hours = NOTCH.median) {
-    const res = attempt(r, ch, NOTCH, [[1, ROLES.cutter(cutter.props, ch.skills.woodwork)]], hours);
+    const res = attempt2(r, ch, NOTCH, [[1, ROLES.cutter(cutter.props, ch.skills.woodwork)]], hours);
     dull(cutter, hours, woodHardness(wood.props.density));
     const board = item("hearth board", { density: wood.props.density, resin: wood.props.resin, moisture: wood.props.moisture, notch: 0.15 + 0.85 * workmanship(res.margin + 0.5), life: 1, socket: 0 }, wood.provenance);
     return { ...res, board };
   }
   function refineNotch(r, ch, board, cutter, hours = 0.6) {
-    const res = attempt(r, ch, NOTCH, [[1, ROLES.cutter(cutter.props, ch.skills.woodwork)]], hours);
+    const res = attempt2(r, ch, NOTCH, [[1, ROLES.cutter(cutter.props, ch.skills.woodwork)]], hours);
     dull(cutter, hours, woodHardness(board.props.density));
-    const before = board.props.notch;
+    const before2 = board.props.notch;
     if (res.margin < -1.5)
-      board.props.notch = Math.max(0.15, before - 0.05);
+      board.props.notch = Math.max(0.15, before2 - 0.05);
     else
-      board.props.notch = clamp(before + (1 - before) * 0.5 * workmanship(res.margin));
-    return { ...res, before, after: board.props.notch };
+      board.props.notch = clamp(before2 + (1 - before2) * 0.5 * workmanship(res.margin));
+    return { ...res, before: before2, after: board.props.notch };
   }
   function carveSpindle(r, ch, shoot, cutter) {
-    const res = attempt(
+    const res = attempt2(
       r,
       ch,
       { skill: "woodwork", kSkill: 2.5, theta: -0.4, kEffort: 0.6, median: 0.5, learn: 0.06, handLoad: 1, kcal: 160 },
@@ -6329,14 +6599,14 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     return { ...res, spindle };
   }
   function makeTinder(r, ch, material) {
-    const res = attempt(r, ch, { skill: "firecraft", kSkill: 2, theta: -0.8, kEffort: 0.5, median: 0.2, learn: 0.04, handLoad: 0.5, kcal: 140 }, []);
+    const res = attempt2(r, ch, { skill: "firecraft", kSkill: 2, theta: -0.8, kEffort: 0.5, median: 0.2, learn: 0.04, handLoad: 0.5, kcal: 140 }, []);
     return { ...res, tinder: item("tinder bundle", { moisture: material.props.moisture, fineness: clamp(0.45 + 0.4 * workmanship(res.margin)) }, material.provenance) };
   }
   var HAND_DRILL = { skill: "firecraft", kSkill: 1.89, theta: 1.2, kEffort: 0.5, median: 0.25, learn: 0.08, handLoad: 3, kcal: 400 };
   function handDrill(r, ch, board, spindle) {
     var _a;
     const sk = ch.skills.firecraft;
-    const res = attempt(r, ch, HAND_DRILL, [[1, ROLES.hearth(board.props, sk)], [1, ROLES.spindle(spindle.props, sk)], [0.6, board.props.notch], [0.4, 0.4 + 0.6 * board.props.socket]]);
+    const res = attempt2(r, ch, HAND_DRILL, [[1, ROLES.hearth(board.props, sk)], [1, ROLES.spindle(spindle.props, sk)], [0.6, board.props.notch], [0.4, 0.4 + 0.6 * board.props.socket]]);
     board.props.socket = clamp(board.props.socket + (1 - board.props.socket) * 0.3);
     board.props.life = clamp(board.props.life - (0.05 + 0.1 * (0.45 - board.props.density)));
     spindle.props.length -= 1.5;
@@ -6356,7 +6626,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     return { flake: item("natural edge", { sharpness: clamp(src.props.sharpness + r.normal(0, 0.12)), hardness: src.props.hardness, fracture: 0.2, mass: Math.round(r.uniform(10, 40)) }, src.provenance) };
   }
   function splinterBone(r, ch, bone, hammer) {
-    const res = attempt(r, ch, { skill: "knapping", kSkill: 1.5, theta: -0.8, kEffort: 0.3, median: 0.2, learn: 0.04, handLoad: 0.5, kcal: 160 }, [[0.5, ROLES.pounder(hammer.props)]]);
+    const res = attempt2(r, ch, { skill: "knapping", kSkill: 1.5, theta: -0.8, kEffort: 0.3, median: 0.2, learn: 0.04, handLoad: 0.5, kcal: 160 }, [[0.5, ROLES.pounder(hammer.props)]]);
     const n = res.success ? 1 + (res.margin > 0.5 ? 1 : 0) : 0;
     const out = [];
     for (let i = 0; i < n; i++)
@@ -6364,7 +6634,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
     return { ...res, flakes: out };
   }
   function lightFire(r, ch, ember, tinder) {
-    const res = attempt(
+    const res = attempt2(
       r,
       ch,
       { skill: "firecraft", kSkill: 1.5, theta: -0.6, kEffort: 0.3, median: 0.15, learn: 0.05, handLoad: 0.3, kcal: 180 },
@@ -6451,7 +6721,7 @@ label.toggle { display: flex; gap: .4rem; align-items: center; margin: .6rem 0; 
   }
 
   // src/acts.js
-  var cap3 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  var cap4 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   var r3 = (x) => Math.round(x * 1e3) / 1e3;
   var entityIn = (world) => (id) => [...world.stones, ...world.plants, ...world.animals].find((e) => e.id === id);
   var pluralize = (n) => /fungus$/.test(n) ? n.replace(/fungus$/, "fungi") : /louse$/.test(n) ? n.replace(/louse$/, "lice") : /(s|sh|ch|x)$/.test(n) ? `${n}es` : /[^aeiou]y$/.test(n) ? `${n.slice(0, -1)}ies` : /(deer|fish|trout|elk|grouse|quail|boar)$/.test(n) ? n : `${n}s`;
@@ -6663,10 +6933,10 @@ ${lines.join("\n")}`, "survey"]],
     ready: (v) => v.stuff.length ? true : "Nothing to make a bed with.",
     run(v) {
       const add = v.stuff.reduce((a, it) => a + (it.props.loft ?? 0.3), 0), wet = v.stuff.reduce((a, it) => a + (it.props.moisture ?? 0.2), 0) / v.stuff.length;
-      const before = v.site.bed?.clo ?? 0;
-      v.site.bed = { clo: Math.min(1.5, before + add), wet: clamp(((v.site.bed?.wet ?? 0) * before + wet * add) / (before + add)) };
+      const before2 = v.site.bed?.clo ?? 0;
+      v.site.bed = { clo: Math.min(1.5, before2 + add), wet: clamp(((v.site.bed?.wet ?? 0) * before2 + wet * add) / (before2 + add)) };
       const b = v.site.bed;
-      return { use: v.stuff, say: [`${before ? "Added to the bed" : "Heaped up a bed"}: ${b.clo < 0.5 ? "a thin layer, but better than bare ground" : b.clo < 1 ? "a hand\u2019s depth to lie on" : "a deep, springy pile"}${b.wet > 0.35 ? ", though damp" : ""}.`] };
+      return { use: v.stuff, say: [`${before2 ? "Added to the bed" : "Heaped up a bed"}: ${b.clo < 0.5 ? "a thin layer, but better than bare ground" : b.clo < 1 ? "a hand\u2019s depth to lie on" : "a deep, springy pile"}${b.wet > 0.35 ? ", though damp" : ""}.`] };
     }
   };
   var BUILD_HUT = {
@@ -7055,18 +7325,18 @@ ${lines.join("\n")}`, "survey"]],
           ex = { dry: v.mode === "fire" ? 12 : 8 };
           tag = "dried";
         }
-        const before = food.props.chem, after = expose(before, ex, q2, cond);
+        const before2 = food.props.chem, after = expose(before2, ex, q2, cond);
         if (id === "roast" && v.mode === "quick" && rng.chance(0.3)) {
           food.props.mass *= 0.85;
           say.push("Some of it charred black.");
         }
-        food.props.mass = r3(food.props.mass * (1 - before.water) / Math.max(0.05, 1 - after.water));
+        food.props.mass = r3(food.props.mass * (1 - before2.water) / Math.max(0.05, 1 - after.water));
         food.props.chem = after;
         food.notes = {};
         food.prep.push(tag);
         food.name = `${food.base} (${food.prep.join(", ")})`;
         const how = id === "leach" ? ` in the stream for ${v.mode} hours` : id === "soak" ? ` for ${v.mode} hours` : id === "dryfood" ? v.mode === "fire" ? " by the fire" : " in the sun" : id === "stoneboil" ? ` in the ${v.site.basin.kind}` : "";
-        say.push(`${PREP_WORDS[id]} the ${food.from.part} of the ${food.from.name}${how}. ${cap3(textureWords(after))} now.`);
+        say.push(`${PREP_WORDS[id]} the ${food.from.part} of the ${food.from.name}${how}. ${cap4(textureWords(after))} now.`);
         return { use, say, report: { quality: q2 } };
       }
     };
@@ -7113,7 +7383,7 @@ ${lines.join("\n")}`, "survey"]],
       const L = (_a = v.lore)[key] ?? (_a[key] = { ok: 0, sick: 0 });
       const delayed = !!st.compounds.amatoxin && /poison|lethal/.test(outcome);
       b.energy = clamp(b.energy + (/severe|lethal/.test(outcome) && !delayed ? Math.min(0, net) : net) / 24e3);
-      const feel = [`${cap3(textureWords(st))}.`];
+      const feel = [`${cap4(textureWords(st))}.`];
       if (irritant)
         feel.push("My mouth and throat burned.");
       if (wasted > 50) {
@@ -7257,7 +7527,7 @@ ${lines.join("\n")}`, "survey"]],
   var $ = (sel2) => document.querySelector(sel2);
   var esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
   var typo = (s) => String(s).replace(/(\w)'(\w)/g, "$1\u2019$2").replace(/'(\w)/g, "\u2018$1").replace(/(\w)'/g, "$1\u2019").replace(/"(\w)/g, "\u201C$1").replace(/(\w|[.,!?])"/g, "$1\u201D");
-  var cap4 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  var cap5 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   var clock = (t) => {
     const m = Math.round(t * 60);
     return `${String(Math.floor(m / 60) % 24).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
@@ -7381,7 +7651,7 @@ ${lines.join("\n")}`, "survey"]],
     {
       const k = skyNow(), tw = k.tempC < 5 ? "cold" : k.tempC < 12 ? "cool" : k.tempC < 22 ? "mild" : "warm";
       const when = (adj, rest) => /season/.test(k.season) ? `a ${adj} morning in the ${k.season}${rest}` : `a ${adj} ${k.season} morning${rest}`;
-      log(`${cap4(k.weather === "fog" ? when("foggy", ": I can hardly see a stone\u2019s throw") : k.wet ? when("wet", `, ${WEATHER_WORDS[k.weather]} coming down`) : when(tw, `, ${WEATHER_WORDS[k.weather]}`))}.`, "note");
+      log(`${cap5(k.weather === "fog" ? when("foggy", ": I can hardly see a stone\u2019s throw") : k.wet ? when("wet", `, ${WEATHER_WORDS[k.weather]} coming down`) : when(tw, `, ${WEATHER_WORDS[k.weather]}`))}.`, "note");
     }
     const first = newSite(checked2.spawn.x, checked2.spawn.y);
     first.name = "where I woke";
@@ -7611,7 +7881,7 @@ ${lines.join("\n")}`, "survey"]],
     const g = segAt(cellOf(x, y));
     return g ? g.name : st?.name ?? "the stream";
   }
-  var titleCase = (w) => w.split(/[\s-]+/).map(cap4).join(" ");
+  var titleCase = (w) => w.split(/[\s-]+/).map(cap5).join(" ");
   function newSegmentName(cells) {
     const bottom = cells[cells.length - 1], noun = titleCase(SIZE_NOUN[S.L.chan[bottom] || 1]);
     const used = new Set(Object.values(S.segNames ?? {}).map((g) => g.name));
@@ -7807,7 +8077,7 @@ ${lines.join("\n")}`, "survey"]],
     const key = `${from.x},${from.y}/${S.seenVer ?? 0}/${S.day}`;
     if (S.routeMemo?.key === key)
       return S.routeMemo.D;
-    const esc2 = cliffIndex(), seen = S.seenLand, lake = S.L.lake, steps = stepGrid(), known = (c) => (seen?.[c] ?? 0) >= SEEN;
+    const esc2 = cliffIndex(), seen = readable(S.seenLand), lake = S.L.lake, steps = stepGrid(), known = (c) => (seen?.[c] ?? 0) >= SEEN;
     const blocked = (c) => known(c) && !!lake[c];
     const D = new Float64Array(N * N).fill(Infinity), start = cellOf(from.x, from.y);
     let hd = new Float64Array(4096), hc = new Int32Array(4096), n = 0;
@@ -8012,7 +8282,7 @@ ${lines.join("\n")}`, "survey"]],
     if (focus)
       all = all.filter((c) => isWaterKind(c.kind) || focus === "lookout" && ["hill", "cliff"].includes(c.kind));
     const cues = lookout || scan ? all : [...all].sort((a, b) => isWaterKind(b.kind) - isWaterKind(a.kind) || b.strength - a.strength).filter((c, i) => isWaterKind(c.kind) || i < 3);
-    const before = new Set(S.suspects);
+    const before2 = new Set(S.suspects);
     const found = { heard: [], seen: [], land: [], upgraded: [] }, stillSeen = /* @__PURE__ */ new Set();
     for (const c of cues) {
       if (c.kind === "brook" && c.trueDist > 100)
@@ -8022,7 +8292,7 @@ ${lines.join("\n")}`, "survey"]],
         if (c.channel === "sight" && sus.channel === "sound") {
           sus.channel = "sight";
           found.upgraded.push(`${cuePhrase(c, g, s)} (${sus.label})`);
-        } else if (before.has(sus))
+        } else if (before2.has(sus))
           stillSeen.add(sus);
         continue;
       }
@@ -8308,7 +8578,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       how = "by my reckoning";
     if (Math.hypot(here.x - est.x, here.y - est.y) < 1)
       return;
-    log(`Didn\u2019t reach ${name}. ${cap4(how)}: ${awayWords(lineHours2(S.L, here, est), sus && sus.channel === "sound" && sus.obs < 2 ? "unknown" : "guess")}, to the ${bearingWord(bearing(here, est))}.`, "thought");
+    log(`Didn\u2019t reach ${name}. ${cap5(how)}: ${awayWords(lineHours2(S.L, here, est), sus && sus.channel === "sound" && sus.obs < 2 ? "unknown" : "guess")}, to the ${bearingWord(bearing(here, est))}.`, "thought");
   }
   function missedStream(target, st) {
     const here = site();
@@ -8568,8 +8838,8 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const dur = timeWords(hours, "known");
     const last = trip.crossings[trip.crossings.length - 1], endsOnWater = !!last && trip.end.x === last.x && trip.end.y === last.y;
     const stoppedAtWater = thirsty && endsOnWater;
-    const before = new Set(ids.slice(0, endsOnWater ? -1 : void 0));
-    const crossed = names.filter((_, i) => before.has(keys[i]));
+    const before2 = new Set(ids.slice(0, endsOnWater ? -1 : void 0));
+    const crossed = names.filter((_, i) => before2.has(keys[i]));
     const where = S.L.veg[cellOf(trip.end.x, trip.end.y)] > 0.55 ? "thick woodland" : S.L.veg[cellOf(trip.end.x, trip.end.y)] > 0.3 ? "scrubby woodland" : "open ground";
     const text = `${S.looking ? "Walked, watching for " + S.looking.label + "," : "Pushed"} ${label} for ${dur}, through ${where}${crossed.length ? `; crossed ${crossed.join(" and ")}` : ""}.${stoppedAtWater ? " Parched, I stopped at the water." : ""}${hours >= 2.9 && !stoppedAtWater && budget >= 3 ? " Stopped to get my bearings." : ""}`;
     arrive(trip.end.x, trip.end.y, text, () => {
@@ -8628,11 +8898,11 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
   }
   function look(s, skill) {
     const time = timeOfDay();
-    const before = new Set(Object.keys(S.mem.entities));
+    const before2 = new Set(Object.keys(S.mem.entities));
     const out = observeSite(S.world, S.mem, { site: s.key, micro: s.micro, skill, time, cond: condNow(s) });
     for (const id of out.noticed)
       s.known.add(id);
-    const fresh = Object.keys(S.mem.entities).filter((k) => !before.has(k)).map(entity).filter((e) => e && (e.kind === "animal" && e.cls !== "invertebrate" || ["tree", "shrub"].includes(e.form))).pop();
+    const fresh = Object.keys(S.mem.entities).filter((k) => !before2.has(k)).map(entity).filter((e) => e && (e.kind === "animal" && e.cls !== "invertebrate" || ["tree", "shrub"].includes(e.form))).pop();
     if (fresh)
       S.recentNotice = fresh.name;
     s.visits++;
@@ -8694,31 +8964,41 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     "revealed"
   ]);
   var MEMOS = /* @__PURE__ */ new Set(["treeMemo"]);
-  var hosted = (fn) => Object.assign((v, d) => {
-    const real = S;
+  var noteSink = null;
+  var withState = (v, d, f) => {
+    const real = S, sink = noteSink;
     S = v;
+    noteSink = d?.note ?? sink;
     try {
-      return fn(v, d) ?? {};
+      return f();
     } finally {
       S = real;
+      noteSink = sink;
     }
-  }, { hosted: true });
+  };
+  var hosted = (fn) => Object.assign((v, d) => withState(v, d, () => fn(v, d) ?? {}), { hosted: true });
+  var finishFor = (quiet) => (v, fx) => withState(v, null, () => {
+    for (const it of fx.use)
+      remove(S.inv.find((i) => i.uid === it.uid));
+    for (const m of fx.make)
+      addItem(m.name, m.kind, m.props, m.from, m.extra);
+    if (!quiet)
+      for (const [text, kind] of fx.say)
+        log(text, kind);
+  });
   var depth = 0;
   function perform(proc, binding = {}, { quiet = false, refusal = false } = {}) {
-    let v = viewOf(proc, stateFor(binding));
-    const ok = readyFor(proc, v);
+    const ok = peek(proc, stateFor(binding), (v) => readyFor(proc, v));
     if (ok !== true) {
       if (refusal)
         return { refused: ok };
       log(ok, "warn");
       return null;
     }
-    const hours = hoursOf(proc, v);
-    if (hours > 0) {
-      pass(hours, kcalOf(proc, v));
-      v = viewOf(proc, stateFor(binding));
-    }
-    const real = S, d = dice(), memo = {};
+    const [hours, kcal] = peek(proc, stateFor(binding), (v) => [hoursOf(proc, v), kcalOf(proc, v)]);
+    if (hours > 0)
+      pass(hours, kcal);
+    const real = S, outer = noteSink, d = { ...dice(), note: outer ? (kind, id, f) => outer(kind, `${proc.id}/${id}`, f) : null }, memo = {};
     const live = { has: (k) => k === "rng" || LIVE.has(k) || MEMOS.has(k), get: (k) => k === "rng" ? d.act : MEMOS.has(k) ? memo[k] : real[k], set: (k, x) => {
       if (MEMOS.has(k))
         memo[k] = x;
@@ -8729,23 +9009,20 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     depth++;
     let fx;
     try {
-      fx = rehearse(proc, v, d, { live });
+      fx = attempt(proc, stateFor(binding), d, { live, finish: finishFor(quiet) });
     } catch (e) {
-      if (/without declaring/.test(e.message) && !depth)
+      if (/without declaring/.test(e.message) && depth === 1)
         console.error(`contract: ${e.message}`);
       throw e;
     } finally {
       depth--;
     }
-    apply(fx, stateFor(binding));
-    for (const it of fx.use)
-      remove(S.inv.find((i) => i.uid === it.uid));
-    fx.made = fx.make.map((m) => addItem(m.name, m.kind, m.props, m.from, m.extra));
-    if (!quiet)
-      for (const [text, kind] of fx.say)
-        log(text, kind);
+    if (outer)
+      for (const x of fx.draws)
+        outer(x.kind, `${proc.id}/${x.id}`, x);
+    fx.tx.commit();
     if (!quiet && !depth && !TICKS.includes(proc))
-      S.lastAct = { id: proc.id, proc, binding: Object.keys(binding), view: v, fx, actAt, trip: proc === GAME.hike ? S.lastTrip : null };
+      S.lastAct = { id: proc.id, proc, binding, fx, actAt, trip: proc === GAME.hike ? S.lastTrip : null };
     return fx;
   }
   function liveForSpread(d) {
@@ -8767,9 +9044,15 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const a = S.lastAct;
     if (!a?.proc)
       return null;
-    const hostedRun = !!a.proc.run.hosted, opts = { live: hostedRun ? liveForSpread : null, around: aroundSpread };
-    const r = spread(a.proc, a.view, { n: n ?? (hostedRun ? 30 : 200), vary, actAt: a.actAt, place: realPlace, actual: a.fx, seed: `${S.seed}/spread/${S.day}/${S.t}`, ...opts });
-    r.reproduces = a.actAt ? reproduces(a.proc, a.view, a.actAt, realPlace, a.fx, opts) : null;
+    const hostedRun = !!a.proc.run.hosted, opts = { live: liveForSpread, around: aroundSpread }, stateFn = () => stateFor(a.binding);
+    a.fx.tx.revert();
+    let r;
+    try {
+      r = spread(a.proc, stateFn, { n: n ?? (hostedRun ? 30 : 200), vary, actAt: a.actAt, place: realPlace, actual: a.fx, seed: `${S.seed}/spread/${S.day}/${S.t}`, ...opts });
+      r.reproduces = a.actAt ? reproduces(a.proc, stateFn, a.actAt, realPlace, a.fx, opts) : null;
+    } finally {
+      a.fx.tx.reapply();
+    }
     if (a.trip?.steps?.length)
       r.walk = walkOdds(S.L, a.trip, 100, `${S.seed}/odds/${S.day}/${S.t}`);
     return r;
@@ -8936,8 +9219,8 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     }
     S.body.hyd = clamp(S.body.hyd);
     S.body.energy = clamp(S.body.energy);
-    const cap5 = 1 - 0.6 * Math.max(0, 0.4 - S.body.hyd) / 0.4 - 0.4 * Math.max(0, 0.3 - S.body.energy) / 0.3 - 0.5 * S.body.sick - 0.3 * (S.body.chill ?? 0);
-    S.body.focus = Math.min(S.body.focus, clamp(cap5, 0.1, 1));
+    const cap6 = 1 - 0.6 * Math.max(0, 0.4 - S.body.hyd) / 0.4 - 0.4 * Math.max(0, 0.3 - S.body.energy) / 0.3 - 0.5 * S.body.sick - 0.3 * (S.body.chill ?? 0);
+    S.body.focus = Math.min(S.body.focus, clamp(cap6, 0.1, 1));
     if (S.body.hyd <= 0.02 || S.body.energy <= 0.02 || S.body.sick >= 0.95)
       collapse();
   }
@@ -9016,7 +9299,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
     const words = q2 >= 0.8 ? "Slept warm and deep." : q2 >= 0.55 ? "Slept well enough." : q2 >= 0.35 ? `A ${per.cold >= 0.15 ? "cold" : "restless"}, broken night.` : per.cold >= 0.3 ? "Barely slept; cold to the bone." : "Barely slept.";
     const chill = S.body.chill >= 0.6 ? " I woke shaking, stiff and grey with cold." : S.body.chill >= 0.3 ? " I woke chilled through." : "";
     if (!forced)
-      log(`${words}${reasons.length ? ` ${cap4(reasons.join(", and "))}.` : ""}${chill}${banked ? " Banked the fire with two pieces of wood; it was still glowing at dawn." : ""}${s.hut && q2 >= 0.55 ? " The hut kept the night out." : ""}${s.bed && !s.hut && q2 >= 0.55 ? " The bed of leaves helped." : ""}`, "act");
+      log(`${words}${reasons.length ? ` ${cap5(reasons.join(", and "))}.` : ""}${chill}${banked ? " Banked the fire with two pieces of wood; it was still glowing at dawn." : ""}${s.hut && q2 >= 0.55 ? " The hut kept the night out." : ""}${s.bed && !s.hut && q2 >= 0.55 ? " The bed of leaves helped." : ""}`, "act");
     if (S.body.chill >= 0.6 && S.body.sick < 0.3 && !S.body.pendingSick.some((p) => p.chill) && S.rng.chance(S.body.chill - 0.4))
       S.body.pendingSick.push({ at: now() + 12, severity: 0.15 + 0.2 * (S.body.chill - 0.6), text: "A chill has settled on my chest: aching, shivery, coughing.", chill: true });
     for (const p of [...S.body.pendingSick])
@@ -9189,7 +9472,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
         case "fluff":
         case "fungus-tinder":
         case "lichen-tinder":
-          add(`${cap4(m.part)} (${nm})`, () => addItem(`${m.part}, ${nm}`, "tindermat", { moisture: ambient() * (m.material === "fungus-tinder" ? 0.9 : 0.6) }, { id: e.id, name: nm, part: m.part, site: s.key }), 0.25);
+          add(`${cap5(m.part)} (${nm})`, () => addItem(`${m.part}, ${nm}`, "tindermat", { moisture: ambient() * (m.material === "fungus-tinder" ? 0.9 : 0.6) }, { id: e.id, name: nm, part: m.part, site: s.key }), 0.25);
           break;
         case "moss":
           add(`Moss (${nm})`, () => addItem(`moss, ${nm}`, "moss", { moisture: ambient() + 0.2 }, { id: e.id, name: nm, part: "moss", site: s.key }), 0.2);
@@ -9211,7 +9494,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
           const part = e.parts.find((x) => x.part === m.part);
           const lore = S.lore[loreKey(e, m.part)];
           if (part?.food && part.chem)
-            add(`${cap4(m.part)} to eat (${nm})${lore ? ` \xB7 ${loreWords(lore)}` : ""}`, () => foodItem(`${m.part} to eat, ${nm}`, part.chem, part.chem.gather * clamp(inSeason, 0.3, 1), part.food, { id: e.id, name: nm, part: m.part, site: s.key }), 0.5);
+            add(`${cap5(m.part)} to eat (${nm})${lore ? ` \xB7 ${loreWords(lore)}` : ""}`, () => foodItem(`${m.part} to eat, ${nm}`, part.chem, part.chem.gather * clamp(inSeason, 0.3, 1), part.food, { id: e.id, name: nm, part: m.part, site: s.key }), 0.5);
           break;
         }
       }
@@ -9255,7 +9538,7 @@ ${report.join("\n")}` : "From up here I can see a long way, but nothing I haven\
       }
       if (e?.eggs && !s.eggsTaken?.includes(e.id) && e.habitats.some((h) => h.micro === s.micro) && animalNow(e, condNow(s)).breeding) {
         const lore = S.lore[loreKey(e, "eggs")];
-        opts.push({ label: `${cap4(e.eggs.nest)} (${e.name})${lore ? ` \xB7 ${loreWords(lore)}` : ""}`, part: "Eggs", species: e.name, hours: 0.4, kcal: 120, fn: () => {
+        opts.push({ label: `${cap5(e.eggs.nest)} (${e.name})${lore ? ` \xB7 ${loreWords(lore)}` : ""}`, part: "Eggs", species: e.name, hours: 0.4, kcal: 120, fn: () => {
           (s.eggsTaken ?? (s.eggsTaken = [])).push(e.id);
           return foodItem(`${e.name} eggs`, e.eggs.chem, e.eggs.chem.gather, e.eggs.food, { id: e.id, name: e.name, part: "eggs", site: s.key }, { animal: true });
         } });
@@ -9714,9 +9997,9 @@ ${[...rows.map((r) => r.text), ...named].join("\n")}` : `Poked around for half a
   }
   function lookHere(s) {
     noteTrail(S.mem, s.key);
-    const before = new Set(Object.keys(S.mem.entities));
+    const before2 = new Set(Object.keys(S.mem.entities));
     const lines = lookAt(s, false);
-    const fresh = Object.keys(S.mem.entities).filter((k) => !before.has(k)).map(entity).filter(Boolean);
+    const fresh = Object.keys(S.mem.entities).filter((k) => !before2.has(k)).map(entity).filter(Boolean);
     lines.push(...namingSentences(fresh, S.mem, s.key, entity, S.rng));
     log(`Looking for ${S.looking.label}:
 ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
@@ -9852,11 +10135,11 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         const parts = [...new Set(opts.map((o) => o.part))], species = [...new Set(opts.map((o) => o.species))];
         title = "Collect";
         buttons = opts.length ? `<h4>By part</h4><div class="gather">${parts.map((p) => `<button data-pk="part" data-v="${esc(p)}">${esc(typo(p))}</button>`).join("")}</div>
-        <h4>By species</h4><div class="gather">${species.map((x) => `<button data-pk="species" data-v="${esc(x)}">${esc(typo(cap4(x)))}</button>`).join("")}</div>` : '<p class="hint">Nothing noticed here that I can take. Survey first.</p>';
+        <h4>By species</h4><div class="gather">${species.map((x) => `<button data-pk="species" data-v="${esc(x)}">${esc(typo(cap5(x)))}</button>`).join("")}</div>` : '<p class="hint">Nothing noticed here that I can take. Survey first.</p>';
       } else {
         const list2 = opts.map((o, i) => [o, i]).filter(([o]) => picker.step === "part" ? o.part === picker.value : o.species === picker.value);
         title = picker.step === "part" ? `Collect: ${picker.value}` : `Collect from the ${picker.value}`;
-        buttons = `<div class="gather">${list2.map(([o, i]) => `<button data-gather="${i}"${o.blocked || isNight() ? " disabled" : ""}>${esc(typo(picker.step === "part" ? cap4(o.species) : o.part))}${o.label.includes(" \xB7 ") ? `<small>${esc(typo(o.label.split(" \xB7 ")[1]))}</small>` : ""}${o.blocked ? `<small>${esc(o.blocked)}</small>` : ""}</button>`).join("")}</div>`;
+        buttons = `<div class="gather">${list2.map(([o, i]) => `<button data-gather="${i}"${o.blocked || isNight() ? " disabled" : ""}>${esc(typo(picker.step === "part" ? cap5(o.species) : o.part))}${o.label.includes(" \xB7 ") ? `<small>${esc(typo(o.label.split(" \xB7 ")[1]))}</small>` : ""}${o.blocked ? `<small>${esc(o.blocked)}</small>` : ""}</button>`).join("")}</div>`;
       }
       return pickerFrame(title, buttons);
     }
@@ -9866,7 +10149,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       return pickerFrame("Rest", `<div class="gather">${restOptions().map(([v, l]) => `<button data-rest="${v}">${esc(l)}</button>`).join("")}</div>`);
     if (picker.kind === "look") {
       const known = Object.keys(S.mem.entities).map(entity).filter((e) => e && !(e.kind === "animal" && e.cls !== "invertebrate")).sort((a, b) => a.name.localeCompare(b.name));
-      const btn = (type, key, label) => `<button data-look="${type}:${key}">${esc(typo(cap4(label)))}</button>`;
+      const btn = (type, key, label) => `<button data-look="${type}:${key}">${esc(typo(cap5(label)))}</button>`;
       return pickerFrame("Look for\u2026", `<p class="hint">Half an hour here, then I keep an eye out in every patch I pass through until I stop looking. It slows travel a little.</p>
       <h4>Things to use</h4><div class="gather">${Object.entries(FOCI).map(([k, F]) => btn("focus", k, F.label)).join("")}</div>
       ${known.length ? `<h4>Things I know</h4><div class="gather">${known.map((e) => btn("entity", e.id, pluralize(e.name))).join("")}</div>` : ""}
@@ -9874,7 +10157,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     }
     const list = knownHere();
     const sub = '<p class="hint">A close look, then my best guess at uses, risks and useful tests (costs a little focus).</p>';
-    return pickerFrame("Inspect", sub + (list.length ? `<div class="gather">${list.map((e) => `<button data-${picker.kind}="${e.id}">${esc(typo(cap4(e.name)))}</button>`).join("")}</div>` : '<p class="hint">Nothing noticed here yet. Survey first.</p>'));
+    return pickerFrame("Inspect", sub + (list.length ? `<div class="gather">${list.map((e) => `<button data-${picker.kind}="${e.id}">${esc(typo(cap5(e.name)))}</button>`).join("")}</div>` : '<p class="hint">Nothing noticed here yet. Survey first.</p>'));
   }
   function makeHTML() {
     const ready = RECIPES.filter((R2) => R2.ready());
@@ -10443,14 +10726,14 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         ang -= 180;
       if (ang < -90)
         ang += 180;
-      return `<line class="edge ${e.certainty}${e.stub ? " stub" : ""}" data-link="${e.kind}" data-a="${e.a}" data-b="${e.b}" x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke-width="${fs * 0.12}"><title>${esc(typo(`${cap4(A.name)} \u2013 ${B.name}: ${timeWords(e.hours, e.certainty)}${e.crossings.length ? `, crossing ${e.crossings.map((c) => c.name).join(" and ")}` : ""}`))}</title></line>` + (len > fs * 4.5 ? `<text class="etime" x="${mx}" y="${my}" dy="${-fs * 0.3}" font-size="${fs * 0.8}" text-anchor="middle" transform="rotate(${ang.toFixed(1)} ${mx} ${my})">${esc(timeWords(e.hours, e.certainty))}</text>` : "");
+      return `<line class="edge ${e.certainty}${e.stub ? " stub" : ""}" data-link="${e.kind}" data-a="${e.a}" data-b="${e.b}" x1="${A.x}" y1="${A.y}" x2="${B.x}" y2="${B.y}" stroke-width="${fs * 0.12}"><title>${esc(typo(`${cap5(A.name)} \u2013 ${B.name}: ${timeWords(e.hours, e.certainty)}${e.crossings.length ? `, crossing ${e.crossings.map((c) => c.name).join(" and ")}` : ""}`))}</title></line>` + (len > fs * 4.5 ? `<text class="etime" x="${mx}" y="${my}" dy="${-fs * 0.3}" font-size="${fs * 0.8}" text-anchor="middle" transform="rotate(${ang.toFixed(1)} ${mx} ${my})">${esc(timeWords(e.hours, e.certainty))}</text>` : "");
     }).join("");
     const Nd = M2.nodes.map((v, i) => {
       if (v.unmarked)
         return "";
       const e = M2.edges.find((x) => x.a === hi && x.b === i || x.b === hi && x.a === i);
       const t = timeWords(e ? e.hours : routeHours(here, v), e ? e.certainty : v.certainty === "known" ? "guess" : v.certainty);
-      const say = i === hi ? `${cap4(v.name)} (here)` : `${v.site !== void 0 ? "Head back to" : "Head for"} ${v.name} (${t})`;
+      const say = i === hi ? `${cap5(v.name)} (here)` : `${v.site !== void 0 ? "Head back to" : "Head for"} ${v.name} (${t})`;
       return `<g ${i === hi ? "" : `data-hike="${v.key}" role="button" tabindex="0" `}aria-label="${esc(typo(say))}" data-i="${i}" class="node ${v.site !== void 0 ? "site" : "sus"}${v.mark ? ` ${v.mark}` : ""} ${v.certainty}${i === hi ? " here" : ""}"><title>${esc(typo(say))}</title><circle cx="${v.x}" cy="${v.y}" r="${radius(i)}" stroke-width="${fs * 0.12}"/>${i === hi ? "" : `<circle class="hit" cx="${v.x}" cy="${v.y}" r="${fs * 1.45}"/>`}${labelOf.get(i) ?? ""}</g>`;
     }).join("");
     const P = !pin ? "" : `<g class="pin" data-hike="go:${pin.x}_${pin.y}" role="button" tabindex="0" aria-label="${esc(typo(pinSay))}"><title>${esc(typo(pinSay))}</title><path d="M${pin.x} ${pin.y}l${-u(7)} ${-u(14)}a${u(7.5)} ${u(7.5)} 0 1 1 ${u(14)} 0z" stroke-width="${u(2)}"/><circle class="hit" cx="${pin.x}" cy="${pin.y - u(14)}" r="${fs * 1.45}"/>${pinLabel}</g>`;
@@ -10606,7 +10889,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     const kids = children(n);
     const isLeaf = n.type === "material" || n.type === "item" && (!kids.length || n.truncated);
     const label = depth2 === 0 ? n.type === "process" ? n.name : `To get ${n.name}` : nodeLabel(n);
-    let h = `<li class="plan-node ${n.type}"><span class="plan-label">${esc(typo(cap4(label)))}</span>`;
+    let h = `<li class="plan-node ${n.type}"><span class="plan-label">${esc(typo(cap5(label)))}</span>`;
     if (!open && !(n.type === "item" && n.truncated))
       h += ` <button class="think" data-think="${path}">Think it through</button>`;
     if (open && !isLeaf && kids.length)
@@ -10647,7 +10930,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     const imp = impressions(it);
     const tests = testsFor(it).filter(([k]) => !it.notes[k]);
     const exact = S.showProps ? exactProps(it) : [];
-    return `<li class="item"><div class="item-head"><span class="item-name">${esc(typo(cap4(it.name)))}</span>${it.kind === "food" ? `<button data-eat="${it.uid}">${fireHere() ? "Roast and eat" : "Eat"}</button>` : ""}<button class="ghost" data-drop="${it.uid}" aria-label="Drop ${esc(it.name)}">Drop</button></div>
+    return `<li class="item"><div class="item-head"><span class="item-name">${esc(typo(cap5(it.name)))}</span>${it.kind === "food" ? `<button data-eat="${it.uid}">${fireHere() ? "Roast and eat" : "Eat"}</button>` : ""}<button class="ghost" data-drop="${it.uid}" aria-label="Drop ${esc(it.name)}">Drop</button></div>
     ${it.from?.site && S.sites.some((t) => t.key === it.from.site) ? `<button class="ghost origin" data-origin="${esc(it.from.site)}">${(() => {
       const t = S.sites.find((x) => x.key === it.from.site);
       return t.renamed ? `From ${esc(typo(t.name))} \xB7 rename` : "Name where this came from";
@@ -10671,8 +10954,8 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const k = skyNow(), tod = timeOfDay();
       $("#when").textContent = `Day ${S.day}, ${clock(S.t)}${tod === "night" ? ", night" : tod === "dusk" && k.sunAlt < 3 ? ", dusk" : ""} \xB7 ${k.season} \xB7 ${WEATHER_WORDS[k.weather]}, ${Math.round(k.tempC)}\xB0C${tod === "night" && k.moon.alt > 0 && k.moon.illum > 0.05 ? ` \xB7 ${moonWords(k.moon.phase)}` : ""}`;
     }
-    setHTML("#where", `<span class="place" data-rename="1" title="Rename this place">${esc(typo(cap4(s.name)))}</span>${fireHere() ? ' <span class="fire">fire burning</span>' : ""}${s.hut ? ' <span class="tag">hut</span>' : ""}`);
-    $("#world-line").textContent = typo(`${cap4(e.biome)}; ${e.leanSeason === "winter" ? "cool nights" : "warm days"}`);
+    setHTML("#where", `<span class="place" data-rename="1" title="Rename this place">${esc(typo(cap5(s.name)))}</span>${fireHere() ? ' <span class="fire">fire burning</span>' : ""}${s.hut ? ' <span class="tag">hut</span>' : ""}`);
+    $("#world-line").textContent = typo(`${cap5(e.biome)}; ${e.leanSeason === "winter" ? "cool nights" : "warm days"}`);
     const fresh = renderJournal();
     if (fresh) {
       const j = $("#journal-wrap");
@@ -10684,7 +10967,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     const items = Object.keys(ITEMS).filter((k) => PROCESSES.some((p) => p.makes.some((m) => m.item === k))).sort((a, b) => ITEMS[a].name.replace(/^an? /, "").localeCompare(ITEMS[b].name.replace(/^an? /, "")));
     const procs = [...PROCESSES].sort((a, b) => a.name.localeCompare(b.name));
     const opt = (v, l) => `<option value="${v}"${v === S.goal ? " selected" : ""}>${esc(typo(l))}</option>`;
-    setHTML("#plans", `<label class="goal-pick">Think about <select id="goal"><optgroup label="Things to make or get">${items.map((k) => opt(k, cap4(ITEMS[k].name.replace(/^an? /, "")))).join("")}</optgroup><optgroup label="Ways of doing things">${procs.map((p) => opt(`proc:${p.id}`, p.name)).join("")}</optgroup></select></label>
+    setHTML("#plans", `<label class="goal-pick">Think about <select id="goal"><optgroup label="Things to make or get">${items.map((k) => opt(k, cap5(ITEMS[k].name.replace(/^an? /, "")))).join("")}</optgroup><optgroup label="Ways of doing things">${procs.map((p) => opt(`proc:${p.id}`, p.name)).join("")}</optgroup></select></label>
     <p class="hint">Thinking a step through costs a little focus. Thoughts go in the journal.</p><ul class="plan">${planHTML()}</ul>`);
     const acts = hereActions();
     const gather = gatherOptions(s);
@@ -10697,7 +10980,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
     document.querySelectorAll("[data-panel]").forEach((p) => p.classList.toggle("active", p.dataset.panel.split(" ").includes(tab)));
   }
   var mapGesture = { pts: /* @__PURE__ */ new Map(), start: null, moved: false, swallowClick: false };
-  function viewOf2(svg) {
+  function viewOf(svg) {
     const [x, y, span] = svg.getAttribute("viewBox").split(" ").map(Number);
     return { x, y, span };
   }
@@ -10716,7 +10999,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       if (!svg)
         return;
       mapGesture.pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
-      mapGesture.start = { v: viewOf2(svg), pts: new Map(mapGesture.pts), svg };
+      mapGesture.start = { v: viewOf(svg), pts: new Map(mapGesture.pts), svg };
       if (mapGesture.pts.size === 1)
         mapGesture.moved = false;
     });
@@ -10749,7 +11032,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
         return;
       g.pts.delete(ev.pointerId);
       if (g.pts.size) {
-        g.start = { v: viewOf2(g.start.svg), pts: new Map(g.pts), svg: g.start.svg };
+        g.start = { v: viewOf(g.start.svg), pts: new Map(g.pts), svg: g.start.svg };
         return;
       }
       if (g.moved) {
@@ -10769,7 +11052,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       if (!svg)
         return;
       ev.preventDefault();
-      const v = viewOf2(svg), at = toUser(svg, v, ev.clientX, ev.clientY), k = Math.exp(ev.deltaY * 15e-4);
+      const v = viewOf(svg), at = toUser(svg, v, ev.clientX, ev.clientY), k = Math.exp(ev.deltaY * 15e-4);
       setView(svg, { x: at.x - (at.x - v.x) * k, y: at.y - (at.y - v.y) * k, span: v.span * k });
       clearTimeout(wheelTimer);
       wheelTimer = setTimeout(render, 160);
@@ -10814,7 +11097,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest("button, [data-rename], [data-hike]");
     if (!b && S && ev.target.closest?.(".mapsvg") && !mapGesture.swallowClick) {
-      const svg = ev.target.closest(".mapsvg"), p = toUser(svg, viewOf2(svg), ev.clientX, ev.clientY);
+      const svg = ev.target.closest(".mapsvg"), p = toUser(svg, viewOf(svg), ev.clientX, ev.clientY);
       S.mapPin = { x: clamp(Math.round(p.x), 0, N - 1), y: clamp(Math.round(p.y), 0, N - 1) };
       return render();
     }
@@ -11015,7 +11298,7 @@ ${lines.length ? lines.join("\n") : "nothing here"}`, "survey");
       const { world, outlook: o } = checked;
       const e = world.environment;
       const odds = `For a beginner, roughly: ${o.text.water}, ${o.text.food}, ${o.text.fire}.`;
-      out.innerHTML = `<p><strong>${esc(typo(cap4(e.biome)))}</strong> on ${esc(e.bedrockLabel)}. ${e.meanTempC < 10 ? "Cold nights." : e.meanTempC > 18 ? "Hot days." : "Mild weather."}</p>
+      out.innerHTML = `<p><strong>${esc(typo(cap5(e.biome)))}</strong> on ${esc(e.bedrockLabel)}. ${e.meanTempC < 10 ? "Cold nights." : e.meanTempC > 18 ? "Hot days." : "Mild weather."}</p>
       <p>${esc(typo(odds))}</p><p class="hint">Indicative: a few quick trial runs of a sensible start, not a promise.</p>
       <div class="row"><button id="begin">Begin here</button><button class="ghost" id="reroll">Try another world</button></div>`;
     }, 20);

@@ -27,18 +27,17 @@ import { siteFactors } from '../../src/variation.js';
 import { skyAt } from '../../src/sky.js';
 import { groundAt } from '../../src/ground.js';
 import { SHELTERS } from '../../src/body.js';
-import { viewOf, rehearse, apply, stateOver } from '../../src/act.js';
+import { attempt, peek, stateOver } from '../../src/act.js';
 import { DRINK, WASH_HANDS, MAKE_BED, BUILD_HUT, KNAP, PREPARE, EAT, SURVEY, SLEEP_HOUR, TICKS, POPULATION, GUT_KG, CRAFTS, DRILL_ATTEMPT, EMBER, HANDLE, REST } from '../../src/acts.js';
 import { generateLandscape } from '../../src/landscape.js';
 import { walk, chooseSpawn, stepView, WALK_STEP } from '../../src/geo.js';
 import { world, game, dice } from './hand-state.mjs';
 const fails = [], say = [];
 
-// run a process the way the game does, but with no time passing: view, rehearse, apply
+// run a process the way the game does, but with no time passing: a transaction, committed
 function run(G, proc, binding = {}, i = 0) {
-  const st = G.state(binding), v = viewOf(proc, st);
-  const fx = rehearse(proc, v, dice(i));
-  apply(fx, st);
+  const fx = attempt(proc, G.state(binding), dice(i));
+  fx.tx.commit();
   return fx;
 }
 const tries = (n, f) => Array.from({ length: n }, (_, i) => f(i));
@@ -88,7 +87,7 @@ const food = (mass = 0.3) => ({ uid: 9, name: `${part.part} to eat`, base: `${pa
   run(G, EAT, { food: f });
   if (!(G.S.body.gut > 0) || G.S.body.energy === e0) fails.push('eating doesn\'t fill me or feed me');
   const full = game({ S: { body: { ...game().S.body, gut: GUT_KG } } });
-  let refused = false; try { const v = viewOf(EAT, full.state({ food: food() })); refused = EAT.ready(v) !== true; } catch { refused = false; }
+  let refused = false; try { refused = peek(EAT, full.state({ food: food() }), v => EAT.ready(v)) !== true; } catch { refused = false; }
   if (!refused) fails.push('eating isn\'t refused when I\'m full');
 }
 // survey
@@ -148,7 +147,7 @@ for (const tick of TICKS) {
   if (!(b.props.life < 1 && sp.props.length < 70)) fails.push('drilling doesn\'t wear the board and spindle');
   if (!embers) fails.push('no ember in 40 goes for a fair hand');
   const raw = game({ S: { body: { ...game().S.body, hands: 0.9 } } });
-  if (DRILL_ATTEMPT.ready(viewOf(DRILL_ATTEMPT, raw.state({ board, spindle }))) === true) fails.push('drilling with raw palms isn\'t refused');
+  if (peek(DRILL_ATTEMPT, raw.state({ board, spindle }), v => DRILL_ATTEMPT.ready(v)) === true) fails.push('drilling with raw palms isn\'t refused');
   let fires = 0;
   for (let i = 0; i < 40; i++) { const F = game(); const fx = run(F, EMBER, { ember: { props: { vigor: 0.8 } }, tinder: { uid: 62, props: { moisture: 0.05, fineness: 0.9 } }, wood: { uid: 63, props: {} } }, i); if (fx.report?.fire) { fires++; if (!(F.S.site.fireUntil > 10)) fails.push('a fire lit, but not burning'); } }
   if (!fires) fails.push('a strong ember in fine dry tinder never lights a fire');
@@ -165,7 +164,7 @@ for (const tick of TICKS) {
   let likely = 0, forced = 0, surprisal = 0;
   for (let i = 0; i < trip.steps.length; i++) {
     const v0 = stepView(L, trip, i), counts = {};
-    for (let k = 0; k < 200; k++) { const fx = rehearse(WALK_STEP, v0, { act: makeRng(`acts/step/${i}/${k}`) }); const to = fx.report.to; counts[`${to.x},${to.y}`] = (counts[`${to.x},${to.y}`] ?? 0) + 1; }
+    for (let k = 0; k < 200; k++) { const fx = attempt(WALK_STEP, stateOver(v0), { act: makeRng(`acts/step/${i}/${k}`) }); fx.tx.discard(); const to = fx.report.to; counts[`${to.x},${to.y}`] = (counts[`${to.x},${to.y}`] ?? 0) + 1; }
     const took = trip.path[trip.steps[i].at], p = (counts[`${took.x},${took.y}`] ?? 0) / 200;
     if (Object.keys(counts).some(k => { const [x, y] = k.split(',').map(Number); return Math.max(Math.abs(x - trip.steps[i].p.x), Math.abs(y - trip.steps[i].p.y)) !== 1; })) fails.push(`walk step ${i}: an outcome that isn't a neighbouring cell`);
     if (!p) fails.push(`walk step ${i}: the cell taken never comes up again from where the step began`);
